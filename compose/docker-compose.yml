@@ -1,0 +1,90 @@
+name: cloudsmith
+
+services:
+  cloudsmith-api:
+    image: ghcr.io/cloudsmith-cloud/cloudsmith-api:${CLOUDSMITH_VERSION:-latest}
+    restart: always
+    ports:
+      - "443:443"
+    environment:
+      - ConnectionStrings__CloudSmith=Host=postgres;Port=5432;Database=cloudsmith;Username=cloudsmith;Password=${DB_PASSWORD};SslMode=VerifyFull
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=https://+:443
+      - CloudSmith__SecretsKeyPath=/etc/cloudsmith/secrets.key
+    volumes:
+      - cloudsmith_secrets:/etc/cloudsmith:ro
+      - cloudsmith_artifacts:/var/cloudsmith/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cloudsmith
+
+  cloudsmith-portal:
+    image: ghcr.io/cloudsmith-cloud/cloudsmith-portal:${CLOUDSMITH_VERSION:-latest}
+    restart: always
+    depends_on:
+      - cloudsmith-api
+    networks:
+      - cloudsmith
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_DB=cloudsmith
+      - POSTGRES_USER=cloudsmith
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudsmith -d cloudsmith"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - cloudsmith
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    networks:
+      - cloudsmith
+
+  loki:
+    image: grafana/loki:latest
+    restart: always
+    volumes:
+      - loki_data:/loki
+      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - cloudsmith
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    restart: always
+    volumes:
+      - ./otel-collector.yml:/etc/otel/config.yaml:ro
+    command: ["--config=/etc/otel/config.yaml"]
+    networks:
+      - cloudsmith
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  loki_data:
+  cloudsmith_secrets:
+  cloudsmith_artifacts:
+
+networks:
+  cloudsmith:
+    driver: bridge
