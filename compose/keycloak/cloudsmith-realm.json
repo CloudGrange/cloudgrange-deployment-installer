@@ -72,9 +72,12 @@
       "name": "CloudSmith API",
       "enabled": true,
       "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "cloudsmith-api-dev-secret-2026",
       "serviceAccountsEnabled": true,
-      "standardFlowEnabled": false,
+      "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:8081/*", "http://localhost/*"],
       "protocol": "openid-connect"
     }
   ],
