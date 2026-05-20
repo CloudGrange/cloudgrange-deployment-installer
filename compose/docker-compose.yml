@@ -1,21 +1,46 @@
 name: cloudsmith
 
 services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26
+    command: start-dev --import-realm
+    restart: always
+    environment:
+      KC_DB: dev-file
+      KC_HOSTNAME: localhost
+      KC_HTTP_PORT: "8080"
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USER}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    volumes:
+      - ./keycloak/cloudsmith-realm.json:/opt/keycloak/data/import/cloudsmith-realm.json:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/cloudsmith || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - cloudsmith
+
   cloudsmith-api:
     image: ghcr.io/cloudsmith-cloud/cloudsmith-api:${CLOUDSMITH_VERSION:-latest}
     restart: always
     ports:
-      - "443:443"
+      - "8081:8080"
     environment:
-      - ConnectionStrings__CloudSmith=Host=postgres;Port=5432;Database=cloudsmith;Username=cloudsmith;Password=${DB_PASSWORD};SslMode=VerifyFull
       - ASPNETCORE_ENVIRONMENT=Production
-      - ASPNETCORE_URLS=https://+:443
-      - CloudSmith__SecretsKeyPath=/etc/cloudsmith/secrets.key
-    volumes:
-      - cloudsmith_secrets:/etc/cloudsmith:ro
-      - cloudsmith_artifacts:/var/cloudsmith/artifacts
+      - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION}
+      - Keycloak__Authority=${CLOUDSMITH_KEYCLOAK_AUTHORITY:-http://keycloak:8080/realms/cloudsmith}
+      - Keycloak__ClientId=${CLOUDSMITH_KEYCLOAK_CLIENT_ID:-cloudsmith-api}
+      - Keycloak__ClientSecret=${CLOUDSMITH_KEYCLOAK_CLIENT_SECRET}
+      - Keycloak__RequireHttpsMetadata=false
+      - OpenTelemetry__Endpoint=${CLOUDSMITH_OTLP_ENDPOINT:-http://otel-collector:4317}
     depends_on:
       postgres:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
     networks:
       - cloudsmith
@@ -23,6 +48,11 @@ services:
   cloudsmith-portal:
     image: ghcr.io/cloudsmith-cloud/cloudsmith-portal:${CLOUDSMITH_VERSION:-latest}
     restart: always
+    ports:
+      - "80:80"
+    environment:
+      - CLOUDSMITH_API_URL=
+      - CLOUDSMITH_AUTH_URL=${CLOUDSMITH_KEYCLOAK_AUTHORITY:-http://localhost:8080/realms/cloudsmith}
     depends_on:
       - cloudsmith-api
     networks:
@@ -32,13 +62,13 @@ services:
     image: postgres:16-alpine
     restart: always
     environment:
-      - POSTGRES_DB=cloudsmith
-      - POSTGRES_USER=cloudsmith
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-cloudsmith}
+      - POSTGRES_USER=${POSTGRES_USER:-cloudsmith}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cloudsmith -d cloudsmith"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cloudsmith} -d ${POSTGRES_DB:-cloudsmith}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -82,8 +112,6 @@ volumes:
   postgres_data:
   prometheus_data:
   loki_data:
-  cloudsmith_secrets:
-  cloudsmith_artifacts:
 
 networks:
   cloudsmith:

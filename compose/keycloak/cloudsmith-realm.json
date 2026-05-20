@@ -1,0 +1,100 @@
+{
+  "realm": "cloudsmith",
+  "enabled": true,
+  "displayName": "CloudSmith",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      { "name": "PlatformAdmin", "description": "Full platform administrator access" },
+      { "name": "OrgAdmin",      "description": "Organization administrator access" },
+      { "name": "OrgViewer",     "description": "Organization read-only access" },
+      { "name": "Auditor",       "description": "Audit log read access" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "cloudsmith-portal",
+      "name": "CloudSmith Portal",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost/*",
+        "http://localhost:80/*",
+        "https://*"
+      ],
+      "webOrigins": [
+        "http://localhost",
+        "http://localhost:80",
+        "+"
+      ],
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "org_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org_id",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "realm_roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "realm_roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "cloudsmith-api",
+      "name": "CloudSmith API",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@cloudsmith.local",
+      "email": "admin@cloudsmith.local",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "CloudSmith-Dev-2026!",
+          "temporary": true
+        }
+      ],
+      "realmRoles": ["PlatformAdmin"],
+      "attributes": {
+        "org_id": ["00000000-0000-0000-0000-000000000001"]
+      }
+    }
+  ]
+}
