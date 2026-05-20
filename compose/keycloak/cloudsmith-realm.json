@@ -77,7 +77,7 @@
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["http://localhost:8081/*", "http://localhost/*"],
+      "redirectUris": ["http://localhost:8081/*", "http://localhost/*", "http://cloudsmith-dev.eastus.cloudapp.azure.com/*", "http://cloudsmith-dev.eastus.cloudapp.azure.com:8081/*"],
       "protocol": "openid-connect"
     }
   ],
