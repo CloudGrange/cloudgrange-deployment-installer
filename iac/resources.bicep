@@ -25,15 +25,21 @@ param postgresAdminUser string = 'cloudsmith'
 @description('PostgreSQL administrator password.')
 param postgresAdminPassword string
 
-@description('Entra ID tenant ID for PaaS OIDC auth.')
-param entraTenantId string
+// OPTIONAL deploy-time IdP pre-seed. The identity provider (Entra ID, on-prem
+// Active Directory, Keycloak, generic OIDC) is normally configured POST-DEPLOY
+// in the platform identity settings (/identity/v1/idp) and stored in the Config
+// Registry — see README "Identity model". Leave these empty to deploy
+// IdP-agnostic; the API issues a bootstrap admin token on first run for the
+// first login, after which the operator configures their IdP in settings.
+@description('Optional: Entra tenant ID to PRE-SEED OIDC at deploy time. Empty = configure IdP post-deploy in settings.')
+param entraTenantId string = ''
 
-@description('Entra ID application (client) ID for the CloudSmith API.')
-param entraClientId string
+@description('Optional: Entra app (client) ID to pre-seed. Empty = configure post-deploy.')
+param entraClientId string = ''
 
 @secure()
-@description('Entra ID client secret for the CloudSmith API app registration.')
-param entraClientSecret string
+@description('Optional: Entra client secret to pre-seed. Prefer a federated credential to the Managed Identity (no secret). Empty = configure post-deploy.')
+param entraClientSecret string = ''
 
 @description('GHCR username for pulling container images while they remain private. Leave empty once images are public (ADR-046).')
 param ghcrUsername string = ''
@@ -47,7 +53,15 @@ var apiImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-api:${imageTag}'
 var portalImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-portal:${imageTag}'
 var pgFqdn = '${pg.name}.postgres.database.azure.com'
 var dbConnString = 'Host=${pgFqdn};Database=cloudsmith;Username=${postgresAdminUser};Password=${postgresAdminPassword};Ssl Mode=Require;'
-var entraAuthority = 'https://login.microsoftonline.com/${entraTenantId}/v2.0'
+var oidcPreseed = !empty(entraClientId)
+var entraAuthority = empty(entraTenantId) ? '' : 'https://login.microsoftonline.com/${entraTenantId}/v2.0'
+// Optional OIDC pre-seed env — normally EMPTY; IdP is configured post-deploy in settings.
+var oidcApiEnv = oidcPreseed ? [
+  { name: 'Keycloak__Authority', value: entraAuthority }
+  { name: 'Keycloak__ClientId', value: entraClientId }
+  { name: 'Keycloak__ClientSecret', secretRef: 'entra-client-secret' }
+  { name: 'Keycloak__RequireHttpsMetadata', value: 'true' }
+] : []
 
 // ---------------------------------------------------------------------------
 // Observability — Log Analytics + Application Insights
@@ -202,10 +216,8 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
       registries: registries
       secrets: concat(
-        [
-          { name: 'db-connection', value: dbConnString }
-          { name: 'entra-client-secret', value: entraClientSecret }
-        ],
+        [ { name: 'db-connection', value: dbConnString } ],
+        oidcPreseed ? [ { name: 'entra-client-secret', value: entraClientSecret } ] : [],
         imagesArePrivate ? [ { name: 'ghcr-token', value: ghcrToken } ] : []
       )
     }
@@ -215,16 +227,14 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'cloudsmith-api'
           image: apiImage
           resources: { cpu: json('0.5'), memory: '1Gi' }
-          env: [
+          // Base env only. IdP/OIDC is configured POST-DEPLOY via /identity/v1/idp
+          // (Config Registry); oidcApiEnv is empty unless an operator pre-seeds Entra.
+          env: union([
             { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
             { name: 'ConnectionStrings__Default', secretRef: 'db-connection' }
-            { name: 'Keycloak__Authority', value: entraAuthority }
-            { name: 'Keycloak__ClientId', value: entraClientId }
-            { name: 'Keycloak__ClientSecret', secretRef: 'entra-client-secret' }
-            { name: 'Keycloak__RequireHttpsMetadata', value: 'true' }
             { name: 'ApplicationInsights__ConnectionString', value: appInsights.properties.ConnectionString }
             { name: 'AZURE_CLIENT_ID', value: uami.properties.clientId }
-          ]
+          ], oidcApiEnv)
         }
       ]
       scale: { minReplicas: 1, maxReplicas: 3 }

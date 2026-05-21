@@ -30,7 +30,31 @@ Two distinct auth planes:
 | API → Key Vault | **User-assigned Managed Identity** (Key Vault Secrets User role) — no secret |
 | API → PostgreSQL | **User-assigned Managed Identity** — the MI is an Entra administrator of the Flexible Server; the API connects with an MI access token, no DB password (Npgsql password provider fetches an `https://ossrdbms-aad.database.windows.net` token) |
 | API → Application Insights | Connection string (instrumentation key is not a secret) |
-| **End-user browser sign-in** | **Entra ID app registration** (OIDC). This is *required* — Managed Identity authenticates services, not interactive human logins. The app registration's own credential should be a **federated identity credential trusting the workload MI** (no client secret). |
+| **End-user browser sign-in** | Configured **POST-DEPLOY** in platform identity settings (`/identity/v1/idp`), stored in the Config Registry. The platform is **IdP-agnostic** at deploy time. |
+
+### Identity provider is a post-deploy SETTING, not a deploy parameter
+
+The identity provider — **Entra ID, on-premises Active Directory, Keycloak, or
+generic OIDC** — is **not** configured by this Bicep. It is configured *inside
+the running platform* via the identity settings (`/identity/v1/idp` API + UI),
+exactly like any other platform setting, and persisted in the Config Registry.
+
+Deploy flow:
+1. `azd provision` stands up the platform (no IdP required).
+2. The API issues a **bootstrap admin token** on first run (printed to logs).
+3. The admin logs in with the bootstrap token and configures their identity
+   provider(s) in **Settings → Identity Providers**.
+4. Subsequent logins use the configured IdP.
+
+The `entra*` parameters below are an **optional** convenience to pre-seed an
+Entra OIDC provider at deploy time; leave them empty for the normal
+configure-in-settings flow. When pre-seeding, prefer a **federated credential
+to the Managed Identity** over a client secret.
+
+> **Note:** end-user sign-in always requires *some* IdP that can authenticate
+> humans (Entra ID, AD, Keycloak, OIDC). Managed Identity authenticates
+> *services* (API→Key Vault, API→PostgreSQL), never interactive human logins —
+> those are two different planes.
 
 Net target: **zero stored secrets** — Key Vault and PostgreSQL via MI, and the
 app registration credential via workload identity federation. The PostgreSQL
