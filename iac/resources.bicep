@@ -94,7 +94,8 @@ resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
 }
 
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: '${namePrefix}-kv-${uniqueString(resourceGroup().id)}'
+  // KV names are limited to 24 chars; use a short fixed prefix + 13-char uniqueString (= 19).
+  name: 'cs-kv-${uniqueString(resourceGroup().id)}'
   location: location
   properties: {
     sku: { family: 'A', name: 'standard' }
