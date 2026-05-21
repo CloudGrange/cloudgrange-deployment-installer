@@ -1,0 +1,27 @@
+# Copyright 2026 CloudSmith Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Azure Developer CLI (azd) manifest for CloudSmith MVP — Azure PaaS (Model B).
+# Per ADR-043 (azd + Bicep). Container images are prebuilt and published to
+# ghcr.io by each service repo's CI (ADR-046); azd provisions the infra and the
+# Container Apps reference those images directly.
+#
+# Usage:
+#   azd env new cloudsmith-mvp
+#   azd env set ENTRA_TENANT_ID <tenant-guid>
+#   azd env set ENTRA_CLIENT_ID <app-client-id>
+#   azd env set ENTRA_CLIENT_SECRET <secret> --secret
+#   azd env set POSTGRES_ADMIN_PASSWORD <password> --secret
+#   # while images remain private (until ADR-046 public flip):
+#   azd env set GHCR_USERNAME <github-user>
+#   azd env set GHCR_TOKEN <read-packages-pat> --secret
+#   azd provision
+
+name: cloudsmith-mvp
+metadata:
+  template: cloudsmith-mvp@0.1.0
+
+infra:
+  provider: bicep
+  path: .
+  module: main

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus" },
+    "environmentName": { "value": "${AZURE_ENV_NAME=cloudsmith-mvp}" },
+    "namePrefix": { "value": "cloudsmith" },
+    "imageTag": { "value": "${CLOUDSMITH_IMAGE_TAG=latest}" },
+    "postgresAdminUser": { "value": "cloudsmith" },
+    "postgresAdminPassword": { "value": "${POSTGRES_ADMIN_PASSWORD}" },
+    "entraTenantId": { "value": "${ENTRA_TENANT_ID}" },
+    "entraClientId": { "value": "${ENTRA_CLIENT_ID}" },
+    "entraClientSecret": { "value": "${ENTRA_CLIENT_SECRET}" },
+    "ghcrUsername": { "value": "${GHCR_USERNAME=}" },
+    "ghcrToken": { "value": "${GHCR_TOKEN=}" }
+  }
+}
