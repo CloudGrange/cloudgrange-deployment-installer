@@ -21,6 +21,23 @@ an ACA container, not Static Web Apps).
 **Auth on PaaS is Entra ID** (per `design/sequence-diagrams/login-oidc-paas.md`),
 not Keycloak. Keycloak is the standalone/Model A IdP only.
 
+### Identity model — Managed Identity first, secret-less target
+
+Two distinct auth planes:
+
+| Plane | Mechanism |
+|---|---|
+| API → Key Vault | **User-assigned Managed Identity** (Key Vault Secrets User role) — no secret |
+| API → PostgreSQL | **User-assigned Managed Identity** — the MI is an Entra administrator of the Flexible Server; the API connects with an MI access token, no DB password (Npgsql password provider fetches an `https://ossrdbms-aad.database.windows.net` token) |
+| API → Application Insights | Connection string (instrumentation key is not a secret) |
+| **End-user browser sign-in** | **Entra ID app registration** (OIDC). This is *required* — Managed Identity authenticates services, not interactive human logins. The app registration's own credential should be a **federated identity credential trusting the workload MI** (no client secret). |
+
+Net target: **zero stored secrets** — Key Vault and PostgreSQL via MI, and the
+app registration credential via workload identity federation. The PostgreSQL
+admin password remains only as break-glass; set `passwordAuth: 'Disabled'` on
+the server for Entra-only once the API's MI DB connection is verified
+(API code follow-up — AB#1605).
+
 ## Prerequisites
 
 - Azure subscription + Contributor role

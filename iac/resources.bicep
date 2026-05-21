@@ -117,6 +117,14 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
     storage: { storageSizeGB: 32 }
     backup: { backupRetentionDays: 7, geoRedundantBackup: 'Disabled' }
     highAvailability: { mode: 'Disabled' }
+    // Entra auth ENABLED so the API connects to PostgreSQL with its Managed
+    // Identity (no password). Password auth kept enabled only as break-glass /
+    // migration transition; target is Entra-only (set passwordAuth: 'Disabled').
+    authConfig: {
+      activeDirectoryAuth: 'Enabled'
+      passwordAuth: 'Enabled'
+      tenantId: subscription().tenantId
+    }
   }
 }
 
@@ -130,6 +138,21 @@ resource pgFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023
   parent: pg
   name: 'AllowAllAzureServices'
   properties: { startIpAddress: '0.0.0.0', endIpAddress: '0.0.0.0' }
+}
+
+// Make the workload Managed Identity an Entra administrator of PostgreSQL,
+// so the API authenticates to the database passwordless via its MI token
+// (Npgsql password provider fetches an https://ossrdbms-aad.database.windows.net token).
+// Done via module to satisfy the runtime-name (BCP120) constraint.
+module pgAadAdmin 'pg-aad-admin.bicep' = {
+  name: 'pg-aad-admin'
+  params: {
+    postgresServerName: pg.name
+    principalId: uami.properties.principalId
+    principalName: uami.name
+    tenantId: subscription().tenantId
+  }
+  dependsOn: [ pgFwAzure, pgDb ]
 }
 
 // ---------------------------------------------------------------------------
