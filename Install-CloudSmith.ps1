@@ -41,8 +41,17 @@ function Invoke-CloudSmithInstall {
 
     # Step 2: Hyper-V detection
     Write-Progress-Step "Checking Hyper-V availability"
-    $hvFeature = Get-WindowsOptionalFeature -FeatureName Microsoft-Hyper-V-All -Online -ErrorAction SilentlyContinue
-    if ($hvFeature -and $hvFeature.State -eq 'Enabled') {
+    # Hyper-V feature naming differs by OS: Windows Server exposes the 'Hyper-V' role
+    # (Get-WindowsFeature); Windows client (10/11) exposes the 'Microsoft-Hyper-V-All'
+    # optional feature (Get-WindowsOptionalFeature). ProductType 1 = client/workstation.
+    $isServerOs = (Get-CimInstance Win32_OperatingSystem).ProductType -ne 1
+    if ($isServerOs) {
+        $hvAvailable = (Get-WindowsFeature -Name Hyper-V -ErrorAction SilentlyContinue).InstallState -eq 'Installed'
+    } else {
+        $hvFeature = Get-WindowsOptionalFeature -FeatureName Microsoft-Hyper-V-All -Online -ErrorAction SilentlyContinue
+        $hvAvailable = ($hvFeature -and $hvFeature.State -eq 'Enabled')
+    }
+    if ($hvAvailable) {
         Write-Host "  Hyper-V: available" -ForegroundColor Green
         $useWsl2 = $false
     } else {
