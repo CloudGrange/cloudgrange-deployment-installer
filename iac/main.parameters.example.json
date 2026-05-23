@@ -22,6 +22,31 @@
     "postgresAdminUser": { "value": "cloudsmith" },
     "postgresAdminPassword": { "value": "REPLACE-ME-USE-KEY-VAULT-REFERENCE" },
 
+    "postgresSkuName": { "value": "Standard_B1ms" },
+    "postgresSkuTier": { "value": "Burstable" },
+    "postgresStorageGB": { "value": 32 },
+    "postgresVersion": { "value": "16" },
+    "postgresBackupRetentionDays": { "value": 7 },
+    "postgresHighAvailabilityMode": { "value": "Disabled" },
+
+    "keyVaultSku": { "value": "standard" },
+    "keyVaultSoftDeleteRetentionDays": { "value": 7 },
+
+    "logAnalyticsSku": { "value": "PerGB2018" },
+    "logAnalyticsRetentionDays": { "value": 30 },
+
+    "apiAppCpu": { "value": "0.5" },
+    "apiAppMemory": { "value": "1Gi" },
+    "apiAppMinReplicas": { "value": 1 },
+    "apiAppMaxReplicas": { "value": 3 },
+    "apiAppTargetPort": { "value": 8080 },
+
+    "portalAppCpu": { "value": "0.25" },
+    "portalAppMemory": { "value": "0.5Gi" },
+    "portalAppMinReplicas": { "value": 1 },
+    "portalAppMaxReplicas": { "value": 2 },
+    "portalAppTargetPort": { "value": 80 },
+
     "entraTenantId": { "value": "" },
     "entraClientId": { "value": "" },
     "entraClientSecret": { "value": "" },

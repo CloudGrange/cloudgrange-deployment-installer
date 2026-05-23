@@ -46,6 +46,46 @@ param postgresAdminUser string = 'cloudsmith'
 @secure()
 param postgresAdminPassword string
 
+// ---- SKU + sizing (ADR-048 parameter surface) ----
+param postgresSkuName string = 'Standard_B1ms'
+@allowed([ 'Burstable', 'GeneralPurpose', 'MemoryOptimized' ])
+param postgresSkuTier string = 'Burstable'
+@minValue(32)
+param postgresStorageGB int = 32
+param postgresVersion string = '16'
+@minValue(7)
+@maxValue(35)
+param postgresBackupRetentionDays int = 7
+@allowed([ 'Disabled', 'SameZone', 'ZoneRedundant' ])
+param postgresHighAvailabilityMode string = 'Disabled'
+
+@allowed([ 'standard', 'premium' ])
+param keyVaultSku string = 'standard'
+@minValue(7)
+@maxValue(90)
+param keyVaultSoftDeleteRetentionDays int = 7
+
+param logAnalyticsSku string = 'PerGB2018'
+@minValue(30)
+@maxValue(730)
+param logAnalyticsRetentionDays int = 30
+
+param apiAppCpu string = '0.5'
+param apiAppMemory string = '1Gi'
+@minValue(0)
+param apiAppMinReplicas int = 1
+@minValue(1)
+param apiAppMaxReplicas int = 3
+param apiAppTargetPort int = 8080
+
+param portalAppCpu string = '0.25'
+param portalAppMemory string = '0.5Gi'
+@minValue(0)
+param portalAppMinReplicas int = 1
+@minValue(1)
+param portalAppMaxReplicas int = 2
+param portalAppTargetPort int = 80
+
 @description('Entra tenant ID — empty = ADR-047 first-run wizard.')
 param entraTenantId string = ''
 
@@ -188,8 +228,8 @@ resource newLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (empt
   location: location
   tags: union(allTagsBase, logAnalyticsTags)
   properties: {
-    sku: { name: 'PerGB2018' }
-    retentionInDays: 30
+    sku: { name: logAnalyticsSku }
+    retentionInDays: logAnalyticsRetentionDays
   }
 }
 
@@ -249,11 +289,11 @@ resource newKv 'Microsoft.KeyVault/vaults@2023-07-01' = if (empty(byoKvId)) {
   location: location
   tags: union(allTagsBase, keyVaultTags, kvDisplayTag)
   properties: {
-    sku: { family: 'A', name: 'standard' }
+    sku: { family: 'A', name: keyVaultSku }
     tenantId: subscription().tenantId
     enableRbacAuthorization: true
     enableSoftDelete: true
-    softDeleteRetentionInDays: 7
+    softDeleteRetentionInDays: keyVaultSoftDeleteRetentionDays
   }
 }
 
@@ -285,14 +325,14 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
   name: postgresServerNameEffective
   location: location
   tags: union(allTagsBase, postgresServerTags)
-  sku: { name: 'Standard_B1ms', tier: 'Burstable' }
+  sku: { name: postgresSkuName, tier: postgresSkuTier }
   properties: {
-    version: '16'
+    version: postgresVersion
     administratorLogin: postgresAdminUser
     administratorLoginPassword: postgresAdminPassword
-    storage: { storageSizeGB: 32 }
-    backup: { backupRetentionDays: 7, geoRedundantBackup: 'Disabled' }
-    highAvailability: { mode: 'Disabled' }
+    storage: { storageSizeGB: postgresStorageGB }
+    backup: { backupRetentionDays: postgresBackupRetentionDays, geoRedundantBackup: 'Disabled' }
+    highAvailability: { mode: postgresHighAvailabilityMode }
     authConfig: {
       activeDirectoryAuth: 'Enabled'
       passwordAuth: 'Enabled'
@@ -375,7 +415,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         external: true
-        targetPort: 8080
+        targetPort: apiAppTargetPort
         transport: 'auto'
       }
       registries: registries
@@ -390,7 +430,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'cloudsmith-api'
           image: apiImage
-          resources: { cpu: json('0.5'), memory: '1Gi' }
+          resources: { cpu: json(apiAppCpu), memory: apiAppMemory }
           env: union([
             { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
             { name: 'ConnectionStrings__Default', secretRef: 'db-connection' }
@@ -399,7 +439,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
           ], oidcApiEnv)
         }
       ]
-      scale: { minReplicas: 1, maxReplicas: 3 }
+      scale: { minReplicas: apiAppMinReplicas, maxReplicas: apiAppMaxReplicas }
     }
   }
 }
@@ -418,7 +458,7 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         external: true
-        targetPort: 80
+        targetPort: portalAppTargetPort
         transport: 'auto'
       }
       registries: registries
@@ -429,7 +469,7 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'cloudsmith-portal'
           image: portalImage
-          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          resources: { cpu: json(portalAppCpu), memory: portalAppMemory }
           env: [
             // Browser-facing API base — EMPTY = relative paths via portal nginx proxy (same-origin).
             { name: 'CLOUDSMITH_API_URL', value: '' }
@@ -441,7 +481,7 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
           ]
         }
       ]
-      scale: { minReplicas: 1, maxReplicas: 2 }
+      scale: { minReplicas: portalAppMinReplicas, maxReplicas: portalAppMaxReplicas }
     }
   }
 }

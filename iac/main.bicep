@@ -54,11 +54,90 @@ param deploymentTime string = utcNow('yyyy-MM-ddTHH:mm:ssZ')
 @description('Container image tag to deploy.')
 param imageTag string = 'latest'
 
+// ---- PostgreSQL Flexible Server SKU + sizing (ADR-048 parameter surface) ----
 @description('PostgreSQL administrator login.')
 param postgresAdminUser string = 'cloudsmith'
 
 @secure()
 param postgresAdminPassword string
+
+@description('PostgreSQL Flexible Server SKU name.')
+param postgresSkuName string = 'Standard_B1ms'
+
+@description('PostgreSQL Flexible Server SKU tier.')
+@allowed([ 'Burstable', 'GeneralPurpose', 'MemoryOptimized' ])
+param postgresSkuTier string = 'Burstable'
+
+@description('PostgreSQL storage size in GB.')
+@minValue(32)
+param postgresStorageGB int = 32
+
+@description('PostgreSQL major version.')
+param postgresVersion string = '16'
+
+@description('PostgreSQL backup retention in days.')
+@minValue(7)
+@maxValue(35)
+param postgresBackupRetentionDays int = 7
+
+@description('PostgreSQL high availability mode.')
+@allowed([ 'Disabled', 'SameZone', 'ZoneRedundant' ])
+param postgresHighAvailabilityMode string = 'Disabled'
+
+// ---- Key Vault SKU + retention ----
+@description('Key Vault SKU.')
+@allowed([ 'standard', 'premium' ])
+param keyVaultSku string = 'standard'
+
+@description('Key Vault soft-delete retention in days.')
+@minValue(7)
+@maxValue(90)
+param keyVaultSoftDeleteRetentionDays int = 7
+
+// ---- Log Analytics workspace SKU + retention ----
+@description('Log Analytics workspace SKU.')
+param logAnalyticsSku string = 'PerGB2018'
+
+@description('Log Analytics retention in days.')
+@minValue(30)
+@maxValue(730)
+param logAnalyticsRetentionDays int = 30
+
+// ---- API container app sizing ----
+@description('API container app CPU (cores).')
+param apiAppCpu string = '0.5'
+
+@description('API container app memory.')
+param apiAppMemory string = '1Gi'
+
+@description('API container app minimum replica count.')
+@minValue(0)
+param apiAppMinReplicas int = 1
+
+@description('API container app maximum replica count.')
+@minValue(1)
+param apiAppMaxReplicas int = 3
+
+@description('API container app external ingress target port.')
+param apiAppTargetPort int = 8080
+
+// ---- Portal container app sizing ----
+@description('Portal container app CPU (cores).')
+param portalAppCpu string = '0.25'
+
+@description('Portal container app memory.')
+param portalAppMemory string = '0.5Gi'
+
+@description('Portal container app minimum replica count.')
+@minValue(0)
+param portalAppMinReplicas int = 1
+
+@description('Portal container app maximum replica count.')
+@minValue(1)
+param portalAppMaxReplicas int = 2
+
+@description('Portal container app external ingress target port.')
+param portalAppTargetPort int = 80
 
 @description('Optional Entra tenant ID for OIDC pre-seed. Empty = ADR-047 first-run wizard.')
 param entraTenantId string = ''
@@ -228,6 +307,26 @@ module resources 'resources.bicep' = {
     imageTag: imageTag
     postgresAdminUser: postgresAdminUser
     postgresAdminPassword: postgresAdminPassword
+    postgresSkuName: postgresSkuName
+    postgresSkuTier: postgresSkuTier
+    postgresStorageGB: postgresStorageGB
+    postgresVersion: postgresVersion
+    postgresBackupRetentionDays: postgresBackupRetentionDays
+    postgresHighAvailabilityMode: postgresHighAvailabilityMode
+    keyVaultSku: keyVaultSku
+    keyVaultSoftDeleteRetentionDays: keyVaultSoftDeleteRetentionDays
+    logAnalyticsSku: logAnalyticsSku
+    logAnalyticsRetentionDays: logAnalyticsRetentionDays
+    apiAppCpu: apiAppCpu
+    apiAppMemory: apiAppMemory
+    apiAppMinReplicas: apiAppMinReplicas
+    apiAppMaxReplicas: apiAppMaxReplicas
+    apiAppTargetPort: apiAppTargetPort
+    portalAppCpu: portalAppCpu
+    portalAppMemory: portalAppMemory
+    portalAppMinReplicas: portalAppMinReplicas
+    portalAppMaxReplicas: portalAppMaxReplicas
+    portalAppTargetPort: portalAppTargetPort
     entraTenantId: entraTenantId
     entraClientId: entraClientId
     entraClientSecret: entraClientSecret
