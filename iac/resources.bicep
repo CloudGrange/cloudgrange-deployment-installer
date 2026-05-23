@@ -148,6 +148,13 @@ var typeAbbr = {
 // globally-unique resources globally-unique without leaking customer identity.
 var rgHash = substring(uniqueString(resourceGroup().id), 0, 6)
 
+// Length-constrained types (Key Vault = 24 chars max) need a shorter workload token.
+// Budget for KV: 24 - typeAbbr(2) - env(max 5='stage') - regionCode(max 4='wus2') - instance(3) - hash(6) = 4
+// Truncate workload to 6 chars to leave headroom; examples with workload='cloudsmith':
+//   env=dev region=cus instance=001 hash=abc123 → kvcloudsdevcus001abc123 (23 chars)
+//   env=stage region=eus2 instance=001 hash=abc123 → kvcloudsstageeus2001abc123 → would still overflow with the full 6+5+4+3+6=24, so use 4-char truncate to be safe
+var workloadShort = length(workload) > 4 ? substring(workload, 0, 4) : workload
+
 // Build the CAF pattern name. Container apps add a role discriminator since
 // multiple apps share workload+env+region+instance scope.
 func cafName(typeAbbrValue string, workloadValue string, envValue string, regionValue string, instanceValue string) string =>
@@ -165,7 +172,7 @@ func cafNameLengthConstrained(typeAbbrValue string, workloadValue string, envVal
 var logAnalyticsNameEffective = empty(logAnalyticsName) ? cafName(typeAbbr.logAnalyticsWorkspace, workload, environment, regionCode, instance) : logAnalyticsName
 var applicationInsightsNameEffective = empty(applicationInsightsName) ? cafName(typeAbbr.applicationInsights, workload, environment, regionCode, instance) : applicationInsightsName
 var managedIdentityNameEffective = empty(managedIdentityName) ? cafName(typeAbbr.userAssignedManagedIdentity, workload, environment, regionCode, instance) : managedIdentityName
-var keyVaultNameEffective = empty(keyVaultName) ? cafNameLengthConstrained(typeAbbr.keyVault, workload, environment, regionCode, instance, rgHash) : keyVaultName
+var keyVaultNameEffective = empty(keyVaultName) ? cafNameLengthConstrained(typeAbbr.keyVault, workloadShort, environment, regionCode, instance, rgHash) : keyVaultName
 var postgresServerNameEffective = empty(postgresServerName) ? cafName(typeAbbr.postgresqlFlexibleServer, workload, environment, regionCode, instance) : postgresServerName
 var containerAppsEnvironmentNameEffective = empty(containerAppsEnvironmentName) ? cafName(typeAbbr.containerAppsEnvironment, workload, environment, regionCode, instance) : containerAppsEnvironmentName
 var apiAppNameEffective = empty(apiAppName) ? cafNameWithRole(typeAbbr.containerApp, workload, 'api', environment, regionCode, instance) : apiAppName
