@@ -149,7 +149,7 @@ local-hostname: cloudsmith-docker
 
     # Wait for VM to become reachable (max 3 minutes)
     Write-Host "  Waiting for VM to boot (up to 3 minutes)..."
-    $reachable = Wait-ForTcp -Host $VmIp -Port 22 -TimeoutSeconds 180
+    $reachable = Wait-ForTcp -HostName $VmIp -Port 22 -TimeoutSeconds 180
     if (-not $reachable) {
         Write-Warning "VM did not become reachable within 3 minutes. Check Hyper-V console."
     } else {

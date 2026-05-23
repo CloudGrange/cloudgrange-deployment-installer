@@ -7,12 +7,21 @@ function Write-Progress-Step {
 }
 
 function Wait-ForTcp {
-    param([string]$Host, [int]$Port, [int]$TimeoutSeconds = 120)
+    # $Host is an automatic read-only variable in PowerShell — using it as a
+    # parameter name is a parser-time error in PS 7 ("Cannot overwrite variable
+    # Host because it is read-only or constant"). The parameter is renamed
+    # $HostName and aliased to '-Host' for backwards-compatible call sites.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Alias('Host')][string]$HostName,
+        [int]$Port,
+        [int]$TimeoutSeconds = 120
+    )
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
             $tc = [System.Net.Sockets.TcpClient]::new()
-            $tc.Connect($Host, $Port)
+            $tc.Connect($HostName, $Port)
             $tc.Close()
             return $true
         } catch {
