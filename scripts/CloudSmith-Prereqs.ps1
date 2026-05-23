@@ -179,42 +179,51 @@ function New-CiDataIso {
         Remove-Item -LiteralPath $OutputIso -Force
     }
 
-    # Use the IMAPI2 helper class IStream → file. The COM IStream exposes a
-    # CopyTo method but the easiest pure-PowerShell path is to write the stream
-    # into a managed FileStream via a 64 KB shuttle buffer.
-    $bufferSize = 65536
-    $totalBytes = $resultImage.BlockSize * $resultImage.TotalBlocks
-    $fileStream = [System.IO.File]::Create($OutputIso)
-    try {
-        # IStream has Read(IntPtr pv, ULONG cb, ULONG* pcbRead).
-        # We marshal an unmanaged buffer, then copy into a managed array.
-        $unmanaged = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($bufferSize)
-        $bytesReadPtr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
-        try {
-            $remaining = $totalBytes
-            while ($remaining -gt 0) {
-                $toRead = [Math]::Min($bufferSize, $remaining)
-                $resultStream.Read($unmanaged, $toRead, $bytesReadPtr)
-                $actuallyRead = [System.Runtime.InteropServices.Marshal]::ReadInt32($bytesReadPtr)
-                if ($actuallyRead -le 0) { break }
-                $managed = New-Object byte[] $actuallyRead
-                [System.Runtime.InteropServices.Marshal]::Copy($unmanaged, $managed, 0, $actuallyRead)
-                $fileStream.Write($managed, 0, $actuallyRead)
-                $remaining -= $actuallyRead
+    # PowerShell 7 (.NET Core / .NET 8) does NOT dispatch IStream methods via
+    # System.__ComObject the way Windows PowerShell 5.1 (.NET Framework) does —
+    # the previous IStream.Read($unmanaged, $toRead, $bytesReadPtr) call throws
+    # "Method invocation failed because [System.__ComObject] does not contain a
+    # method named 'Read'". The canonical workaround (used by the Microsoft
+    # TechNet "New-IsoFile" snippet since 2014) is to cast the COM object to
+    # the typed managed interface System.Runtime.InteropServices.ComTypes.IStream
+    # inside a small C# helper so the call goes through the typed interface
+    # vtable rather than __ComObject's IDispatch shim.
+    #
+    # /unsafe is required because the helper takes the address of a managed
+    # `int` (`&bytes`) to pass as the ULONG* pcbRead out-parameter; there is no
+    # safe-only equivalent for IStream::Read's signature.
+    if (-not ([System.Management.Automation.PSTypeName]'ISOFile').Type) {
+        Add-Type -CompilerOptions "/unsafe" -TypeDefinition @"
+public class ISOFile {
+    public unsafe static void Create(string Path, object Stream, int BlockSize, int TotalBlocks) {
+        int bytes = 0;
+        byte[] buf = new byte[BlockSize];
+        var ptr = (System.IntPtr)(&bytes);
+        var o = System.IO.File.OpenWrite(Path);
+        var i = Stream as System.Runtime.InteropServices.ComTypes.IStream;
+        if (o != null) {
+            while (TotalBlocks-- > 0) {
+                i.Read(buf, BlockSize, ptr);
+                o.Write(buf, 0, bytes);
             }
-        } finally {
-            [System.Runtime.InteropServices.Marshal]::FreeHGlobal($unmanaged)
-            [System.Runtime.InteropServices.Marshal]::FreeHGlobal($bytesReadPtr)
+            o.Flush();
+            o.Close();
         }
+    }
+}
+"@
+    }
+
+    try {
+        [ISOFile]::Create($OutputIso, $resultStream, $resultImage.BlockSize, $resultImage.TotalBlocks)
     } finally {
-        $fileStream.Dispose()
         # Release COM references.
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($resultStream)
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($resultImage)
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($fsi)
     }
 
-    if (-not (Test-Path $OutputIso)) {
+    if (-not (Test-Path $OutputIso) -or (Get-Item -LiteralPath $OutputIso).Length -eq 0) {
         Write-Error "IMAPI2 wrote zero bytes — ISO not produced at $OutputIso."
     }
 }
