@@ -48,13 +48,26 @@ function New-CloudSmithVm {
         }
     }
 
-    # Convert .img to VHDX using qemu-img (required for Hyper-V Gen2)
+    # Convert .img to VHDX using qemu-img (required for Hyper-V Gen2).
+    # The installer auto-installs QEMU in Install-CloudSmithPrereqs; this is a
+    # belt-and-braces check in case the function is called directly.
     $qemuImg = (Get-Command qemu-img -ErrorAction SilentlyContinue)?.Source
     if (-not $qemuImg) {
-        Write-Error "qemu-img is required to convert the cloud image to VHDX. Install QEMU for Windows: https://www.qemu.org/download/#windows"
+        . "$PSScriptRoot\CloudSmith-Prereqs.ps1"
+        Initialize-CloudSmithPrereqs
+        $qemuImg = (Get-Command qemu-img -ErrorAction SilentlyContinue)?.Source
+        if (-not $qemuImg) {
+            Write-Error "qemu-img is still missing after bootstrap. Aborting."
+        }
     }
     Write-Host "  Converting cloud image to VHDX..."
     & $qemuImg convert -f qcow2 -O vhdx -o subformat=dynamic $cloudImagePath $VhdxPath
+
+    # Clear the NTFS Sparse attribute on the freshly-converted VHDX. Hyper-V
+    # Gen2 refuses to power on a sparse VHDX with 0xC03A001A; qemu-img can
+    # leave the file marked sparse on NTFS even when subformat=dynamic.
+    . "$PSScriptRoot\CloudSmith-Prereqs.ps1"
+    Clear-CloudSmithSparseAttribute -Path $VhdxPath
 
     # Build cloud-init NoCloud seed ISO (user-data + meta-data)
     $ciDir = Join-Path $env:TEMP 'cloudsmith-cloud-init'
@@ -94,13 +107,12 @@ local-hostname: cloudsmith-docker
     Set-Content -Path (Join-Path $ciDir 'meta-data') -Value $metaData -Encoding UTF8
 
     $seedIso = Join-Path $vhdxDir 'cloud-init-seed.iso'
-    # Use oscdimg (Windows ADK) or mkisofs to create NoCloud ISO
-    $oscdimg = (Get-Command oscdimg -ErrorAction SilentlyContinue)?.Source
-    if ($oscdimg) {
-        & $oscdimg -j1 -o -m -lcidata $ciDir $seedIso | Out-Null
-    } else {
-        Write-Warning "oscdimg not found — cloud-init seed ISO could not be created. Install Windows ADK or use the Appliance mode."
-    }
+    # Build the NoCloud seed ISO via IMAPI2 (built into Windows since Vista).
+    # No Windows ADK / oscdimg dependency — operators are not expected to install
+    # developer tools to deploy CloudSmith on-prem.
+    . "$PSScriptRoot\CloudSmith-Prereqs.ps1"
+    Write-Host "  Building cloud-init seed ISO (IMAPI2)..."
+    New-CiDataIso -SourceDir $ciDir -OutputIso $seedIso -VolumeLabel 'cidata'
 
     # Create VM — Generation 2, dynamic RAM 4 GB (max 8 GB), 2 vCPU
     Write-Host "  Creating VM: $vmName"

@@ -22,6 +22,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot\scripts\CloudSmith-Common.ps1"
+. "$PSScriptRoot\scripts\CloudSmith-Prereqs.ps1"
 
 function Invoke-CloudSmithInstall {
     Write-Host "`n  CloudSmith Installer — Mode: $Mode" -ForegroundColor Cyan
@@ -80,6 +81,9 @@ function Invoke-CloudSmithInstall {
 
     # Step 4: Create VM or WSL2 environment
     if (-not $useWsl2) {
+        Write-Progress-Step "Bootstrapping installer prerequisites (qemu-img, ISO writer)"
+        Initialize-CloudSmithPrereqs
+
         Write-Progress-Step "Provisioning Hyper-V VM"
         . "$PSScriptRoot\scripts\New-CloudSmithVm.ps1"
         New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode
