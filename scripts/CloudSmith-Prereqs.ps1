@@ -159,7 +159,10 @@ function New-CiDataIso {
         # ISO9660/Joliet so we set 3 (ISO9660 + Joliet).
         $fsi.FileSystemsToCreate = 3
         $fsi.VolumeName = $VolumeLabel
-        $fsi.ChooseImageDefaults($null)
+        # IMAPI_MEDIA_TYPE_DISK (13) — hard-disk image, no media size constraint.
+        # ChooseImageDefaults($null) NREs without a disc recorder; ChooseImageDefaultsForMediaType
+        # is the correct path when building an ISO file rather than burning a disc.
+        $fsi.ChooseImageDefaultsForMediaType(13)
 
         $sourceFull = (Resolve-Path -LiteralPath $SourceDir).Path
         # AddTree with includeBaseDirectory=$false → files land at the ISO root.

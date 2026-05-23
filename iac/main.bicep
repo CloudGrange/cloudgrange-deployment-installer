@@ -1,53 +1,230 @@
 // Copyright 2026 CloudSmith Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// CloudSmith MVP — Azure PaaS (Model B) entry point.
-// Subscription-scoped: creates the resource group and deploys the resource module.
-// Deploy with azd (`azd up`) or directly:
-//   az deployment sub create --location eastus \
-//     --template-file iac/main.bicep --parameters iac/main.parameters.json
+// CloudSmith PaaS (Model B) entry point — subscription-scoped.
+// Follows ADR-048 (Azure resource naming and tagging standard):
+//   - Default names: <type-abbr>-<workload>-<env>-<region>-<instance>
+//   - CAF mandatory tag set, applied via commonTags
+//   - Per-resource <resource>Name and <resource>Tags overrides
+//   - bringYourOwn parameter set for shared LAW/KV/UAMI/ACA env / App Insights
+//
+// Deploy:
+//   az deployment sub create --location centralus --template-file iac/main.bicep \
+//     --parameters iac/main.parameters.json
 
 targetScope = 'subscription'
+
+// =============================================================================
+// Naming + tagging parameters (ADR-048)
+// =============================================================================
 
 @description('Azure region for the deployment.')
 param location string = 'eastus'
 
-@description('Environment name (azd-provided) — used in the resource group name.')
-param environmentName string = 'cloudsmith-mvp'
+@description('Workload identifier. Used in CAF-pattern names. Lowercase alphanumeric.')
+@minLength(2)
+@maxLength(12)
+param workload string = 'cloudsmith'
 
-@description('Short prefix for resource names.')
-param namePrefix string = 'cloudsmith'
+@description('Environment. One of dev, test, stage, prod.')
+@allowed([ 'dev', 'test', 'stage', 'prod' ])
+param environment string
+
+@description('Three-digit zero-padded instance number.')
+@minLength(3)
+@maxLength(3)
+param instance string = '001'
+
+@description('CAF mandatory tag set + operator additions. Merged into every resource.')
+param commonTags object
+
+@description('Override the resource group name. Empty = derive from CAF pattern.')
+param resourceGroupName string = ''
+
+@description('Additional tags merged with commonTags for the resource group only.')
+param resourceGroupTags object = {}
+
+@description('Deployment timestamp recorded in the DeployedAt tag. Defaults to UTC now.')
+param deploymentTime string = utcNow('yyyy-MM-ddTHH:mm:ssZ')
+
+// =============================================================================
+// Application parameters (Phase IV)
+// =============================================================================
 
 @description('Container image tag to deploy.')
 param imageTag string = 'latest'
 
+@description('PostgreSQL administrator login.')
 param postgresAdminUser string = 'cloudsmith'
 
 @secure()
 param postgresAdminPassword string
 
-param entraTenantId string
-param entraClientId string
+@description('Optional Entra tenant ID for OIDC pre-seed. Empty = ADR-047 first-run wizard.')
+param entraTenantId string = ''
+
+@description('Optional Entra client ID for OIDC pre-seed.')
+param entraClientId string = ''
 
 @secure()
-param entraClientSecret string
+@description('Optional Entra client secret. Empty when first-run wizard is used.')
+param entraClientSecret string = ''
 
+@description('GHCR username for private image pull. Empty when images are public (ADR-046).')
 param ghcrUsername string = ''
 
 @secure()
+@description('GHCR token for private image pull. Empty when images are public.')
 param ghcrToken string = ''
 
-resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
-  name: 'rg-${environmentName}'
-  location: location
+// =============================================================================
+// Per-resource name and tag overrides (ADR-048)
+// =============================================================================
+
+@description('Override Log Analytics workspace name. Empty = CAF pattern.')
+param logAnalyticsName string = ''
+
+@description('Additional tags for the Log Analytics workspace.')
+param logAnalyticsTags object = {}
+
+@description('Override Application Insights name. Empty = CAF pattern.')
+param applicationInsightsName string = ''
+
+@description('Additional tags for Application Insights.')
+param applicationInsightsTags object = {}
+
+@description('Override managed identity name. Empty = CAF pattern.')
+param managedIdentityName string = ''
+
+@description('Additional tags for the managed identity.')
+param managedIdentityTags object = {}
+
+@description('Override Key Vault name. Empty = CAF pattern.')
+param keyVaultName string = ''
+
+@description('Additional tags for the Key Vault.')
+param keyVaultTags object = {}
+
+@description('Override PostgreSQL flexible server name. Empty = CAF pattern.')
+param postgresServerName string = ''
+
+@description('Additional tags for the PostgreSQL server.')
+param postgresServerTags object = {}
+
+@description('Override PostgreSQL database name.')
+param postgresDatabaseName string = 'cloudsmith'
+
+@description('Override Container Apps Environment name. Empty = CAF pattern.')
+param containerAppsEnvironmentName string = ''
+
+@description('Additional tags for the Container Apps Environment.')
+param containerAppsEnvironmentTags object = {}
+
+@description('Override API container app name. Empty = CAF pattern.')
+param apiAppName string = ''
+
+@description('Additional tags for the API container app.')
+param apiAppTags object = {}
+
+@description('Override portal container app name. Empty = CAF pattern.')
+param portalAppName string = ''
+
+@description('Additional tags for the portal container app.')
+param portalAppTags object = {}
+
+// =============================================================================
+// Bring-your-own (ADR-048) — supply resource IDs to skip creation and reuse
+// =============================================================================
+
+@description('Existing resource IDs to reuse instead of creating new resources. Empty string = create new.')
+param bringYourOwn object = {
+  logAnalyticsWorkspaceId: ''
+  applicationInsightsId: ''
+  managedIdentityId: ''
+  keyVaultId: ''
+  containerAppsEnvironmentId: ''
 }
+
+// =============================================================================
+// Region code lookup (CAF abbreviation)
+// =============================================================================
+
+var regionCodes = {
+  eastus: 'eus'
+  eastus2: 'eus2'
+  westus: 'wus'
+  westus2: 'wus2'
+  westus3: 'wus3'
+  centralus: 'cus'
+  northcentralus: 'ncus'
+  southcentralus: 'scus'
+  westcentralus: 'wcus'
+  northeurope: 'neu'
+  westeurope: 'weu'
+  uksouth: 'uks'
+  ukwest: 'ukw'
+  francecentral: 'frc'
+  germanywestcentral: 'gwc'
+  switzerlandnorth: 'chn'
+  swedencentral: 'sec'
+  australiaeast: 'aue'
+  australiasoutheast: 'ause'
+  southeastasia: 'sea'
+  eastasia: 'ea'
+  japaneast: 'jpe'
+  japanwest: 'jpw'
+  koreacentral: 'krc'
+  centralindia: 'cin'
+  southindia: 'sin'
+  canadacentral: 'cac'
+  canadaeast: 'cae'
+  brazilsouth: 'brs'
+  uaenorth: 'uaen'
+  southafricanorth: 'san'
+}
+var regionCode = contains(regionCodes, location) ? regionCodes[location] : substring(replace(location, ' ', ''), 0, 4)
+
+// =============================================================================
+// Resource group name (CAF default unless overridden)
+// =============================================================================
+
+var rgNameDefault = 'rg-${workload}-${environment}-${regionCode}-${instance}'
+var rgNameEffective = empty(resourceGroupName) ? rgNameDefault : resourceGroupName
+
+// Auto-injected tags applied across the deploy (ADR-048).
+// deploymentTime comes from the parameter (utcNow is only valid as a parameter default).
+var autoTags = {
+  ManagedBy: 'bicep'
+  DeployedAt: deploymentTime
+}
+
+var rgTagsEffective = union(commonTags, autoTags, resourceGroupTags)
+
+// =============================================================================
+// Resource group (workload + environment + region + instance)
+// =============================================================================
+
+resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: rgNameEffective
+  location: location
+  tags: rgTagsEffective
+}
+
+// =============================================================================
+// Resources module
+// =============================================================================
 
 module resources 'resources.bicep' = {
   name: 'cloudsmith-resources'
   scope: rg
   params: {
     location: location
-    namePrefix: namePrefix
+    workload: workload
+    environment: environment
+    instance: instance
+    regionCode: regionCode
+    commonTags: commonTags
+    autoTags: autoTags
     imageTag: imageTag
     postgresAdminUser: postgresAdminUser
     postgresAdminPassword: postgresAdminPassword
@@ -56,10 +233,34 @@ module resources 'resources.bicep' = {
     entraClientSecret: entraClientSecret
     ghcrUsername: ghcrUsername
     ghcrToken: ghcrToken
+    logAnalyticsName: logAnalyticsName
+    logAnalyticsTags: logAnalyticsTags
+    applicationInsightsName: applicationInsightsName
+    applicationInsightsTags: applicationInsightsTags
+    managedIdentityName: managedIdentityName
+    managedIdentityTags: managedIdentityTags
+    keyVaultName: keyVaultName
+    keyVaultTags: keyVaultTags
+    postgresServerName: postgresServerName
+    postgresServerTags: postgresServerTags
+    postgresDatabaseName: postgresDatabaseName
+    containerAppsEnvironmentName: containerAppsEnvironmentName
+    containerAppsEnvironmentTags: containerAppsEnvironmentTags
+    apiAppName: apiAppName
+    apiAppTags: apiAppTags
+    portalAppName: portalAppName
+    portalAppTags: portalAppTags
+    bringYourOwn: bringYourOwn
   }
 }
+
+// =============================================================================
+// Outputs
+// =============================================================================
 
 output PORTAL_URL string = resources.outputs.portalUrl
 output API_URL string = resources.outputs.apiUrl
 output POSTGRES_SERVER string = resources.outputs.postgresServer
 output KEY_VAULT_NAME string = resources.outputs.keyVaultName
+output RESOURCE_GROUP_NAME string = rgNameEffective
+output REGION_CODE string = regionCode

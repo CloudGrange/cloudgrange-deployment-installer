@@ -1,61 +1,152 @@
 // Copyright 2026 CloudSmith Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// CloudSmith MVP — Azure PaaS (Model B) resource module.
-// Deploys the minimal Phase IV PaaS stack per ADR-043 (azd + Bicep),
-// ADR-006 (Azure Container Apps), ADR-044 (portal as ACA container).
-// Auth on PaaS uses Entra ID (per design/sequence-diagrams/login-oidc-paas.md),
-// not Keycloak (which is the standalone/Model A IdP).
+// CloudSmith PaaS (Model B) resource module — ADR-043 / ADR-044 / ADR-046 / ADR-047 / ADR-048.
+//
+// Naming + tagging (ADR-048):
+//   - Default names follow CAF pattern <type-abbr>-<workload>-<env>-<region>-<instance>
+//   - Length-constrained types (Key Vault) drop separators and append a hash suffix
+//   - Every resource accepts an explicit <resource>Name override and a <resource>Tags
+//     object merged with commonTags + autoTags
+//   - bringYourOwn parameter set lets callers supply existing LAW/AppI/UAMI/KV/ACA env
+//     resource IDs and skip creation
 
-@description('Azure region for all resources.')
+@description('Azure region.')
 param location string = resourceGroup().location
 
-@description('Short prefix for resource names (3-12 lowercase alphanumeric).')
-@minLength(3)
+@description('Workload identifier. Used in CAF-pattern names.')
+@minLength(2)
 @maxLength(12)
-param namePrefix string = 'cloudsmith'
+param workload string
 
-@description('Container image tag to deploy for api and portal.')
+@description('Environment.')
+@allowed([ 'dev', 'test', 'stage', 'prod' ])
+param environment string
+
+@description('Three-digit zero-padded instance number.')
+@minLength(3)
+@maxLength(3)
+param instance string
+
+@description('Three-letter Azure region code.')
+param regionCode string
+
+@description('CAF mandatory tag set + operator additions. Applied to every resource.')
+param commonTags object
+
+@description('Auto-injected tags (ManagedBy, DeployedAt). Applied to every resource.')
+param autoTags object
+
+@description('Container image tag for API + portal.')
 param imageTag string = 'latest'
 
-@description('PostgreSQL administrator login name.')
+@description('PostgreSQL admin login.')
 param postgresAdminUser string = 'cloudsmith'
 
 @secure()
-@description('PostgreSQL administrator password.')
 param postgresAdminPassword string
 
-// OPTIONAL deploy-time IdP pre-seed. The identity provider (Entra ID, on-prem
-// Active Directory, Keycloak, generic OIDC) is normally configured POST-DEPLOY
-// in the platform identity settings (/identity/v1/idp) and stored in the Config
-// Registry — see README "Identity model". Leave these empty to deploy
-// IdP-agnostic; the API issues a bootstrap admin token on first run for the
-// first login, after which the operator configures their IdP in settings.
-@description('Optional: Entra tenant ID to PRE-SEED OIDC at deploy time. Empty = configure IdP post-deploy in settings.')
+@description('Entra tenant ID — empty = ADR-047 first-run wizard.')
 param entraTenantId string = ''
 
-@description('Optional: Entra app (client) ID to pre-seed. Empty = configure post-deploy.')
+@description('Entra client ID — empty = first-run wizard.')
 param entraClientId string = ''
 
 @secure()
-@description('Optional: Entra client secret to pre-seed. Prefer a federated credential to the Managed Identity (no secret). Empty = configure post-deploy.')
 param entraClientSecret string = ''
 
-@description('GHCR username for pulling container images while they remain private. Leave empty once images are public (ADR-046).')
+@description('GHCR username. Empty = images public (ADR-046).')
 param ghcrUsername string = ''
 
 @secure()
-@description('GHCR token (read:packages) for private image pull. Leave empty once images are public.')
 param ghcrToken string = ''
 
+// Per-resource overrides (ADR-048)
+param logAnalyticsName string = ''
+param logAnalyticsTags object = {}
+param applicationInsightsName string = ''
+param applicationInsightsTags object = {}
+param managedIdentityName string = ''
+param managedIdentityTags object = {}
+param keyVaultName string = ''
+param keyVaultTags object = {}
+param postgresServerName string = ''
+param postgresServerTags object = {}
+param postgresDatabaseName string = 'cloudsmith'
+param containerAppsEnvironmentName string = ''
+param containerAppsEnvironmentTags object = {}
+param apiAppName string = ''
+param apiAppTags object = {}
+param portalAppName string = ''
+param portalAppTags object = {}
+
+param bringYourOwn object = {
+  logAnalyticsWorkspaceId: ''
+  applicationInsightsId: ''
+  managedIdentityId: ''
+  keyVaultId: ''
+  containerAppsEnvironmentId: ''
+}
+
+// =============================================================================
+// CAF naming helper — type-abbr pattern with length handling
+// =============================================================================
+// CAF resource-type abbreviation table (https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations)
+// Subset for the Phase IV deployed types.
+var typeAbbr = {
+  resourceGroup: 'rg'
+  logAnalyticsWorkspace: 'log'
+  applicationInsights: 'appi'
+  userAssignedManagedIdentity: 'id'
+  keyVault: 'kv'
+  postgresqlFlexibleServer: 'psql'
+  containerAppsEnvironment: 'cae'
+  containerApp: 'ca'
+}
+
+// 6-char deterministic hash from the resource group ID — used to keep
+// globally-unique resources globally-unique without leaking customer identity.
+var rgHash = substring(uniqueString(resourceGroup().id), 0, 6)
+
+// Build the CAF pattern name. Container apps add a role discriminator since
+// multiple apps share workload+env+region+instance scope.
+func cafName(typeAbbrValue string, workloadValue string, envValue string, regionValue string, instanceValue string) string =>
+  '${typeAbbrValue}-${workloadValue}-${envValue}-${regionValue}-${instanceValue}'
+
+func cafNameWithRole(typeAbbrValue string, workloadValue string, roleValue string, envValue string, regionValue string, instanceValue string) string =>
+  '${typeAbbrValue}-${workloadValue}-${roleValue}-${envValue}-${regionValue}-${instanceValue}'
+
+// Length-constrained pattern for Key Vault (24 chars max, alphanumeric+hyphen).
+// Drop hyphens and append the 6-char hash for global uniqueness.
+func cafNameLengthConstrained(typeAbbrValue string, workloadValue string, envValue string, regionValue string, instanceValue string, hashValue string) string =>
+  '${typeAbbrValue}${workloadValue}${envValue}${regionValue}${instanceValue}${hashValue}'
+
+// Effective names — override wins, otherwise derive from the pattern.
+var logAnalyticsNameEffective = empty(logAnalyticsName) ? cafName(typeAbbr.logAnalyticsWorkspace, workload, environment, regionCode, instance) : logAnalyticsName
+var applicationInsightsNameEffective = empty(applicationInsightsName) ? cafName(typeAbbr.applicationInsights, workload, environment, regionCode, instance) : applicationInsightsName
+var managedIdentityNameEffective = empty(managedIdentityName) ? cafName(typeAbbr.userAssignedManagedIdentity, workload, environment, regionCode, instance) : managedIdentityName
+var keyVaultNameEffective = empty(keyVaultName) ? cafNameLengthConstrained(typeAbbr.keyVault, workload, environment, regionCode, instance, rgHash) : keyVaultName
+var postgresServerNameEffective = empty(postgresServerName) ? cafName(typeAbbr.postgresqlFlexibleServer, workload, environment, regionCode, instance) : postgresServerName
+var containerAppsEnvironmentNameEffective = empty(containerAppsEnvironmentName) ? cafName(typeAbbr.containerAppsEnvironment, workload, environment, regionCode, instance) : containerAppsEnvironmentName
+var apiAppNameEffective = empty(apiAppName) ? cafNameWithRole(typeAbbr.containerApp, workload, 'api', environment, regionCode, instance) : apiAppName
+var portalAppNameEffective = empty(portalAppName) ? cafNameWithRole(typeAbbr.containerApp, workload, 'portal', environment, regionCode, instance) : portalAppName
+
+// Tag composition helper — every resource gets commonTags + autoTags + own.
+// Length-constrained types also get a DisplayName tag with the readable CAF form.
+var allTagsBase = union(commonTags, autoTags)
+var keyVaultDisplayName = cafName(typeAbbr.keyVault, workload, environment, regionCode, instance)
+var kvDisplayTag = { DisplayName: keyVaultDisplayName }
+
+// =============================================================================
+// Image / connection-string composition
+// =============================================================================
 var imagesArePrivate = !empty(ghcrToken)
 var apiImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-api:${imageTag}'
 var portalImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-portal:${imageTag}'
-var pgFqdn = '${pg.name}.postgres.database.azure.com'
-var dbConnString = 'Host=${pgFqdn};Database=cloudsmith;Username=${postgresAdminUser};Password=${postgresAdminPassword};Ssl Mode=Require;'
+var pgFqdn = '${postgresServerNameEffective}.postgres.database.azure.com'
+var dbConnString = 'Host=${pgFqdn};Database=${postgresDatabaseName};Username=${postgresAdminUser};Password=${postgresAdminPassword};Ssl Mode=Require;'
 var oidcPreseed = !empty(entraClientId)
 var entraAuthority = empty(entraTenantId) ? '' : 'https://login.microsoftonline.com/${entraTenantId}/v2.0'
-// Optional OIDC pre-seed env — normally EMPTY; IdP is configured post-deploy in settings.
 var oidcApiEnv = oidcPreseed ? [
   { name: 'Keycloak__Authority', value: entraAuthority }
   { name: 'Keycloak__ClientId', value: entraClientId }
@@ -63,40 +154,100 @@ var oidcApiEnv = oidcPreseed ? [
   { name: 'Keycloak__RequireHttpsMetadata', value: 'true' }
 ] : []
 
-// ---------------------------------------------------------------------------
+// =============================================================================
+// Bring-your-own resource ID parsing
+// =============================================================================
+// Full ARM resource IDs look like:
+//   /subscriptions/<subId>/resourceGroups/<rg>/providers/<ns>/<type>/<name>
+// Indices:                  0/1            /2 /3            /4  /5        /6/7    /8
+// When the BYO ID is empty we substitute a dummy ID of the right shape so the
+// split() always returns a 9-element string[] — required because Bicep type-checks
+// indexing operations and rejects "<empty array> | string[]". The dummy resource is
+// never actually referenced — the corresponding `existing` declarations are gated
+// by `if (!empty(byoXxxId))`.
+var byoLawId = bringYourOwn.?logAnalyticsWorkspaceId ?? ''
+var byoAppiId = bringYourOwn.?applicationInsightsId ?? ''
+var byoMiId = bringYourOwn.?managedIdentityId ?? ''
+var byoKvId = bringYourOwn.?keyVaultId ?? ''
+var byoCaeId = bringYourOwn.?containerAppsEnvironmentId ?? ''
+
+var dummyId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/_dummy/providers/_/_/_'
+
+var byoLawParts = split(empty(byoLawId) ? dummyId : byoLawId, '/')
+var byoAppiParts = split(empty(byoAppiId) ? dummyId : byoAppiId, '/')
+var byoMiParts = split(empty(byoMiId) ? dummyId : byoMiId, '/')
+var byoKvParts = split(empty(byoKvId) ? dummyId : byoKvId, '/')
+var byoCaeParts = split(empty(byoCaeId) ? dummyId : byoCaeId, '/')
+
+// =============================================================================
 // Observability — Log Analytics + Application Insights
-// ---------------------------------------------------------------------------
-resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: '${namePrefix}-logs'
+// =============================================================================
+
+resource newLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (empty(byoLawId)) {
+  name: logAnalyticsNameEffective
   location: location
+  tags: union(allTagsBase, logAnalyticsTags)
   properties: {
     sku: { name: 'PerGB2018' }
     retentionInDays: 30
   }
 }
 
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: '${namePrefix}-appi'
+resource existingLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = if (!empty(byoLawId)) {
+  name: byoLawParts[8]
+  scope: resourceGroup(byoLawParts[2], byoLawParts[4])
+}
+
+var lawId = empty(byoLawId) ? newLaw.id : existingLaw.id
+var lawCustomerId = empty(byoLawId) ? newLaw.properties.customerId : existingLaw.properties.customerId
+var lawSharedKey = empty(byoLawId) ? newLaw.listKeys().primarySharedKey : existingLaw.listKeys().primarySharedKey
+
+resource newAppi 'Microsoft.Insights/components@2020-02-02' = if (empty(byoAppiId)) {
+  name: applicationInsightsNameEffective
   location: location
+  tags: union(allTagsBase, applicationInsightsTags)
   kind: 'web'
   properties: {
     Application_Type: 'web'
-    WorkspaceResourceId: logs.id
+    WorkspaceResourceId: lawId
   }
 }
 
-// ---------------------------------------------------------------------------
-// Identity + Key Vault
-// ---------------------------------------------------------------------------
-resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefix}-id'
-  location: location
+resource existingAppi 'Microsoft.Insights/components@2020-02-02' existing = if (!empty(byoAppiId)) {
+  name: byoAppiParts[8]
+  scope: resourceGroup(byoAppiParts[2], byoAppiParts[4])
 }
 
-resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  // KV names are limited to 24 chars; use a short fixed prefix + 13-char uniqueString (= 19).
-  name: 'cs-kv-${uniqueString(resourceGroup().id)}'
+var appiConnectionString = empty(byoAppiId) ? newAppi.properties.ConnectionString : existingAppi.properties.ConnectionString
+
+// =============================================================================
+// Identity — User-Assigned Managed Identity
+// =============================================================================
+
+resource newMi 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (empty(byoMiId)) {
+  name: managedIdentityNameEffective
   location: location
+  tags: union(allTagsBase, managedIdentityTags)
+}
+
+resource existingMi 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = if (!empty(byoMiId)) {
+  name: byoMiParts[8]
+  scope: resourceGroup(byoMiParts[2], byoMiParts[4])
+}
+
+var miId = empty(byoMiId) ? newMi.id : existingMi.id
+var miPrincipalId = empty(byoMiId) ? newMi.properties.principalId : existingMi.properties.principalId
+var miClientId = empty(byoMiId) ? newMi.properties.clientId : existingMi.properties.clientId
+var miNameForPg = empty(byoMiId) ? newMi.name : existingMi.name
+
+// =============================================================================
+// Key Vault
+// =============================================================================
+
+resource newKv 'Microsoft.KeyVault/vaults@2023-07-01' = if (empty(byoKvId)) {
+  name: keyVaultNameEffective
+  location: location
+  tags: union(allTagsBase, keyVaultTags, kvDisplayTag)
   properties: {
     sku: { family: 'A', name: 'standard' }
     tenantId: subscription().tenantId
@@ -106,24 +257,34 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-// Key Vault Secrets User role for the workload identity
+resource existingKv 'Microsoft.KeyVault/vaults@2023-07-01' existing = if (!empty(byoKvId)) {
+  name: byoKvParts[8]
+  scope: resourceGroup(byoKvParts[2], byoKvParts[4])
+}
+
+// Key Vault Secrets User role assignment for the managed identity — applied to
+// whichever KV we ended up using.
 var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
-resource kvRoleAssign 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(kv.id, uami.id, kvSecretsUserRoleId)
-  scope: kv
+resource kvRoleAssignNew 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(byoKvId)) {
+  name: guid(newKv.id, miId, kvSecretsUserRoleId)
+  scope: newKv
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
-    principalId: uami.properties.principalId
+    principalId: miPrincipalId
     principalType: 'ServicePrincipal'
   }
 }
+// When BYO KV is used the role assignment is the customer's responsibility — we
+// do not modify access on existing shared resources.
 
-// ---------------------------------------------------------------------------
-// PostgreSQL Flexible Server
-// ---------------------------------------------------------------------------
+// =============================================================================
+// PostgreSQL Flexible Server (always created — workload-specific)
+// =============================================================================
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
-  name: '${namePrefix}-pg-${uniqueString(resourceGroup().id)}'
+  name: postgresServerNameEffective
   location: location
+  tags: union(allTagsBase, postgresServerTags)
   sku: { name: 'Standard_B1ms', tier: 'Burstable' }
   properties: {
     version: '16'
@@ -132,9 +293,6 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
     storage: { storageSizeGB: 32 }
     backup: { backupRetentionDays: 7, geoRedundantBackup: 'Disabled' }
     highAvailability: { mode: 'Disabled' }
-    // Entra auth ENABLED so the API connects to PostgreSQL with its Managed
-    // Identity (no password). Password auth kept enabled only as break-glass /
-    // migration transition; target is Entra-only (set passwordAuth: 'Disabled').
     authConfig: {
       activeDirectoryAuth: 'Enabled'
       passwordAuth: 'Enabled'
@@ -145,49 +303,52 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
 
 resource pgDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-12-01-preview' = {
   parent: pg
-  name: 'cloudsmith'
+  name: postgresDatabaseName
 }
 
-// Allow other Azure services (incl. Container Apps) to reach the server.
 resource pgFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-12-01-preview' = {
   parent: pg
   name: 'AllowAllAzureServices'
   properties: { startIpAddress: '0.0.0.0', endIpAddress: '0.0.0.0' }
 }
 
-// Make the workload Managed Identity an Entra administrator of PostgreSQL,
-// so the API authenticates to the database passwordless via its MI token
-// (Npgsql password provider fetches an https://ossrdbms-aad.database.windows.net token).
-// Done via module to satisfy the runtime-name (BCP120) constraint.
 module pgAadAdmin 'pg-aad-admin.bicep' = {
   name: 'pg-aad-admin'
   params: {
     postgresServerName: pg.name
-    principalId: uami.properties.principalId
-    principalName: uami.name
+    principalId: miPrincipalId
+    principalName: miNameForPg
     tenantId: subscription().tenantId
   }
   dependsOn: [ pgFwAzure, pgDb ]
 }
 
-// ---------------------------------------------------------------------------
+// =============================================================================
 // Container Apps Environment
-// ---------------------------------------------------------------------------
-resource acaEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: '${namePrefix}-aca-env'
+// =============================================================================
+
+resource newCae 'Microsoft.App/managedEnvironments@2024-03-01' = if (empty(byoCaeId)) {
+  name: containerAppsEnvironmentNameEffective
   location: location
+  tags: union(allTagsBase, containerAppsEnvironmentTags)
   properties: {
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
-        customerId: logs.properties.customerId
-        sharedKey: logs.listKeys().primarySharedKey
+        customerId: lawCustomerId
+        sharedKey: lawSharedKey
       }
     }
   }
 }
 
-// Shared registry config for private GHCR pull (removable once images public).
+resource existingCae 'Microsoft.App/managedEnvironments@2024-03-01' existing = if (!empty(byoCaeId)) {
+  name: byoCaeParts[8]
+  scope: resourceGroup(byoCaeParts[2], byoCaeParts[4])
+}
+
+var caeId = empty(byoCaeId) ? newCae.id : existingCae.id
+
 var registries = imagesArePrivate ? [
   {
     server: 'ghcr.io'
@@ -196,18 +357,20 @@ var registries = imagesArePrivate ? [
   }
 ] : []
 
-// ---------------------------------------------------------------------------
+// =============================================================================
 // API Container App (external ingress on 8080)
-// ---------------------------------------------------------------------------
+// =============================================================================
+
 resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
-  name: '${namePrefix}-api'
+  name: apiAppNameEffective
   location: location
+  tags: union(allTagsBase, apiAppTags)
   identity: {
     type: 'UserAssigned'
-    userAssignedIdentities: { '${uami.id}': {} }
+    userAssignedIdentities: { '${miId}': {} }
   }
   properties: {
-    managedEnvironmentId: acaEnv.id
+    managedEnvironmentId: caeId
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -228,13 +391,11 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'cloudsmith-api'
           image: apiImage
           resources: { cpu: json('0.5'), memory: '1Gi' }
-          // Base env only. IdP/OIDC is configured POST-DEPLOY via /identity/v1/idp
-          // (Config Registry); oidcApiEnv is empty unless an operator pre-seeds Entra.
           env: union([
             { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
             { name: 'ConnectionStrings__Default', secretRef: 'db-connection' }
-            { name: 'ApplicationInsights__ConnectionString', value: appInsights.properties.ConnectionString }
-            { name: 'AZURE_CLIENT_ID', value: uami.properties.clientId }
+            { name: 'ApplicationInsights__ConnectionString', value: appiConnectionString }
+            { name: 'AZURE_CLIENT_ID', value: miClientId }
           ], oidcApiEnv)
         }
       ]
@@ -243,14 +404,16 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Portal Container App (external ingress on 80) — same nginx image as Model A (ADR-044)
-// ---------------------------------------------------------------------------
+// =============================================================================
+// Portal Container App (external ingress on 80, same-origin nginx proxy)
+// =============================================================================
+
 resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
-  name: '${namePrefix}-portal'
+  name: portalAppNameEffective
   location: location
+  tags: union(allTagsBase, portalAppTags)
   properties: {
-    managedEnvironmentId: acaEnv.id
+    managedEnvironmentId: caeId
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -269,16 +432,11 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
           env: [
             // Browser-facing API base — EMPTY = relative paths via portal nginx proxy (same-origin).
-            // Setting an absolute URL here makes the SPA fetch cross-origin, which breaks the cookie/setup flow on ACA.
             { name: 'CLOUDSMITH_API_URL', value: '' }
-            // Entra ID authority for the browser OIDC flow
             { name: 'CLOUDSMITH_AUTH_URL', value: entraAuthority }
-            // nginx upstream — portal proxies /api/ and /signin-oidc to the API's external ACA FQDN over HTTPS.
-            // Required because compose DNS (cloudsmith-api:8080) does not resolve in ACA.
             { name: 'CLOUDSMITH_API_UPSTREAM', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
             { name: 'CLOUDSMITH_API_HOST', value: apiApp.properties.configuration.ingress.fqdn }
             { name: 'CLOUDSMITH_FWD_PROTO', value: 'https' }
-            // Legacy compatibility — kept until removed from portal image (not used when CLOUDSMITH_API_UPSTREAM is set)
             { name: 'CLOUDSMITH_API_INTERNAL_URL', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
           ]
         }
@@ -288,12 +446,12 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
-// ---------------------------------------------------------------------------
+// =============================================================================
 // Outputs
-// ---------------------------------------------------------------------------
+// =============================================================================
 output portalUrl string = 'https://${portalApp.properties.configuration.ingress.fqdn}'
 output apiUrl string = 'https://${apiApp.properties.configuration.ingress.fqdn}'
 output postgresServer string = pgFqdn
-output keyVaultName string = kv.name
-output appInsightsConnectionString string = appInsights.properties.ConnectionString
-output managedIdentityClientId string = uami.properties.clientId
+output keyVaultName string = empty(byoKvId) ? newKv.name : existingKv.name
+output appInsightsConnectionString string = appiConnectionString
+output managedIdentityClientId string = miClientId

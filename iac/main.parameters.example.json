@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "centralus" },
+    "workload": { "value": "cloudsmith" },
+    "environment": { "value": "prod" },
+    "instance": { "value": "001" },
+
+    "commonTags": {
+      "value": {
+        "Environment": "prod",
+        "Workload": "cloudsmith",
+        "CostCenter": "REPLACE-ME",
+        "Owner": "REPLACE-ME@example.com",
+        "BusinessUnit": "REPLACE-ME",
+        "DataClassification": "Confidential",
+        "Criticality": "High"
+      }
+    },
+
+    "postgresAdminUser": { "value": "cloudsmith" },
+    "postgresAdminPassword": { "value": "REPLACE-ME-USE-KEY-VAULT-REFERENCE" },
+
+    "entraTenantId": { "value": "" },
+    "entraClientId": { "value": "" },
+    "entraClientSecret": { "value": "" },
+
+    "imageTag": { "value": "latest" },
+
+    "logAnalyticsName": { "value": "" },
+    "logAnalyticsTags": { "value": {} },
+    "applicationInsightsName": { "value": "" },
+    "applicationInsightsTags": { "value": {} },
+    "managedIdentityName": { "value": "" },
+    "managedIdentityTags": { "value": {} },
+    "keyVaultName": { "value": "" },
+    "keyVaultTags": { "value": {} },
+    "postgresServerName": { "value": "" },
+    "postgresServerTags": { "value": {} },
+    "postgresDatabaseName": { "value": "cloudsmith" },
+    "containerAppsEnvironmentName": { "value": "" },
+    "containerAppsEnvironmentTags": { "value": {} },
+    "apiAppName": { "value": "" },
+    "apiAppTags": { "value": {} },
+    "portalAppName": { "value": "" },
+    "portalAppTags": { "value": {} },
+
+    "bringYourOwn": {
+      "value": {
+        "logAnalyticsWorkspaceId": "",
+        "applicationInsightsId": "",
+        "managedIdentityId": "",
+        "keyVaultId": "",
+        "containerAppsEnvironmentId": ""
+      }
+    }
+  }
+}
