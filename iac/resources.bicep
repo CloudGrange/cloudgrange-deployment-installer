@@ -268,11 +268,17 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: portalImage
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
           env: [
-            // Browser-facing API base (external API FQDN) — entrypoint.sh injects window.__CLOUDSMITH_CONFIG__
-            { name: 'CLOUDSMITH_API_URL', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
+            // Browser-facing API base — EMPTY = relative paths via portal nginx proxy (same-origin).
+            // Setting an absolute URL here makes the SPA fetch cross-origin, which breaks the cookie/setup flow on ACA.
+            { name: 'CLOUDSMITH_API_URL', value: '' }
             // Entra ID authority for the browser OIDC flow
             { name: 'CLOUDSMITH_AUTH_URL', value: entraAuthority }
-            // Container-to-container proxy target for nginx /api/ (separate from browser URL, per ADR-044)
+            // nginx upstream — portal proxies /api/ and /signin-oidc to the API's external ACA FQDN over HTTPS.
+            // Required because compose DNS (cloudsmith-api:8080) does not resolve in ACA.
+            { name: 'CLOUDSMITH_API_UPSTREAM', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
+            { name: 'CLOUDSMITH_API_HOST', value: apiApp.properties.configuration.ingress.fqdn }
+            { name: 'CLOUDSMITH_FWD_PROTO', value: 'https' }
+            // Legacy compatibility — kept until removed from portal image (not used when CLOUDSMITH_API_UPSTREAM is set)
             { name: 'CLOUDSMITH_API_INTERNAL_URL', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
           ]
         }
