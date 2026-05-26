@@ -131,25 +131,33 @@ function Invoke-CloudSmithInstall {
     }
 
     # Step 4: Create VM or WSL2 environment
-    # $vmGuestCred is initialised null here; assigned below only for Hyper-V path.
-    # Declaring it before the if/else avoids strict-mode "variable not initialised"
-    # errors when the WSL2 path runs and steps 5-6 check $null -ne $vmGuestCred.
+    # Initialise credential/SSH vars before the if/else to avoid strict-mode errors
+    # when the WSL2 path runs and steps 5-6 reference these in condition checks.
     $vmGuestCred = $null
+    $sshKeyPath  = ''
+    $sshKeyDir   = ''
 
     if (-not $useWsl2) {
         Write-Progress-Step "Bootstrapping installer prerequisites (qemu-img, ISO writer)"
         Initialize-CloudSmithPrereqs
 
-        # Generate a random VM guest password for this install session.
-        # Used for Hyper-V Direct (VMBus) PSCredential auth in steps 5 and 6.
-        # Never written to disk — lives only in memory for the duration of install.
-        $vmGuestPassword = [Convert]::ToBase64String((1..24 | ForEach-Object { [byte](Get-Random -Maximum 256) })) -replace '[^a-zA-Z0-9]','X'
-        $vmGuestSecure   = ConvertTo-SecureString $vmGuestPassword -AsPlainText -Force
-        $vmGuestCred     = [System.Management.Automation.PSCredential]::new('cloudsmith', $vmGuestSecure)
+        # Generate an ephemeral SSH key pair for this install session.
+        # The private key is written to a temp file (mode 600) and deleted after install.
+        # The public key is embedded in the VM's cloud-init authorized_keys.
+        # Neither key is ever logged, committed, or persisted beyond this install run.
+        $sshKeyDir  = Join-Path $env:TEMP 'cloudsmith-install-key'
+        New-Item -ItemType Directory -Path $sshKeyDir -Force | Out-Null
+        $sshKeyPath = Join-Path $sshKeyDir 'installer_ed25519'
+        if (Test-Path $sshKeyPath) { Remove-Item $sshKeyPath, "$sshKeyPath.pub" -Force }
+        & ssh-keygen.exe -t ed25519 -f $sshKeyPath -N "" -C "cloudsmith-installer-ephemeral" -q
+        if (-not (Test-Path $sshKeyPath)) {
+            Write-Error "Failed to generate SSH key pair. Ensure OpenSSH Client is installed (ssh-keygen.exe must be in PATH)."
+        }
+        $sshPublicKey = (Get-Content "$sshKeyPath.pub" -Raw).Trim()
 
         Write-Progress-Step "Provisioning Hyper-V VM"
         . "$PSScriptRoot\scripts\New-CloudSmithVm.ps1"
-        New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode -VmUserPassword $vmGuestPassword
+        New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode -SshPublicKey $sshPublicKey
     } else {
         Write-Progress-Step "Configuring WSL2 environment"
         . "$PSScriptRoot\scripts\Install-Wsl2Fallback.ps1"
@@ -157,17 +165,35 @@ function Invoke-CloudSmithInstall {
     }
 
     # Step 5: Install Docker CE (AB#1585 — proxy forwarded)
+    # Wait for SSH to be available before connecting (VM may still be running cloud-init).
+    if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
+        Write-Progress-Step "Waiting for VM SSH to become available"
+        $sshReady = Wait-ForTcp -HostName $VmIp -Port 22 -TimeoutSeconds 300
+        if (-not $sshReady) {
+            Write-Warning "SSH not reachable within 5 minutes. Docker CE install may fail."
+        } else {
+            Write-Host "  SSH available at $VmIp" -ForegroundColor Green
+        }
+    }
     Write-Progress-Step "Installing Docker CE"
     . "$PSScriptRoot\scripts\Install-DockerCe.ps1"
-    $dockerCeArgs = @{ VmName = 'cloudsmith-docker'; UseWsl2 = $useWsl2 }
-    if (-not $useWsl2 -and $null -ne $vmGuestCred) { $dockerCeArgs['Credential'] = $vmGuestCred }
+    $dockerCeArgs = @{ VmName = 'cloudsmith-docker'; UseWsl2 = $useWsl2; VmIp = $VmIp }
+    if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
+        $dockerCeArgs['SshKeyPath'] = $sshKeyPath
+    } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
+        $dockerCeArgs['Credential'] = $vmGuestCred
+    }
     Install-DockerCe @dockerCeArgs @proxyArgs
 
     # Step 6: Deploy Docker Compose stack
     Write-Progress-Step "Deploying CloudSmith stack (6 containers)"
     . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
     $composeArgs = @{ VmName = 'cloudsmith-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
-    if (-not $useWsl2 -and $null -ne $vmGuestCred) { $composeArgs['Credential'] = $vmGuestCred }
+    if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
+        $composeArgs['SshKeyPath'] = $sshKeyPath
+    } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
+        $composeArgs['Credential'] = $vmGuestCred
+    }
     Deploy-DockerCompose @composeArgs
 
     # Step 7: Wait for API health, then emit setup URL (AB#1627, ADR-047)
@@ -193,6 +219,12 @@ function Invoke-CloudSmithInstall {
         $setupPending = ($statusResp.setupState -eq 'pending')
     } catch {
         # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
+    }
+
+    # Clean up the ephemeral SSH key pair after successful install.
+    if (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
+        Remove-Item -LiteralPath $sshKeyPath, "$sshKeyPath.pub" -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $sshKeyDir -Force -Recurse -ErrorAction SilentlyContinue
     }
 
     Write-Host ""

@@ -10,9 +10,14 @@ function Install-DockerCe {
         [bool]$UseWsl2   = $false,
         [string]$Proxy   = '',
         # Pre-built PSCredential for Hyper-V Direct (VMBus) connections.
-        # When $null, falls back to Get-Credential (interactive only).
-        # Pass this from the caller when running non-interactively (-AcceptDefaults).
-        [System.Management.Automation.PSCredential]$Credential = $null
+        # When $null and $SshKeyPath is also empty, falls back to Get-Credential (interactive only).
+        [System.Management.Automation.PSCredential]$Credential = $null,
+        # Path to the SSH private key file for connecting to the VM guest.
+        # When provided, SSH is used instead of Hyper-V PowerShell Direct.
+        # SSH is the preferred path for Linux guests (Ubuntu does not ship PowerShell).
+        [string]$SshKeyPath = '',
+        # VM IP address used for SSH connections. Required when $SshKeyPath is provided.
+        [string]$VmIp = '192.168.100.10'
         # ProxyPassword is never passed to this function — it is written inside the VM only, never logged here
     )
 
@@ -70,10 +75,29 @@ docker run --rm hello-world
 
     if ($UseWsl2) {
         $bashScript | wsl -d Ubuntu -u root -- bash -s
+    } elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
+        # SSH path — preferred for Linux guests. Pipe the bash script via stdin.
+        # -o StrictHostKeyChecking=no / -o UserKnownHostsFile=/dev/null so the
+        # ephemeral guest key doesn't cause a prompt; the VM is freshly provisioned
+        # and its host key is not yet trusted on the host.
+        $sshArgs = @(
+            '-i', $SshKeyPath,
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'LogLevel=ERROR',
+            "cloudsmith@$VmIp",
+            'sudo', 'bash', '-s'
+        )
+        $bashScript | & ssh.exe @sshArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Docker CE installation via SSH failed (exit $LASTEXITCODE)."
+        }
     } else {
         if ($null -eq $Credential) {
             $Credential = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
         }
+        # Hyper-V PowerShell Direct — only works if PowerShell is installed in the guest.
+        # For Linux guests (Ubuntu), use the -SshKeyPath path instead.
         Invoke-Command -VMName $VmName -Credential $Credential `
             -ScriptBlock $remote -ArgumentList $bashScript
     }

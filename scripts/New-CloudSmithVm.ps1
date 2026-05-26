@@ -13,7 +13,11 @@ function New-CloudSmithVm {
         # Plain-text password for the cloudsmith OS user, set via cloud-init.
         # This is generated fresh for each install and lives only in memory.
         # When empty, the account is locked (no password login — SSH key only).
-        [string]$VmUserPassword = ''
+        [string]$VmUserPassword = '',
+        # SSH public key (openssh format: "ssh-ed25519 AAAA... comment") to add to
+        # the cloudsmith user's authorized_keys via cloud-init. When provided, the
+        # installer uses SSH (not Hyper-V PowerShell Direct) to run guest commands.
+        [string]$SshPublicKey = ''
     )
 
     $vmName   = 'cloudsmith-docker'
@@ -91,6 +95,12 @@ chpasswd:
 "@
     }
 
+    # Build optional SSH authorized_keys line for cloud-init users block.
+    $sshKeyLine = ''
+    if (-not [string]::IsNullOrEmpty($SshPublicKey)) {
+        $sshKeyLine = "`n    ssh_authorized_keys:`n      - $SshPublicKey"
+    }
+
     $userData = @"
 #cloud-config
 hostname: cloudsmith-docker
@@ -100,7 +110,7 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
     lock_passwd: false
-    passwd: '*'
+    passwd: '*'$sshKeyLine
 $chpasswdBlock
 network:
   version: 2
