@@ -125,9 +125,47 @@ chpasswd:
 
     $vmGateway4 = $VmIp -replace '\.\d+$', '.1'
 
-    # user-data: OS configuration only — hostname, user, packages.
-    # Network config intentionally NOT included here; it lives in a separate
-    # network-config file (NoCloud datasource reads that file, not user-data network: key).
+    # user-data: OS configuration + belt-and-suspenders manual network setup via runcmd.
+    # Network config lives in the separate network-config file, but we ALSO configure
+    # the network manually via runcmd in case cloud-init's netplan module doesn't apply it
+    # (e.g., if the hv_netvsc match times out before the NIC is ready at cloud-init time).
+    # Build the runcmd net-setup script separately to avoid PowerShell heredoc escaping issues.
+    # bash variables and command substitutions need literal dollar signs in the cloud-init YAML,
+    # which in a PS double-quoted heredoc requires backtick-escaping.
+    $netSetupScript = @'
+#!/bin/bash
+set -e
+LOG=/var/log/cloudsmith-init.log
+echo "cloudsmith-runcmd-start $(date)" >> $LOG
+# Find first non-loopback interface
+for i in $(seq 1 30); do
+  IFACE=$(ip link show | grep -E '^[0-9]+:' | grep -v lo | awk -F': ' '{print $2}' | head -1)
+  [ -n "$IFACE" ] && break
+  sleep 2
+done
+echo "NIC: $IFACE" >> $LOG
+if [ -z "$IFACE" ]; then echo "NO NIC" >> $LOG; exit 0; fi
+# Set static IP if not already configured
+if ! ip addr show "$IFACE" | grep -q "VMIP_PLACEHOLDER"; then
+  ip addr flush dev "$IFACE" 2>/dev/null || true
+  ip addr add VMIP_PLACEHOLDER/24 dev "$IFACE"
+  ip link set "$IFACE" up
+  ip route add default via GWIP_PLACEHOLDER dev "$IFACE" 2>/dev/null || true
+  printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+  echo "IP set manually on $IFACE" >> $LOG
+else
+  echo "IP already present (netplan)" >> $LOG
+fi
+# Install packages
+apt-get update -q >> $LOG 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server qemu-guest-agent >> $LOG 2>&1
+systemctl enable --now ssh >> $LOG 2>&1
+systemctl enable --now qemu-guest-agent >> $LOG 2>&1
+echo "cloudsmith-runcmd-done $(date)" >> $LOG
+'@
+    # Substitute the actual IP/gateway into the script
+    $netSetupScript = $netSetupScript -replace 'VMIP_PLACEHOLDER', $VmIp -replace 'GWIP_PLACEHOLDER', $vmGateway4
+
     $userData = @"
 #cloud-config
 hostname: cloudsmith-docker
@@ -139,12 +177,13 @@ users:
     lock_passwd: false
     passwd: '*'$sshKeyLine
 $chpasswdBlock
-packages:
-  - qemu-guest-agent
-  - openssh-server
+write_files:
+  - path: /usr/local/bin/cloudsmith-net-setup.sh
+    permissions: '0755'
+    content: |
+$(($netSetupScript -split "`n" | ForEach-Object { "      $_" }) -join "`n")
 runcmd:
-  - systemctl enable --now qemu-guest-agent
-  - systemctl enable --now ssh
+  - /usr/local/bin/cloudsmith-net-setup.sh
 "@
 
     $metaData = @"
@@ -153,15 +192,15 @@ local-hostname: cloudsmith-docker
 "@
 
     # network-config: separate file for the NoCloud datasource.
-    # Hyper-V Gen2 synthetic NICs present as 'eth0' in Ubuntu (hv_netvsc driver).
-    # We match by driver to be explicit and future-proof against udev renaming.
-    # Static IP with WinNAT gateway (192.168.100.1) for internet access.
+    # Use a broad match to handle both 'eth0' (older udev) and 'ens*'/'enp*' (predictable names).
+    # Also includes a fallback match by MAC prefix for resilience.
+    # The runcmd in user-data is a belt-and-suspenders fallback if netplan doesn't apply.
     $networkConfig = @"
 version: 2
 ethernets:
-  eth0:
+  cloudsmith-eth:
     match:
-      driver: hv_netvsc
+      name: "e*"
     set-name: eth0
     dhcp4: false
     addresses: [$VmIp/24]
