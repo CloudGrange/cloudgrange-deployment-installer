@@ -120,6 +120,16 @@ param apiAppTags object = {}
 param portalAppName string = ''
 param portalAppTags object = {}
 
+// Optional custom domain for the portal ACA app (AB#1606).
+// When set, ACA binds the domain and provisions a managed TLS certificate.
+// Operator must have a DNS CNAME record pointing to the ACA default FQDN before deployment.
+// Format: plain hostname, e.g. "app.contoso.com" (no scheme, no trailing slash).
+@description('Optional custom domain for the portal. Empty = use default *.azurecontainerapps.io HTTPS.')
+param portalCustomDomain string = ''
+
+@description('Optional custom domain for the API. Empty = use default *.azurecontainerapps.io HTTPS.')
+param apiCustomDomain string = ''
+
 param bringYourOwn object = {
   logAnalyticsWorkspaceId: ''
   applicationInsightsId: ''
@@ -424,6 +434,15 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: apiAppTargetPort
         transport: 'auto'
+        // AB#1606: bind custom domain + managed TLS certificate when apiCustomDomain is provided.
+        // ACA auto-provisions the TLS cert via ACMEv2 after the CNAME record propagates.
+        customDomains: empty(apiCustomDomain) ? [] : [
+          {
+            name: apiCustomDomain
+            bindingType: 'SniEnabled'
+            certificateId: null
+          }
+        ]
       }
       registries: registries
       secrets: concat(
@@ -467,6 +486,14 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: portalAppTargetPort
         transport: 'auto'
+        // AB#1606: bind custom domain + managed TLS certificate when portalCustomDomain is provided.
+        customDomains: empty(portalCustomDomain) ? [] : [
+          {
+            name: portalCustomDomain
+            bindingType: 'SniEnabled'
+            certificateId: null
+          }
+        ]
       }
       registries: registries
       secrets: imagesArePrivate ? [ { name: 'ghcr-token', value: ghcrToken } ] : []
@@ -498,6 +525,8 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
 // =============================================================================
 output portalUrl string = 'https://${portalApp.properties.configuration.ingress.fqdn}'
 output apiUrl string = 'https://${apiApp.properties.configuration.ingress.fqdn}'
+output apiAppName string = apiApp.name
+output portalAppName string = portalApp.name
 output postgresServer string = pgFqdn
 output keyVaultName string = empty(byoKvId) ? newKv.name : existingKv.name
 output appInsightsConnectionString string = appiConnectionString

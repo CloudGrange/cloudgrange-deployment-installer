@@ -25,3 +25,38 @@ infra:
   provider: bicep
   path: .
   module: main
+
+# Post-provision hook — runs FluentMigrator migrations via the cloudsmith-api container (AB#1605).
+# The API is designed to auto-migrate on startup (CoreKernelExtensions.MigrateCloudSmithDatabase);
+# the hook simply restarts the API ACA revision so the migration runs in a known-fresh context
+# before the smoke test or operator hands-off.
+hooks:
+  postprovision:
+    shell: sh
+    run: |
+      set -e
+      echo "Running post-provision migration restart..."
+      API_APP=$(azd env get-value API_APP_NAME 2>/dev/null || echo "")
+      RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || echo "")
+      if [ -z "$API_APP" ] || [ -z "$RG" ]; then
+        echo "WARNING: API_APP_NAME or AZURE_RESOURCE_GROUP not set in azd env — skipping migration restart."
+        exit 0
+      fi
+      # Restart the latest active revision to force migration run
+      az containerapp revision restart \
+        --name "$API_APP" \
+        --resource-group "$RG" \
+        --revision "$(az containerapp revision list --name "$API_APP" --resource-group "$RG" --query '[?properties.active==`true`].name | [0]' -o tsv)"
+      echo "Migration restart complete."
+      # AB#1628 — print the first-run setup URL after provision
+      PORTAL_URL=$(azd env get-value PORTAL_URL 2>/dev/null || echo "")
+      if [ -n "$PORTAL_URL" ]; then
+        echo ""
+        echo "============================================================"
+        echo "  CloudSmith is provisioned and ready for first-run setup."
+        echo ""
+        echo "  Open this URL to complete setup:"
+        echo "  ${PORTAL_URL}/setup"
+        echo "============================================================"
+      fi
+    continueOnError: true

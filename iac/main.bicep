@@ -211,6 +211,13 @@ param portalAppName string = ''
 @description('Additional tags for the portal container app.')
 param portalAppTags object = {}
 
+// AB#1606 — optional custom domain + managed TLS for ACA apps
+@description('Optional custom domain for the portal (e.g. app.contoso.com). Empty = use default *.azurecontainerapps.io HTTPS endpoint.')
+param portalCustomDomain string = ''
+
+@description('Optional custom domain for the API (e.g. api.contoso.com). Empty = use default *.azurecontainerapps.io HTTPS endpoint.')
+param apiCustomDomain string = ''
+
 // =============================================================================
 // Bring-your-own (ADR-048) — supply resource IDs to skip creation and reuse
 // =============================================================================
@@ -349,6 +356,8 @@ module resources 'resources.bicep' = {
     apiAppTags: apiAppTags
     portalAppName: portalAppName
     portalAppTags: portalAppTags
+    portalCustomDomain: portalCustomDomain
+    apiCustomDomain: apiCustomDomain
     bringYourOwn: bringYourOwn
   }
 }
@@ -359,6 +368,9 @@ module resources 'resources.bicep' = {
 
 output PORTAL_URL string = resources.outputs.portalUrl
 output API_URL string = resources.outputs.apiUrl
+// AB#1605 — used by the postprovision hook to restart the API ACA for migration
+output API_APP_NAME string = resources.outputs.apiAppName
+output PORTAL_APP_NAME string = resources.outputs.portalAppName
 output POSTGRES_SERVER string = resources.outputs.postgresServer
 output KEY_VAULT_NAME string = resources.outputs.keyVaultName
 output RESOURCE_GROUP_NAME string = rgNameEffective
