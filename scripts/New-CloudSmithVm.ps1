@@ -20,13 +20,33 @@ function New-CloudSmithVm {
         [string]$SshPublicKey = ''
     )
 
-    $vmName   = 'cloudsmith-docker'
+    $vmName     = 'cloudsmith-docker'
     $switchName = 'cloudsmith-internal'
+    $hostIp     = '192.168.100.1'
+    $vmGateway  = '192.168.100.1'
+    $natName    = 'CloudSmithNAT'
 
-    # Hyper-V internal switch
+    # Hyper-V internal switch + WinNAT so the cloudsmith-docker VM has internet access.
+    # An Internal switch provides a private network; WinNAT adds outbound NAT so the
+    # nested VM can pull images from ghcr.io, update packages, etc.
     if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
         Write-Host "  Creating Hyper-V internal switch: $switchName"
         New-VMSwitch -Name $switchName -SwitchType Internal | Out-Null
+    }
+    # Assign the host-side IP on the switch NIC (gateway for the nested VM).
+    $hostNic = Get-NetAdapter | Where-Object { $_.Name -eq "vEthernet ($switchName)" }
+    if ($hostNic) {
+        $existing = Get-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -eq $hostIp }
+        if (-not $existing) {
+            Write-Host "  Assigning host IP $hostIp to $($hostNic.Name)"
+            New-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -IPAddress $hostIp -PrefixLength 24 | Out-Null
+        }
+    }
+    # Create WinNAT for outbound internet from the nested VM's subnet.
+    if (-not (Get-NetNat -Name $natName -ErrorAction SilentlyContinue)) {
+        Write-Host "  Creating WinNAT: $natName (192.168.100.0/24)"
+        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix '192.168.100.0/24' | Out-Null
     }
 
     # Ensure VHDX directory exists
@@ -101,6 +121,8 @@ chpasswd:
         $sshKeyLine = "`n    ssh_authorized_keys:`n      - $SshPublicKey"
     }
 
+    $vmGateway4 = $VmIp -replace '\.\d+$', '.1'
+
     $userData = @"
 #cloud-config
 hostname: cloudsmith-docker
@@ -112,15 +134,23 @@ users:
     lock_passwd: false
     passwd: '*'$sshKeyLine
 $chpasswdBlock
+# Network config v2: match the first Ethernet NIC by type so we don't depend on
+# the interface name (which varies between 'eth0' and 'enpXsY' on Hyper-V Gen2).
+# Sets a static IP so the host can SSH to a known address.
 network:
   version: 2
   ethernets:
-    eth0:
+    cloudsmith-eth:
+      match:
+        name: "en*"
+      set-name: eth0
       dhcp4: false
       addresses: [$VmIp/24]
-      gateway4: $(($VmIp -replace '\.\d+$', '.1'))
+      routes:
+        - to: default
+          via: $vmGateway4
       nameservers:
-        addresses: [8.8.8.8, 8.8.4.4]
+        addresses: [8.8.8.8, 1.1.1.1]
 packages:
   - qemu-guest-agent
 runcmd:
