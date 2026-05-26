@@ -154,15 +154,42 @@ function Invoke-CloudSmithInstall {
     . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
     Deploy-DockerCompose -VmName 'cloudsmith-docker' -VmIp $VmIp -Version $Version -UseWsl2 $useWsl2
 
-    # Step 7: Initialize platform
-    Write-Progress-Step "Initializing CloudSmith"
-    . "$PSScriptRoot\scripts\Initialize-CloudSmith.ps1"
-    $token = Initialize-CloudSmith -VmName 'cloudsmith-docker' -UseWsl2 $useWsl2
+    # Step 7: Wait for API health, then emit setup URL (AB#1627, ADR-047)
+    Write-Progress-Step "Waiting for CloudSmith API to become healthy"
+    $apiBase  = "http://$VmIp"
+    $healthOk = Wait-ForHttpOk -Url "$apiBase/api/v1/health" -TimeoutSeconds 600
+    if (-not $healthOk) {
+        # CS-INST-ERR-030: API did not become healthy within 10 minutes
+        try {
+            $lastResp = Invoke-WebRequest -Uri "$apiBase/api/v1/health" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction SilentlyContinue
+            $lastStatus = $lastResp.StatusCode
+        } catch {
+            $lastStatus = 'unreachable'
+        }
+        Write-Error "CS-INST-ERR-030: CloudSmith did not start within 10 minutes. Last health status: $lastStatus"
+    }
+    Write-Host "  API health: OK" -ForegroundColor Green
 
-    Write-Host "`n  ✓ CloudSmith installed successfully!" -ForegroundColor Green
-    Write-Host "  Portal: https://$VmIp" -ForegroundColor Cyan
-    Write-Host "  Setup token: $token" -ForegroundColor Yellow
-    Write-Host "  Open the portal and enter this token to complete setup.`n"
+    # Check setup state — print first-run URL if setup is still pending
+    $setupPending = $false
+    try {
+        $statusResp = Invoke-RestMethod -Uri "$apiBase/api/v1/platform/setup-status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
+        $setupPending = ($statusResp.setupState -eq 'pending')
+    } catch {
+        # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
+    }
+
+    Write-Host ""
+    Write-Host "  CloudSmith installed successfully!" -ForegroundColor Green
+    Write-Host "  Portal: $apiBase" -ForegroundColor Cyan
+    if ($setupPending) {
+        Write-Host "  First-run setup required. Navigate to:" -ForegroundColor Yellow
+        Write-Host "    $apiBase/setup" -ForegroundColor White
+        Write-Host "  Complete the setup wizard to configure your platform name, timezone, and admin account." -ForegroundColor Gray
+    } else {
+        Write-Host "  Sign in at: $apiBase/login" -ForegroundColor Cyan
+    }
+    Write-Host ""
 }
 
 Invoke-CloudSmithInstall
