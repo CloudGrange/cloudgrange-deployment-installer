@@ -10,10 +10,9 @@ function New-CloudSmithVm {
         [string]$VhdxPath = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
         [string]$Mode    = 'Online',
         [string]$BundledImagePath = '',
-        # Plain-text password for the cloudsmith OS user, set via cloud-init.
-        # This is generated fresh for each install and lives only in memory.
-        # When empty, the account is locked (no password login — SSH key only).
-        [string]$VmUserPassword = '',
+        # Password for the cloudsmith OS user, set via cloud-init. Generated fresh per install;
+        # lives in memory only. When null/empty, the account is locked (SSH key only).
+        [SecureString]$VmUserPassword = $null,
         # SSH public key (openssh format: "ssh-ed25519 AAAA... comment") to add to
         # the cloudsmith user's authorized_keys via cloud-init. When provided, the
         # installer uses SSH (not Hyper-V PowerShell Direct) to run guest commands.
@@ -105,13 +104,16 @@ function New-CloudSmithVm {
     # sets it via chpasswd so Hyper-V Direct (VMBus IC) PSCredential auth works.
     # The password lives only in memory during install — never written to any log or file.
     $chpasswdBlock = ''
-    if (-not [string]::IsNullOrEmpty($VmUserPassword)) {
+    if ($VmUserPassword -ne $null -and $VmUserPassword.Length -gt 0) {
+        $bstr     = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($VmUserPassword)
+        $plainPwd = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
         $chpasswdBlock = @"
 
 chpasswd:
   expire: false
   list: |
-    cloudsmith:$VmUserPassword
+    cloudsmith:$plainPwd
 "@
     }
 
