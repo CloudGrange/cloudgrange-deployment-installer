@@ -155,14 +155,20 @@ function New-CiDataIso {
     # Compose the file system image.
     $fsi = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
     try {
-        # FileSystemsToCreate bitmask: 1=ISO9660, 2=Joliet, 4=UDF. NoCloud reads
-        # ISO9660/Joliet so we set 3 (ISO9660 + Joliet).
-        $fsi.FileSystemsToCreate = 3
-        $fsi.VolumeName = $VolumeLabel
         # IMAPI_MEDIA_TYPE_DISK (13) — hard-disk image, no media size constraint.
         # ChooseImageDefaults($null) NREs without a disc recorder; ChooseImageDefaultsForMediaType
         # is the correct path when building an ISO file rather than burning a disc.
+        # IMPORTANT: call ChooseImageDefaultsForMediaType FIRST — it resets FileSystemsToCreate
+        # to the media default (which includes UDF for disk media). We then override it to
+        # ISO9660+Joliet only. Order matters: setting FileSystemsToCreate before the call
+        # has no effect because the call resets it.
         $fsi.ChooseImageDefaultsForMediaType(13)
+        # FileSystemsToCreate bitmask: 1=ISO9660, 2=Joliet, 4=UDF. NoCloud datasource in
+        # cloud-init requires ISO9660; UDF is not recognized as cidata by the Linux kernel
+        # block-device scan. Set 3 (ISO9660 + Joliet) AFTER ChooseImageDefaultsForMediaType
+        # so the override sticks.
+        $fsi.FileSystemsToCreate = 3
+        $fsi.VolumeName = $VolumeLabel
 
         $sourceFull = (Resolve-Path -LiteralPath $SourceDir).Path
         # AddTree with includeBaseDirectory=$false → files land at the ISO root.

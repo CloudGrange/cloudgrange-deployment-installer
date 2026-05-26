@@ -33,14 +33,31 @@ function New-CloudSmithVm {
         New-VMSwitch -Name $switchName -SwitchType Internal | Out-Null
     }
     # Assign the host-side IP on the switch NIC (gateway for the nested VM).
-    $hostNic = Get-NetAdapter | Where-Object { $_.Name -eq "vEthernet ($switchName)" }
+    # The adapter may take a moment to appear after New-VMSwitch; retry up to 10 seconds.
+    $hostNic = $null
+    for ($i = 0; $i -lt 10; $i++) {
+        $hostNic = Get-NetAdapter | Where-Object { $_.Name -eq "vEthernet ($switchName)" }
+        if ($hostNic) { break }
+        Start-Sleep -Seconds 1
+    }
     if ($hostNic) {
         $existing = Get-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object { $_.IPAddress -eq $hostIp }
         if (-not $existing) {
             Write-Host "  Assigning host IP $hostIp to $($hostNic.Name)"
+            New-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -IPAddress $hostIp -PrefixLength 24 -ErrorAction SilentlyContinue | Out-Null
+        }
+        # Verify the IP was actually assigned — if not, force-remove and re-add
+        $verify = Get-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -eq $hostIp }
+        if (-not $verify) {
+            Write-Host "  Re-assigning host IP $hostIp (first attempt failed)..."
+            Remove-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue
             New-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -IPAddress $hostIp -PrefixLength 24 | Out-Null
         }
+        Write-Host "  Host gateway IP: $(Get-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue | Where-Object { $_.IPAddress -eq $hostIp } | Select-Object -ExpandProperty IPAddress -EA SilentlyContinue)"
+    } else {
+        Write-Warning "  vEthernet ($switchName) adapter not found after 10s — host IP not assigned."
     }
     # Create WinNAT for outbound internet from the nested VM's subnet.
     if (-not (Get-NetNat -Name $natName -ErrorAction SilentlyContinue)) {
@@ -264,11 +281,14 @@ ethernets:
     Write-Host "  Starting VM..."
     Start-VM -Name $vmName
 
-    # Wait for VM to become reachable (max 3 minutes)
-    Write-Host "  Waiting for VM to boot (up to 3 minutes)..."
-    $reachable = Wait-ForTcp -HostName $VmIp -Port 22 -TimeoutSeconds 180
+    # Wait for VM SSH to become available (max 10 minutes).
+    # Ubuntu 24.04 cloud-init runcmd must: detect NIC, set static IP, run apt-get
+    # (openssh-server + qemu-guest-agent), then start sshd. On a cold apt cache
+    # this takes 4-8 minutes. Allow 10 minutes total.
+    Write-Host "  Waiting for VM SSH to become available (up to 10 minutes)..."
+    $reachable = Wait-ForTcp -HostName $VmIp -Port 22 -TimeoutSeconds 600
     if (-not $reachable) {
-        Write-Warning "VM did not become reachable within 3 minutes. Check Hyper-V console."
+        Write-Warning "VM did not become reachable within 10 minutes. Check Hyper-V console."
     } else {
         Write-Host "  VM is reachable at $VmIp" -ForegroundColor Green
     }
