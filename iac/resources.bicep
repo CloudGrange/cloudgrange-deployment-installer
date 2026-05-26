@@ -404,7 +404,8 @@ resource existingCae 'Microsoft.App/managedEnvironments@2024-03-01' existing = i
   scope: resourceGroup(byoCaeParts[2], byoCaeParts[4])
 }
 
-var caeId = empty(byoCaeId) ? newCae.id : existingCae.id
+var caeId     = empty(byoCaeId) ? newCae.id : existingCae.id
+var caeDomain = empty(byoCaeId) ? newCae.properties.defaultDomain : existingCae.properties.defaultDomain
 
 var registries = imagesArePrivate ? [
   {
@@ -462,6 +463,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ConnectionStrings__Default', secretRef: 'db-connection' }
             { name: 'ApplicationInsights__ConnectionString', value: appiConnectionString }
             { name: 'AZURE_CLIENT_ID', value: miClientId }
+            { name: 'Monitoring__Endpoints__1__HealthUrl', value: 'https://${portalAppNameEffective}.${caeDomain}' }
           ], oidcApiEnv)
         }
       ]
