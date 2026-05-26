@@ -8,7 +8,11 @@ function Install-DockerCe {
     param(
         [string]$VmName  = 'cloudsmith-docker',
         [bool]$UseWsl2   = $false,
-        [string]$Proxy   = ''
+        [string]$Proxy   = '',
+        # Pre-built PSCredential for Hyper-V Direct (VMBus) connections.
+        # When $null, falls back to Get-Credential (interactive only).
+        # Pass this from the caller when running non-interactively (-AcceptDefaults).
+        [System.Management.Automation.PSCredential]$Credential = $null
         # ProxyPassword is never passed to this function — it is written inside the VM only, never logged here
     )
 
@@ -67,7 +71,10 @@ docker run --rm hello-world
     if ($UseWsl2) {
         $bashScript | wsl -d Ubuntu -u root -- bash -s
     } else {
-        Invoke-Command -VMName $VmName -Credential (Get-Credential -UserName 'cloudsmith' -Message 'VM credential') `
+        if ($null -eq $Credential) {
+            $Credential = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+        }
+        Invoke-Command -VMName $VmName -Credential $Credential `
             -ScriptBlock $remote -ArgumentList $bashScript
     }
 }

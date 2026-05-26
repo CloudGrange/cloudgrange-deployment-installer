@@ -9,7 +9,11 @@ function New-CloudSmithVm {
         [string]$VmIp    = '192.168.100.10',
         [string]$VhdxPath = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
         [string]$Mode    = 'Online',
-        [string]$BundledImagePath = ''
+        [string]$BundledImagePath = '',
+        # Plain-text password for the cloudsmith OS user, set via cloud-init.
+        # This is generated fresh for each install and lives only in memory.
+        # When empty, the account is locked (no password login — SSH key only).
+        [string]$VmUserPassword = ''
     )
 
     $vmName   = 'cloudsmith-docker'
@@ -73,6 +77,20 @@ function New-CloudSmithVm {
     $ciDir = Join-Path $env:TEMP 'cloudsmith-cloud-init'
     New-Item -ItemType Directory -Path $ciDir -Force | Out-Null
 
+    # Build optional chpasswd block. When a VM user password is provided, cloud-init
+    # sets it via chpasswd so Hyper-V Direct (VMBus IC) PSCredential auth works.
+    # The password lives only in memory during install — never written to any log or file.
+    $chpasswdBlock = ''
+    if (-not [string]::IsNullOrEmpty($VmUserPassword)) {
+        $chpasswdBlock = @"
+
+chpasswd:
+  expire: false
+  list: |
+    cloudsmith:$VmUserPassword
+"@
+    }
+
     $userData = @"
 #cloud-config
 hostname: cloudsmith-docker
@@ -83,6 +101,7 @@ users:
     shell: /bin/bash
     lock_passwd: false
     passwd: '*'
+$chpasswdBlock
 network:
   version: 2
   ethernets:

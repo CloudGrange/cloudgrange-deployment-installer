@@ -8,7 +8,11 @@ function Deploy-DockerCompose {
         [string]$VmName  = 'cloudsmith-docker',
         [string]$VmIp    = '192.168.100.10',
         [string]$Version = 'latest',
-        [bool]$UseWsl2   = $false
+        [bool]$UseWsl2   = $false,
+        # Pre-built PSCredential for Hyper-V Direct (VMBus) connections.
+        # When $null, falls back to Get-Credential (interactive only).
+        # Pass this from the caller when running non-interactively (-AcceptDefaults).
+        [System.Management.Automation.PSCredential]$Credential = $null
     )
 
     $composeDir   = '/opt/cloudsmith'
@@ -39,9 +43,11 @@ function Deploy-DockerCompose {
         wsl -d Ubuntu -u root -- bash -c "cp /mnt/$(($composeSrc -replace '\\','/' -replace ':','').ToLower())/* $wslPath/"
         wsl -d Ubuntu -u root -- pwsh -Command $deployScript.ToString() -Args $composeDir, $dbPassword, $Version
     } else {
-        $cred = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+        if ($null -eq $Credential) {
+            $Credential = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+        }
         # Copy compose files
-        $session = New-PSSession -VMName $VmName -Credential $cred
+        $session = New-PSSession -VMName $VmName -Credential $Credential
         Copy-Item -Path "$composeSrc\*" -Destination $composeDir -ToSession $session -Recurse -Force
         Invoke-Command -Session $session -ScriptBlock $deployScript -ArgumentList $composeDir, $dbPassword, $Version
         Remove-PSSession $session

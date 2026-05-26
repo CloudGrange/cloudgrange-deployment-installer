@@ -131,13 +131,25 @@ function Invoke-CloudSmithInstall {
     }
 
     # Step 4: Create VM or WSL2 environment
+    # $vmGuestCred is initialised null here; assigned below only for Hyper-V path.
+    # Declaring it before the if/else avoids strict-mode "variable not initialised"
+    # errors when the WSL2 path runs and steps 5-6 check $null -ne $vmGuestCred.
+    $vmGuestCred = $null
+
     if (-not $useWsl2) {
         Write-Progress-Step "Bootstrapping installer prerequisites (qemu-img, ISO writer)"
         Initialize-CloudSmithPrereqs
 
+        # Generate a random VM guest password for this install session.
+        # Used for Hyper-V Direct (VMBus) PSCredential auth in steps 5 and 6.
+        # Never written to disk — lives only in memory for the duration of install.
+        $vmGuestPassword = [Convert]::ToBase64String((1..24 | ForEach-Object { [byte](Get-Random -Maximum 256) })) -replace '[^a-zA-Z0-9]','X'
+        $vmGuestSecure   = ConvertTo-SecureString $vmGuestPassword -AsPlainText -Force
+        $vmGuestCred     = [System.Management.Automation.PSCredential]::new('cloudsmith', $vmGuestSecure)
+
         Write-Progress-Step "Provisioning Hyper-V VM"
         . "$PSScriptRoot\scripts\New-CloudSmithVm.ps1"
-        New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode
+        New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode -VmUserPassword $vmGuestPassword
     } else {
         Write-Progress-Step "Configuring WSL2 environment"
         . "$PSScriptRoot\scripts\Install-Wsl2Fallback.ps1"
@@ -147,12 +159,16 @@ function Invoke-CloudSmithInstall {
     # Step 5: Install Docker CE (AB#1585 — proxy forwarded)
     Write-Progress-Step "Installing Docker CE"
     . "$PSScriptRoot\scripts\Install-DockerCe.ps1"
-    Install-DockerCe -VmName 'cloudsmith-docker' -UseWsl2 $useWsl2 @proxyArgs
+    $dockerCeArgs = @{ VmName = 'cloudsmith-docker'; UseWsl2 = $useWsl2 }
+    if (-not $useWsl2 -and $null -ne $vmGuestCred) { $dockerCeArgs['Credential'] = $vmGuestCred }
+    Install-DockerCe @dockerCeArgs @proxyArgs
 
     # Step 6: Deploy Docker Compose stack
     Write-Progress-Step "Deploying CloudSmith stack (6 containers)"
     . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
-    Deploy-DockerCompose -VmName 'cloudsmith-docker' -VmIp $VmIp -Version $Version -UseWsl2 $useWsl2
+    $composeArgs = @{ VmName = 'cloudsmith-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+    if (-not $useWsl2 -and $null -ne $vmGuestCred) { $composeArgs['Credential'] = $vmGuestCred }
+    Deploy-DockerCompose @composeArgs
 
     # Step 7: Wait for API health, then emit setup URL (AB#1627, ADR-047)
     Write-Progress-Step "Waiting for CloudSmith API to become healthy"
