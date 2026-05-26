@@ -123,6 +123,9 @@ chpasswd:
 
     $vmGateway4 = $VmIp -replace '\.\d+$', '.1'
 
+    # user-data: OS configuration only — hostname, user, packages.
+    # Network config intentionally NOT included here; it lives in a separate
+    # network-config file (NoCloud datasource reads that file, not user-data network: key).
     $userData = @"
 #cloud-config
 hostname: cloudsmith-docker
@@ -134,27 +137,12 @@ users:
     lock_passwd: false
     passwd: '*'$sshKeyLine
 $chpasswdBlock
-# Network config v2: match the first Ethernet NIC by type so we don't depend on
-# the interface name (which varies between 'eth0' and 'enpXsY' on Hyper-V Gen2).
-# Sets a static IP so the host can SSH to a known address.
-network:
-  version: 2
-  ethernets:
-    cloudsmith-eth:
-      match:
-        name: "en*"
-      set-name: eth0
-      dhcp4: false
-      addresses: [$VmIp/24]
-      routes:
-        - to: default
-          via: $vmGateway4
-      nameservers:
-        addresses: [8.8.8.8, 1.1.1.1]
 packages:
   - qemu-guest-agent
+  - openssh-server
 runcmd:
   - systemctl enable --now qemu-guest-agent
+  - systemctl enable --now ssh
 "@
 
     $metaData = @"
@@ -162,8 +150,29 @@ instance-id: cloudsmith-docker
 local-hostname: cloudsmith-docker
 "@
 
-    Set-Content -Path (Join-Path $ciDir 'user-data') -Value $userData -Encoding UTF8
-    Set-Content -Path (Join-Path $ciDir 'meta-data') -Value $metaData -Encoding UTF8
+    # network-config: separate file for the NoCloud datasource.
+    # Hyper-V Gen2 synthetic NICs present as 'eth0' in Ubuntu (hv_netvsc driver).
+    # We match by driver to be explicit and future-proof against udev renaming.
+    # Static IP with WinNAT gateway (192.168.100.1) for internet access.
+    $networkConfig = @"
+version: 2
+ethernets:
+  eth0:
+    match:
+      driver: hv_netvsc
+    set-name: eth0
+    dhcp4: false
+    addresses: [$VmIp/24]
+    routes:
+      - to: default
+        via: $vmGateway4
+    nameservers:
+      addresses: [8.8.8.8, 1.1.1.1]
+"@
+
+    Set-Content -Path (Join-Path $ciDir 'user-data') -Value $userData -Encoding UTF8 -NoNewline:$false
+    Set-Content -Path (Join-Path $ciDir 'meta-data') -Value $metaData -Encoding UTF8 -NoNewline:$false
+    Set-Content -Path (Join-Path $ciDir 'network-config') -Value $networkConfig -Encoding UTF8 -NoNewline:$false
 
     $seedIso = Join-Path $vhdxDir 'cloud-init-seed.iso'
     # Build the NoCloud seed ISO via IMAPI2 (built into Windows since Vista).
