@@ -1,52 +1,25 @@
+# CloudSmith standalone six-container stack (ADR-029)
+# Six default services: api, portal, postgres, prometheus, loki, otel-collector
+# Optional profiles:
+#   --profile keycloak  — enable when using Keycloak as external IdP (ADR-047)
+#   --profile relay     — enable when running a local relay alongside the control plane
+#
+# Required environment variables (set in .env or export):
+#   POSTGRES_PASSWORD        — PostgreSQL superuser password
+#   CLOUDSMITH_API_URL       — Public URL of the API (e.g. https://cloudsmith.example.com)
+#
+# Optional environment variables:
+#   CLOUDSMITH_VERSION       — Container image tag (default: latest)
+#   CLOUDSMITH_DB_CONNECTION — Full connection string (overrides auto-generated from POSTGRES_* vars)
+#   CLOUDSMITH_OTLP_ENDPOINT — OTel collector gRPC endpoint (default: http://otel-collector:4317)
+#   KEYCLOAK_HOSTNAME        — Keycloak external hostname (keycloak profile only)
+#   KEYCLOAK_ADMIN_USER      — Keycloak admin username (keycloak profile only)
+#   KEYCLOAK_ADMIN_PASSWORD  — Keycloak admin password (keycloak profile only)
+#   RELAY_ENROLLMENT_TOKEN   — Enrollment token for relay (relay profile only)
+
 name: cloudsmith
 
 services:
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.6
-    command: start-dev --import-realm
-    restart: always
-    environment:
-      KC_DB: dev-file
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-localhost}
-      KC_HTTP_PORT: "8080"
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USER}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-    volumes:
-      - ./keycloak/cloudsmith-realm.json:/opt/keycloak/data/import/cloudsmith-realm.json:ro
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD-SHELL", "(echo >/dev/tcp/localhost/8080) 2>/dev/null"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    networks:
-      - cloudsmith
-
-  cloudsmith-relay:
-    image: ghcr.io/cloudsmith-cloud/cloudsmith-relay:${CLOUDSMITH_VERSION:-latest}
-    restart: always
-    ports:
-      - "8083:8080"
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION}
-      - Relay__PlatformApiUrl=http://cloudsmith-api:8080
-      - Relay__AgentEnrollmentToken=${RELAY_ENROLLMENT_TOKEN}
-      - OpenTelemetry__Endpoint=${CLOUDSMITH_OTLP_ENDPOINT:-http://otel-collector:4317}
-    depends_on:
-      cloudsmith-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    networks:
-      - cloudsmith
-
   cloudsmith-api:
     image: ghcr.io/cloudsmith-cloud/cloudsmith-api:${CLOUDSMITH_VERSION:-latest}
     restart: always
@@ -54,17 +27,11 @@ services:
       - "8081:8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION}
-      - Keycloak__Authority=${CLOUDSMITH_KEYCLOAK_AUTHORITY:-http://keycloak:8080/realms/cloudsmith}
-      - Keycloak__ClientId=${CLOUDSMITH_KEYCLOAK_CLIENT_ID:-cloudsmith-api}
-      - Keycloak__ClientSecret=${CLOUDSMITH_KEYCLOAK_CLIENT_SECRET}
-      - Keycloak__RequireHttpsMetadata=false
+      - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudsmith};Username=${POSTGRES_USER:-cloudsmith};Password=${POSTGRES_PASSWORD}}
       - OpenTelemetry__Endpoint=${CLOUDSMITH_OTLP_ENDPOINT:-http://otel-collector:4317}
     depends_on:
       postgres:
         condition: service_healthy
-      keycloak:
-        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
       interval: 15s
@@ -79,9 +46,9 @@ services:
     restart: always
     ports:
       - "80:80"
+      - "443:443"
     environment:
-      - CLOUDSMITH_API_URL=${CLOUDSMITH_PUBLIC_URL:-http://localhost:8081}
-      - CLOUDSMITH_AUTH_URL=${CLOUDSMITH_KEYCLOAK_AUTHORITY:-http://localhost:8080/realms/cloudsmith}
+      - CLOUDSMITH_API_URL=${CLOUDSMITH_API_URL:-http://localhost:8081}
     depends_on:
       cloudsmith-api:
         condition: service_healthy
@@ -135,6 +102,60 @@ services:
     volumes:
       - ./otel-collector.yml:/etc/otel/config.yaml:ro
     command: ["--config=/etc/otel/config.yaml"]
+    networks:
+      - cloudsmith
+
+  # --- Optional: Keycloak (--profile keycloak) ---
+  # Enable when using Keycloak as the external IdP. Not required for first-run setup;
+  # the CloudSmith first-run wizard can configure Keycloak as an IdP after initial setup.
+  keycloak:
+    profiles: ["keycloak"]
+    image: quay.io/keycloak/keycloak:26.6
+    command: start-dev --import-realm
+    restart: always
+    environment:
+      KC_DB: dev-file
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-localhost}
+      KC_HTTP_PORT: "8080"
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USER}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    volumes:
+      - ./keycloak/cloudsmith-realm.json:/opt/keycloak/data/import/cloudsmith-realm.json:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "(echo >/dev/tcp/localhost/8080) 2>/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cloudsmith
+
+  # --- Optional: Local relay (--profile relay) ---
+  # Enable when running a relay alongside the control plane on the same host.
+  # Production deployments typically run the relay on each managed Hyper-V host.
+  cloudsmith-relay:
+    profiles: ["relay"]
+    image: ghcr.io/cloudsmith-cloud/cloudsmith-relay:${CLOUDSMITH_VERSION:-latest}
+    restart: always
+    ports:
+      - "8083:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudsmith};Username=${POSTGRES_USER:-cloudsmith};Password=${POSTGRES_PASSWORD}}
+      - Relay__PlatformApiUrl=http://cloudsmith-api:8080
+      - Relay__AgentEnrollmentToken=${RELAY_ENROLLMENT_TOKEN}
+      - OpenTelemetry__Endpoint=${CLOUDSMITH_OTLP_ENDPOINT:-http://otel-collector:4317}
+    depends_on:
+      cloudsmith-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - cloudsmith
 
