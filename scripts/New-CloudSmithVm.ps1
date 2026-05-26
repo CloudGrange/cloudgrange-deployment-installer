@@ -114,22 +114,30 @@ local-hostname: cloudsmith-docker
     Write-Host "  Building cloud-init seed ISO (IMAPI2)..."
     New-CiDataIso -SourceDir $ciDir -OutputIso $seedIso -VolumeLabel 'cidata'
 
-    # Create VM — Generation 2, dynamic RAM 4 GB (max 8 GB), 2 vCPU
+    # Disk space pre-flight check — AB#1582 requires 60 GB minimum (AB#1581)
+    $vhdxDrive = Split-Path $VhdxPath -Qualifier
+    $freeBytes = (Get-PSDrive -Name $vhdxDrive.TrimEnd(':') -ErrorAction SilentlyContinue).Free
+    if ($freeBytes -and $freeBytes -lt 64GB) {
+        $freeGB = [Math]::Round($freeBytes / 1GB, 1)
+        Write-Error "CS-INST-ERR-003: Insufficient disk space at $VhdxPath. Required: 60 GB free. Available: ${freeGB} GB."
+    }
+
+    # Create VM — Generation 2, 8 GB RAM (static minimum), 4 vCPU, Secure Boot (AB#1582)
     Write-Host "  Creating VM: $vmName"
     $vm = New-VM -Name $vmName -Generation 2 -VHDPath $VhdxPath -SwitchName $switchName
     Set-VM -VM $vm `
-        -DynamicMemory `
-        -MemoryStartupBytes 4GB `
-        -MemoryMinimumBytes 1GB `
-        -MemoryMaximumBytes 8GB `
-        -ProcessorCount 2 `
+        -StaticMemory `
+        -MemoryStartupBytes 8GB `
+        -ProcessorCount 4 `
         -AutomaticStartAction Start `
         -AutomaticStartDelay 30 `
         -AutomaticStopAction ShutDown
 
-    # Disable Secure Boot for Ubuntu (required for Gen2 Linux VMs)
+    # Secure Boot: MicrosoftUEFICertificateAuthority template is required for Gen2 Linux VMs.
+    # This is NOT the same as disabling Secure Boot — it uses the Microsoft-signed UEFI shim
+    # that Ubuntu ships, which allows Secure Boot to stay ON while booting an unsigned Linux kernel.
     Set-VMFirmware -VM $vm -SecureBootTemplate 'MicrosoftUEFICertificateAuthority'
-    Set-VMFirmware -VM $vm -EnableSecureBoot Off
+    Set-VMFirmware -VM $vm -EnableSecureBoot On
 
     # Attach cloud-init seed ISO if created
     if (Test-Path $seedIso) {

@@ -1,0 +1,91 @@
+name: Release Bundle
+# Builds the air-gap bundled distribution ZIP on v*.*.* tag push (AB#1586, AB#1587).
+# The bundle contains all container images as .tar files, cloud-init templates,
+# and Install-CloudSmith.ps1 — sufficient to install CloudSmith with no internet access.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+permissions:
+  contents: write
+  packages: read
+jobs:
+  build-bundle:
+    runs-on: ubuntu-latest
+    env:
+      IMAGES: |
+        ghcr.io/cloudsmith-cloud/cloudsmith-api:latest
+        ghcr.io/cloudsmith-cloud/cloudsmith-portal:latest
+        ghcr.io/cloudsmith-cloud/cloudsmith-relay:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull container images
+        run: |
+          while IFS= read -r image; do
+            [ -z "$image" ] && continue
+            echo "Pulling $image..."
+            docker pull "$image"
+          done <<< "$IMAGES"
+
+      - name: Save container images as .tar files
+        run: |
+          mkdir -p bundle/images
+          while IFS= read -r image; do
+            [ -z "$image" ] && continue
+            # Derive a safe filename from the image reference
+            safe=$(echo "$image" | tr '/:' '_')
+            echo "Saving $image -> bundle/images/${safe}.tar"
+            docker save "$image" -o "bundle/images/${safe}.tar"
+          done <<< "$IMAGES"
+
+      - name: Copy installer files into bundle
+        run: |
+          cp Install-CloudSmith.ps1   bundle/
+          cp verify-bundle.ps1        bundle/
+          cp Uninstall-CloudSmith.ps1 bundle/ 2>/dev/null || true
+          cp Update-CloudSmith.ps1    bundle/ 2>/dev/null || true
+          cp -r scripts/              bundle/scripts/
+          cp -r compose/              bundle/compose/
+
+      - name: Generate SHA-256 manifest
+        run: |
+          cd bundle
+          # Generate SHA256SUMS relative to the bundle root
+          find . -type f | sort | while read -r f; do
+            sha256sum "$f" | sed 's|  \./|  |'
+          done > SHA256SUMS
+          echo "SHA256SUMS generated:"
+          cat SHA256SUMS
+
+      - name: Create bundle ZIP
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ZIP_NAME="Install-CloudSmith-Bundled.zip"
+          cd bundle
+          zip -r "../${ZIP_NAME}" .
+          cd ..
+          sha256sum "${ZIP_NAME}" > "${ZIP_NAME}.sha256"
+          echo "Bundle: ${ZIP_NAME} ($(du -sh "${ZIP_NAME}" | cut -f1))"
+          echo "SHA256: $(cat "${ZIP_NAME}.sha256")"
+
+      - name: Verify bundle integrity
+        run: |
+          pwsh -Command ".\verify-bundle.ps1 -BundlePath 'Install-CloudSmith-Bundled.zip'"
+        continue-on-error: false
+
+      - name: Attach bundle to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Install-CloudSmith-Bundled.zip
+            Install-CloudSmith-Bundled.zip.sha256
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
