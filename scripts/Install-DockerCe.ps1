@@ -65,6 +65,10 @@ docker run --rm hello-world
 
     # Substitute the proxy placeholder safely (single-quoted in bash, so no shell expansion risk).
     $bashScript = $bashTemplate.Replace('__PROXY__', ($Proxy -replace "'", "'\''"))
+    # Normalize line endings to LF. On Windows, PowerShell here-strings use CRLF.
+    # When piped over SSH, bash on Linux sees `set -euo pipefail\r` where the trailing
+    # CR makes 'pipefail\r' an unrecognized option name. Strip all CR characters.
+    $bashScript = $bashScript -replace "`r", ''
 
     # PowerShell-side scriptblock that simply pipes the bash payload to bash on the guest.
     # The guest receives the bash script via stdin; no temp file, no quoting hazards.
