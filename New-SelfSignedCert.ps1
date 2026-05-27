@@ -43,11 +43,33 @@ $ErrorActionPreference = 'Stop'
 # The bash script that runs inside the Linux guest.
 # It writes cloudsmith.crt and cloudsmith.key into the nginx_certs Docker volume
 # by running a temporary Alpine container that mounts the volume.
+#
+# AB#2347 — Defensive migration: if a previous install populated the volume with
+# server.crt/server.key (openssl defaults from a hand-deployed or pre-AB#1593 install),
+# rename them to cloudsmith.crt/cloudsmith.key before regenerating. This prevents nginx
+# from restart-looping on the "cloudsmith.crt: No such file" error.
 $bashScript = @"
 set -euo pipefail
 
 CERT_DIR="/tmp/cloudsmith-certs-$$"
 mkdir -p "\$CERT_DIR"
+
+# AB#2347: Migrate any legacy server.crt/server.key in the volume to cloudsmith.crt/cloudsmith.key
+# so nginx can boot regardless of how the volume was first populated.
+docker volume inspect cloudsmith_nginx_certs >/dev/null 2>&1 && docker run --rm \
+    -v cloudsmith_nginx_certs:/certs \
+    alpine:latest \
+    sh -c '
+        if [ -f /certs/server.crt ] && [ ! -f /certs/cloudsmith.crt ]; then
+            echo "Migrating legacy server.crt -> cloudsmith.crt"
+            mv /certs/server.crt /certs/cloudsmith.crt
+        fi
+        if [ -f /certs/server.key ] && [ ! -f /certs/cloudsmith.key ]; then
+            echo "Migrating legacy server.key -> cloudsmith.key"
+            mv /certs/server.key /certs/cloudsmith.key
+        fi
+        exit 0
+    ' || true
 
 # Generate openssl config with SANs
 cat > "\$CERT_DIR/openssl.cnf" <<OPENSSL_EOF

@@ -29,6 +29,10 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudsmith};Username=${POSTGRES_USER:-cloudsmith};Password=${POSTGRES_PASSWORD}}
       - OpenTelemetry__Endpoint=${CLOUDSMITH_OTLP_ENDPOINT:-http://otel-collector:4317}
+      # AB#2348 / BUG-4: default portal URL so the API health monitor can probe portal:80
+      # over the internal Docker network. Without this, the probe logs "invalid request URI"
+      # every cycle. Override CLOUDSMITH_PORTAL_URL only if the portal runs out-of-stack.
+      - CLOUDSMITH_PORTAL_URL=${CLOUDSMITH_PORTAL_URL:-http://cloudsmith-portal:80}
     depends_on:
       postgres:
         condition: service_healthy
