@@ -6,13 +6,15 @@
 //
 // Policy definitions referenced:
 //   5ff38825-c5d8-47c5-b70e-069a21955146 — KV keys should have expiry date
+//                                         (requires parameter: minimumDaysBeforeExpiration)
 //   55615ac9-af46-4a59-874e-391cc3dfb490 — KV should have firewall enabled
 //   c9299215-ae47-4f50-9c54-8a392f68a052 — PG public network access should be disabled
-//   24fde369-2374-4b4c-a418-b4d97d0b0cef — PG infrastructure encryption should be enabled
 //   871b6d14-10aa-478d-b590-94f262ecfa99 — Require tag on resources (applied per mandatory tag key)
 //
-// Effect is Audit for all policies in Phase IV.
-// Upgrade to Deny for KV firewall and PG public access once Phase V VNet integration is complete.
+// NOTE: The PG infrastructure encryption policy (24fde369-...) was removed — that
+// definition ID does not exist in the built-in policy catalog (fresh-deploy failure
+// 2026-05-27). PostgreSQL Flexible Server has Microsoft-managed key encryption on
+// by default; CMK encryption is a Phase V enhancement.
 
 @description('Environment name — used to disambiguate assignment names across envs.')
 @allowed([ 'dev', 'test', 'stage', 'prod' ])
@@ -31,7 +33,11 @@ resource policyKvKeyExpiry 'Microsoft.Authorization/policyAssignments@2022-06-01
   properties: {
     displayName: 'CloudSmith — KV keys should have expiration date'
     policyDefinitionId: '/providers/Microsoft.Authorization/policyDefinitions/5ff38825-c5d8-47c5-b70e-069a21955146'
-    parameters: {}
+    parameters: {
+      // Required by the built-in policy (Phase IV fresh-deploy fix 2026-05-27).
+      // Operators can override per-environment to enforce stricter rotation.
+      minimumDaysBeforeExpiration: { value: 90 }
+    }
   }
 }
 
@@ -59,15 +65,10 @@ resource policyPgPublicAccess 'Microsoft.Authorization/policyAssignments@2022-06
   }
 }
 
-resource policyPgEncryption 'Microsoft.Authorization/policyAssignments@2022-06-01' = {
-  name: 'cs-pg-encrypt-${environment}'
-  location: location
-  properties: {
-    displayName: 'CloudSmith — PG infrastructure encryption should be enabled'
-    policyDefinitionId: '/providers/Microsoft.Authorization/policyDefinitions/24fde369-2374-4b4c-a418-b4d97d0b0cef'
-    parameters: {}
-  }
-}
+// policyPgEncryption was assigned policy definition 24fde369-2374-4b4c-a418-b4d97d0b0cef
+// which does not exist in the built-in catalog (fresh-deploy failure 2026-05-27).
+// PG Flexible Server uses Microsoft-managed key encryption by default; CMK is Phase V.
+// Removed until a valid policy ID is identified or the requirement is reformulated.
 
 // =============================================================================
 // Required tag enforcement (ADR-048 mandatory tag set — 7 keys)

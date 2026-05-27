@@ -483,6 +483,13 @@ module policyAssignments 'policy.bicep' = if (enablePolicyAssignments) {
 // Set to expected monthly spend to receive notifications at 80% and 100% of threshold.
 // =============================================================================
 
+// Budget alert email: prefer commonTags.Owner only if it looks like an email
+// (contains '@'); otherwise fall back to the placeholder. Fresh-deploy failure
+// 2026-05-27 — operators frequently put a person name in Owner; Azure rejects
+// the budget create with "Notification cannot have invalid email addresses".
+var ownerLooksLikeEmail = contains(commonTags, 'Owner') && contains(string(commonTags.Owner), '@')
+var budgetContactEmail  = ownerLooksLikeEmail ? string(commonTags.Owner) : 'cloudsmith-alerts@example.com'
+
 resource budget 'Microsoft.Consumption/budgets@2021-10-01' = if (monthlyBudgetUSD > 0) {
   name: 'budget-${workload}-${environment}'
   properties: {
@@ -502,13 +509,13 @@ resource budget 'Microsoft.Consumption/budgets@2021-10-01' = if (monthlyBudgetUS
         enabled: true
         operator: 'GreaterThan'
         threshold: 80
-        contactEmails: [ contains(commonTags, 'Owner') ? commonTags.Owner : 'cloudsmith-alerts@example.com' ]
+        contactEmails: [ budgetContactEmail ]
       }
       actual100: {
         enabled: true
         operator: 'GreaterThan'
         threshold: 100
-        contactEmails: [ contains(commonTags, 'Owner') ? commonTags.Owner : 'cloudsmith-alerts@example.com' ]
+        contactEmails: [ budgetContactEmail ]
       }
     }
   }
