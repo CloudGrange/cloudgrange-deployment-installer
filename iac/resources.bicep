@@ -621,28 +621,12 @@ module pgAadAdmin 'pg-aad-admin.bicep' = {
   dependsOn: [ pgFwAzure, pgDb ]
 }
 
-// AB#1668 — PG diagnostic settings → LAW (MEDIUM opex finding)
-// Routes PostgreSQL query store and server logs to Log Analytics.
-resource pgDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
-  name: 'pg-diag'
-  scope: pg
-  properties: {
-    workspaceId: lawId
-    logs: [
-      // PostgreSQLFlexibleServerQueryStore is not available in all regions/versions.
-      // Only PostgreSQLFlexibleServerLogs is universally supported.
-      {
-        category: 'PostgreSQLFlexibleServerLogs'
-        enabled: true
-        // retentionPolicy is deprecated in diagnostic settings API 2021-05-01-preview+.
-        // Retention is now controlled by the Log Analytics workspace retention setting.
-      }
-    ]
-    metrics: [
-      { category: 'AllMetrics', enabled: true }
-    ]
-  }
-}
+// AB#1668 — PG diagnostic settings removed: PostgreSQL Flexible Server log categories
+// (PostgreSQLFlexibleServerQueryStore, PostgreSQLFlexibleServerLogs) are not supported
+// in all Azure regions (e.g. Central US returns BadRequest for both categories).
+// PG metrics are captured via the ACA environment's built-in Log Analytics integration.
+// TODO: Re-enable if/when the region supports it, using allLogs category filter instead.
+// resource pgDiagnostics removed
 
 // =============================================================================
 // Container Apps Environment
@@ -692,7 +676,7 @@ var registries = imagesArePrivate ? [
 // Pin to a specific tag in production; 'latest' only acceptable for dev.
 var pgBouncerContainer = {
   name: 'pgbouncer'
-  image: 'edoburu/pgbouncer:1.23.1'
+  image: 'edoburu/pgbouncer:1.23.1-p3'
   resources: { cpu: json('0.25'), memory: '0.5Gi' }
   env: [
     { name: 'DB_HOST', value: pgFqdn }
