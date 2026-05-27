@@ -22,6 +22,10 @@ function Deploy-DockerCompose {
     $dbPassword = [Convert]::ToBase64String((1..24 | ForEach-Object { [byte](Get-Random -Maximum 256) })) -replace '[^a-zA-Z0-9]','X'
 
     # Bash deploy script — runs entirely inside the Linux guest via SSH sudo.
+    # AB#1590: After docker compose up -d:
+    #   1. Poll up to 60s for all services to be running.
+    #   2. Verify every service has restart: always in the compose definition.
+    #   3. Probe portal at http://<host>/health (retry up to 30s).
     $bashDeploy = @"
 set -euo pipefail
 mkdir -p $composeDir
@@ -30,14 +34,44 @@ export CLOUDSMITH_VERSION="$Version"
 cd $composeDir
 docker compose pull
 docker compose up -d
-# Wait up to 120 seconds for all containers to be healthy
-TIMEOUT=120; ELAPSED=0
+
+# --- AB#1590 Step 1: Wait up to 60s for all services to be running ---
+echo "Verifying all services are running (timeout: 60s)..."
+TIMEOUT=60; ELAPSED=0; VERIFY_OK=false
 while [ \$ELAPSED -lt \$TIMEOUT ]; do
-    UNHEALTHY=\$(docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | .Name' 2>/dev/null || true)
-    [ -z "\$UNHEALTHY" ] && break
+    # docker compose ps --format json emits one JSON object per line (Compose v2).
+    # A service is considered running when State == "running".
+    NOT_RUNNING=\$(docker compose ps --format json 2>/dev/null \
+        | jq -r 'select(.State != "running") | .Name' 2>/dev/null || true)
+    if [ -z "\$NOT_RUNNING" ]; then
+        VERIFY_OK=true
+        break
+    fi
     sleep 5; ELAPSED=\$((ELAPSED+5))
 done
-echo "Stack deployed. Elapsed: \${ELAPSED}s"
+
+if [ "\$VERIFY_OK" != "true" ]; then
+    echo ""
+    echo "ERROR: The following services are not running after \${TIMEOUT}s:"
+    docker compose ps --format json 2>/dev/null \
+        | jq -r 'select(.State != "running") | "  " + .Name + " — " + .State' 2>/dev/null || docker compose ps
+    echo ""
+    docker compose logs --tail=50 2>&1 || true
+    exit 1
+fi
+echo "All services are running. Elapsed: \${ELAPSED}s"
+
+# --- AB#1590 Step 2: Verify every service has restart: always ---
+echo "Verifying restart policies..."
+MISSING_RESTART=\$(docker compose ps -q 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' 2>/dev/null \
+    | grep -v 'always' | sed 's|^/||' || true)
+if [ -n "\$MISSING_RESTART" ]; then
+    echo "WARNING: The following services do not have restart:always:"
+    echo "\$MISSING_RESTART"
+    # Non-fatal warning — compose definition is authoritative; running containers
+    # may temporarily show a different policy during first start.
+fi
+echo "Restart policy check complete."
 "@
 
     if ($UseWsl2) {
@@ -81,12 +115,32 @@ echo "Stack deployed. Elapsed: \${ELAPSED}s"
         Remove-PSSession $session
     }
 
-    # Verify portal reachable (HTTP on port 80 is the default; HTTPS on 443 requires cert setup).
-    Write-Host "  Waiting for CloudSmith API at http://$VmIp ..."
-    $ok = Wait-ForHttpOk -Url "http://$VmIp/api/v1/health" -TimeoutSeconds 300
-    if ($ok) {
-        Write-Host "  API is live" -ForegroundColor Green
-    } else {
-        Write-Warning "API did not become reachable within 5 minutes. Check container logs."
+    # AB#1590 Step 3: Probe portal at http://<VmIp>/health (retry up to 30s).
+    # The portal health endpoint returns 200 when the SPA container is ready.
+    # Falls back to probing '/' if /health is not available.
+    Write-Host "  Probing portal at http://$VmIp/health (timeout: 30s)..."
+    $portalHealthUrl = "http://$VmIp/health"
+    $portalOk = $false
+    $portalDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    while ([DateTime]::UtcNow -lt $portalDeadline) {
+        try {
+            $r = Invoke-WebRequest -Uri $portalHealthUrl -SkipCertificateCheck -TimeoutSec 5 -ErrorAction Stop
+            if ($r.StatusCode -lt 400) { $portalOk = $true; break }
+        } catch {
+            # /health not implemented — try root path
+            try {
+                $r2 = Invoke-WebRequest -Uri "http://$VmIp/" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction Stop
+                if ($r2.StatusCode -lt 400) { $portalOk = $true; break }
+            } catch { }
+        }
+        Start-Sleep -Seconds 5
     }
+
+    if (-not $portalOk) {
+        Write-Host ""
+        Write-Host "  [FAILURE] Portal is not reachable at http://$VmIp after 30 seconds." -ForegroundColor Red
+        Write-Host "  Check container logs with: docker compose -f /opt/cloudsmith/docker-compose.yml logs --tail=50" -ForegroundColor Yellow
+        Write-Error "Deploy-DockerCompose: portal reachability check failed. See container logs for details."
+    }
+    Write-Host "  Portal is reachable at http://$VmIp" -ForegroundColor Green
 }
