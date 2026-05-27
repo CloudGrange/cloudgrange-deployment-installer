@@ -41,13 +41,13 @@ TIMEOUT=60; ELAPSED=0; VERIFY_OK=false
 while [ \$ELAPSED -lt \$TIMEOUT ]; do
     # docker compose ps --format json emits one JSON object per line (Compose v2).
     # A service is considered running when State == "running".
-    NOT_RUNNING=\$(docker compose ps --format json 2>/dev/null \
+    NOT_RUNNING=`$(docker compose ps --format json 2>/dev/null \
         | jq -r 'select(.State != "running") | .Name' 2>/dev/null || true)
     if [ -z "\$NOT_RUNNING" ]; then
         VERIFY_OK=true
         break
     fi
-    sleep 5; ELAPSED=\$((ELAPSED+5))
+    sleep 5; ELAPSED=`$((ELAPSED+5))
 done
 
 if [ "\$VERIFY_OK" != "true" ]; then
@@ -63,7 +63,7 @@ echo "All services are running. Elapsed: \${ELAPSED}s"
 
 # --- AB#1590 Step 2: Verify every service has restart: always ---
 echo "Verifying restart policies..."
-MISSING_RESTART=\$(docker compose ps -q 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' 2>/dev/null \
+MISSING_RESTART=`$(docker compose ps -q 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' 2>/dev/null \
     | grep -v 'always' | sed 's|^/||' || true)
 if [ -n "\$MISSING_RESTART" ]; then
     echo "WARNING: The following services do not have restart:always:"

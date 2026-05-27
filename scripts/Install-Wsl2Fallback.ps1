@@ -130,10 +130,10 @@ docker compose up -d --remove-orphans
 echo "Waiting for services (timeout 60s)..."
 TIMEOUT=60; ELAPSED=0
 while [ \$ELAPSED -lt \$TIMEOUT ]; do
-    NOT_RUNNING=\$(docker compose ps --format json 2>/dev/null \
+    NOT_RUNNING=`$(docker compose ps --format json 2>/dev/null \
         | jq -r 'select(.State != "running") | .Name' 2>/dev/null || true)
     if [ -z "\$NOT_RUNNING" ]; then echo "All services running."; break; fi
-    sleep 5; ELAPSED=\$((ELAPSED+5))
+    sleep 5; ELAPSED=`$((ELAPSED+5))
 done
 if [ \$ELAPSED -ge \$TIMEOUT ]; then
     echo "Some services not running after \${TIMEOUT}s:"; docker compose ps; exit 1
