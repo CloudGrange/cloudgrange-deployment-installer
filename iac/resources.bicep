@@ -425,7 +425,9 @@ resource dcr 'Microsoft.Insights/dataCollectionRules@2022-06-01' = {
 
 // Monitoring Metrics Publisher on the DCR — allows the managed identity to push
 // Prometheus remote_write samples to AMW via this DCR ingestion endpoint.
-var monitoringMetricsPublisherRoleId = '3913510d-42f4-11e9-9b75-db5a05f2ec8e'
+// AB#1668 — correct built-in Monitoring Metrics Publisher role GUID.
+// The old GUID (11e9 variant) does not exist in all tenants; 4e42 variant is canonical.
+var monitoringMetricsPublisherRoleId = '3913510d-42f4-4e42-8a64-420c390055eb'
 resource dcrPublisherRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(dcr.id, miId, monitoringMetricsPublisherRoleId)
   scope: dcr
@@ -540,7 +542,8 @@ resource kvDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview
       {
         category: 'AuditEvent'
         enabled: true
-        retentionPolicy: { enabled: true, days: 90 }
+        // retentionPolicy is deprecated in diagnostic settings API 2021-05-01-preview+.
+        // Retention is now controlled by the Log Analytics workspace retention setting.
       }
     ]
     metrics: [
@@ -626,15 +629,13 @@ resource pgDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview
   properties: {
     workspaceId: lawId
     logs: [
-      {
-        category: 'PostgreSQLFlexibleServerQueryStore'
-        enabled: true
-        retentionPolicy: { enabled: true, days: 30 }
-      }
+      // PostgreSQLFlexibleServerQueryStore is not available in all regions/versions.
+      // Only PostgreSQLFlexibleServerLogs is universally supported.
       {
         category: 'PostgreSQLFlexibleServerLogs'
         enabled: true
-        retentionPolicy: { enabled: true, days: 30 }
+        // retentionPolicy is deprecated in diagnostic settings API 2021-05-01-preview+.
+        // Retention is now controlled by the Log Analytics workspace retention setting.
       }
     ]
     metrics: [
@@ -731,11 +732,12 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             certificateId: null
           }
         ]
-        // AB#1669 — when Multiple revision mode is set, default 100% weight to latest revision
-        // so behavior is equivalent to Single until the operator explicitly changes weights.
-        traffic: apiAppRevisionsMode == 'Multiple' ? [
+        // AB#1669 — traffic weights must always sum to 100; set latest revision to 100%.
+        // This applies in both Single and Multiple revision modes. In Single mode ACA
+        // ignores the traffic block but the ARM validator requires it to be valid.
+        traffic: [
           { weight: 100, latestRevision: true }
-        ] : []
+        ]
       }
       registries: registries
       // AB#1600 — ACA secrets: PG password referenced via KV URI (not plaintext value)
