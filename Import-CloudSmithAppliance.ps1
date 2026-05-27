@@ -24,6 +24,11 @@ param(
     # then falls back to the key bundled with the installer.
     [string]$SigningKeyPath = '',
 
+    # Allow import of an unsigned appliance (no .sig file present).
+    # When a .sig file IS present, cosign verification is always mandatory regardless of this switch.
+    # Do NOT use in production — unsigned appliances cannot be traced to a known-good build.
+    [switch]$AllowUnsigned,
+
     [string]$VmIp   = '192.168.100.10',
     [string]$VmName = 'cloudsmith-docker'
 )
@@ -82,9 +87,15 @@ if ($expectedHash -ne $actualHash) {
 Write-Host "  SHA-256 OK ($($actualHash.Substring(0,16))...)" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# AB#1589 Step 3: cosign signature validation — best-effort (warn if missing)
+# AB#1589 Step 3: cosign signature validation — mandatory per ADR-045
+#
+# Rules:
+#   - Sig file PRESENT:  cosign verification is mandatory. Any failure is a hard abort.
+#                        cosign must be installed; missing cosign is also a hard abort.
+#   - Sig file ABSENT:   --AllowUnsigned is required to proceed (not production-safe).
+#                        Without --AllowUnsigned the import is aborted.
 # ---------------------------------------------------------------------------
-Write-Progress-Step "Checking cosign signature (best-effort)"
+Write-Progress-Step "Verifying cosign signature (ADR-045)"
 
 # Resolve signature path
 $resolvedSigPath = $SignaturePath
@@ -105,17 +116,23 @@ if ([string]::IsNullOrEmpty($resolvedKeyPath)) {
 }
 
 $cosignAvailable = [bool](Get-Command cosign -ErrorAction SilentlyContinue)
+$sigFilePresent  = Test-Path $resolvedSigPath
 
-if (-not $cosignAvailable) {
-    Write-Host "  cosign is not installed — skipping signature verification." -ForegroundColor Yellow
-    Write-Host "  Install cosign from https://docs.sigstore.dev/cosign/system_config/installation/ for full verification." -ForegroundColor Gray
-} elseif (-not (Test-Path $resolvedSigPath)) {
-    Write-Host "  No .sig file found alongside the VHDX — skipping cosign verification." -ForegroundColor Yellow
-    Write-Host "  Expected: $resolvedSigPath" -ForegroundColor Gray
-} elseif ([string]::IsNullOrEmpty($resolvedKeyPath) -or -not (Test-Path $resolvedKeyPath)) {
-    Write-Host "  Signing key not found — skipping cosign verification." -ForegroundColor Yellow
-    Write-Host "  Place cloudsmith-signing-key.pub alongside the VHDX or in the installer directory." -ForegroundColor Gray
-} else {
+if ($sigFilePresent) {
+    # Signature file is present — verification is MANDATORY (ADR-045).
+    if (-not $cosignAvailable) {
+        Write-Host ""
+        Write-Host "  [ERROR] A signature file was found but cosign is not installed." -ForegroundColor Red
+        Write-Host "  Install cosign from https://docs.sigstore.dev/cosign/system_config/installation/" -ForegroundColor Yellow
+        Write-Host "  Signature verification is required by ADR-045. Aborting import." -ForegroundColor Red
+        throw "cosign is required to verify the appliance signature but is not installed. Aborting import."
+    }
+    if ([string]::IsNullOrEmpty($resolvedKeyPath) -or -not (Test-Path $resolvedKeyPath)) {
+        Write-Host ""
+        Write-Host "  [ERROR] Signing key not found — cannot verify the appliance signature." -ForegroundColor Red
+        Write-Host "  Place cloudsmith-signing-key.pub alongside the VHDX or in the installer directory." -ForegroundColor Yellow
+        throw "Signing key not found. Signature verification is required by ADR-045. Aborting import."
+    }
     Write-Host "  Running: cosign verify-blob --key $resolvedKeyPath --signature $resolvedSigPath $AppliancePath" -ForegroundColor Gray
     $cosignResult = & cosign verify-blob `
         --key $resolvedKeyPath `
@@ -124,10 +141,24 @@ if (-not $cosignAvailable) {
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  cosign signature: VALID" -ForegroundColor Green
     } else {
-        Write-Host "  [WARNING] cosign signature verification FAILED." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  [ERROR] cosign signature verification FAILED." -ForegroundColor Red
         Write-Host "  Output: $cosignResult" -ForegroundColor Gray
-        Write-Host "  Proceeding with SHA-256-only validation (sha256 check already passed)." -ForegroundColor Yellow
+        Write-Host "  The appliance cannot be trusted. Do not use an appliance that fails signature verification." -ForegroundColor Red
+        throw "Signature verification failed. Aborting import."
     }
+} else {
+    # No signature file present.
+    if (-not $AllowUnsigned) {
+        Write-Host ""
+        Write-Host "  [ERROR] No cosign signature file found alongside the VHDX." -ForegroundColor Red
+        Write-Host "  Expected: $resolvedSigPath" -ForegroundColor Gray
+        Write-Host "  Importing an unsigned appliance is not permitted without the -AllowUnsigned switch." -ForegroundColor Red
+        Write-Host "  WARNING: -AllowUnsigned bypasses provenance verification and is NOT safe for production." -ForegroundColor Yellow
+        throw "No signature file found and -AllowUnsigned was not specified. Aborting import."
+    }
+    Write-Host "  [WARNING] No signature file found. Proceeding because -AllowUnsigned was specified." -ForegroundColor Yellow
+    Write-Host "  This appliance has not had its provenance verified. Do not use in production." -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------
@@ -206,10 +237,14 @@ Write-Host ""
 Write-Host "  CloudSmith appliance is live!" -ForegroundColor Green
 Write-Host "  Portal:  $portalUrl" -ForegroundColor Cyan
 if ($setupToken) {
-    Write-Host "  Setup token: $setupToken" -ForegroundColor White
-    Write-Host "  First-run setup: $portalUrl/setup?token=$setupToken" -ForegroundColor Cyan
+    # Security: never embed the token in a URL query parameter — it would appear in browser
+    # history, server access logs, proxy logs, and Referer headers. Print it to the terminal
+    # only and instruct the operator to enter it via the setup wizard form (POST body).
+    Write-Host "  Initial admin token: $setupToken" -ForegroundColor White
+    Write-Host "  Open $portalUrl/setup in your browser and enter this token when prompted." -ForegroundColor Cyan
+    Write-Host "  Keep this token secret — it grants full admin access during first-run setup." -ForegroundColor Yellow
 } else {
-    Write-Host "  Navigate to $portalUrl to complete first-run setup." -ForegroundColor Cyan
+    Write-Host "  Navigate to $portalUrl/setup to complete first-run setup." -ForegroundColor Cyan
 }
 Write-Host "  Note: The portal uses a self-signed certificate. Your browser will show a security warning." -ForegroundColor Yellow
 Write-Host ""
