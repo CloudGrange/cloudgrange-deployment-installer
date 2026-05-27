@@ -33,7 +33,9 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "(echo > /dev/tcp/localhost/8080) 2>/dev/null || exit 1"]
+      # dotnet/aspnet:9.0 has no curl/wget. Use bash /dev/tcp (bash is present; sh is not bash).
+      # When the image is rebuilt with curl, change CMD to: curl -sf http://localhost:8080/health/ready
+      test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8080) 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -182,7 +184,7 @@ services:
       cloudsmith-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "(echo > /dev/tcp/localhost/8080) 2>/dev/null || exit 1"]
+      test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8080) 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
