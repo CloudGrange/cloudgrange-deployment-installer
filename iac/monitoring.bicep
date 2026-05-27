@@ -73,30 +73,32 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
 var alertPrefix = 'cs-alert'
 
 // =============================================================================
-// ACA API availability alert (Severity 1 — Error)
+// ACA API restart alert (Severity 1 — Error)
+// Container Apps does not expose an "Availability" metric (fresh-deploy fix
+// 2026-05-27); RestartCount > 3 over 15 min is a useful proxy for crash loops.
 // =============================================================================
 
 resource alertApiAvailability 'Microsoft.Insights/metricAlerts@2018-03-01' = {
-  name: '${alertPrefix}-api-availability'
+  name: '${alertPrefix}-api-restarts'
   location: 'Global'
   tags: allTagsBase
   properties: {
-    description: 'CloudSmith API container app availability < 99% over 5 minutes.'
+    description: 'CloudSmith API container app restarted more than 3 times in 15 minutes (crash loop).'
     severity: 1
     enabled: true
     scopes: [ apiAppId ]
-    evaluationFrequency: 'PT1M'
-    windowSize: 'PT5M'
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
     criteria: {
       'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
       allOf: [
         {
-          name: 'api-availability'
-          metricName: 'Availability'
+          name: 'api-restarts'
+          metricName: 'RestartCount'
           metricNamespace: 'Microsoft.App/containerApps'
-          operator: 'LessThan'
-          threshold: 99
-          timeAggregation: 'Average'
+          operator: 'GreaterThan'
+          threshold: 3
+          timeAggregation: 'Total'
           criterionType: 'StaticThresholdCriterion'
         }
       ]
@@ -108,30 +110,30 @@ resource alertApiAvailability 'Microsoft.Insights/metricAlerts@2018-03-01' = {
 }
 
 // =============================================================================
-// ACA Portal availability alert (Severity 2 — Warning)
+// ACA Portal restart alert (Severity 2 — Warning)
 // =============================================================================
 
 resource alertPortalAvailability 'Microsoft.Insights/metricAlerts@2018-03-01' = {
-  name: '${alertPrefix}-portal-availability'
+  name: '${alertPrefix}-portal-restarts'
   location: 'Global'
   tags: allTagsBase
   properties: {
-    description: 'CloudSmith Portal container app availability < 99% over 5 minutes.'
+    description: 'CloudSmith Portal container app restarted more than 3 times in 15 minutes (crash loop).'
     severity: 2
     enabled: true
     scopes: [ portalAppId ]
-    evaluationFrequency: 'PT1M'
-    windowSize: 'PT5M'
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
     criteria: {
       'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
       allOf: [
         {
-          name: 'portal-availability'
-          metricName: 'Availability'
+          name: 'portal-restarts'
+          metricName: 'RestartCount'
           metricNamespace: 'Microsoft.App/containerApps'
-          operator: 'LessThan'
-          threshold: 99
-          timeAggregation: 'Average'
+          operator: 'GreaterThan'
+          threshold: 3
+          timeAggregation: 'Total'
           criterionType: 'StaticThresholdCriterion'
         }
       ]
