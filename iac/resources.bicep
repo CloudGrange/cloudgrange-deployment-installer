@@ -57,8 +57,14 @@ param commonTags object
 @description('Auto-injected tags (ManagedBy, DeployedAt). Applied to every resource.')
 param autoTags object
 
-@description('Container image tag for API + portal.')
+@description('Default container image tag. Used for API and portal unless overridden.')
 param imageTag string = 'latest'
+
+@description('Optional override for the API image tag. Empty = use imageTag.')
+param apiImageTag string = ''
+
+@description('Optional override for the portal image tag. Portal repo has its own commit history so this lets you pin to a real portal SHA independently. Empty = use imageTag.')
+param portalImageTag string = ''
 
 @description('PostgreSQL admin login.')
 param postgresAdminUser string = 'cloudsmith'
@@ -277,8 +283,10 @@ var kvDisplayTag = { DisplayName: keyVaultDisplayName }
 // Image / connection-string composition
 // =============================================================================
 var imagesArePrivate = !empty(ghcrToken)
-var apiImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-api:${imageTag}'
-var portalImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-portal:${imageTag}'
+var _apiImageTagEff    = empty(apiImageTag)    ? imageTag : apiImageTag
+var _portalImageTagEff = empty(portalImageTag) ? imageTag : portalImageTag
+var apiImage    = 'ghcr.io/cloudsmith-cloud/cloudsmith-api:${_apiImageTagEff}'
+var portalImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-portal:${_portalImageTagEff}'
 var pgFqdn = '${postgresServerNameEffective}.postgres.database.azure.com'
 var oidcPreseed = !empty(entraClientId)
 var entraAuthority = empty(entraTenantId) ? '' : 'https://login.microsoftonline.com/${entraTenantId}/v2.0'

@@ -60,8 +60,14 @@ param deploymentTime string = utcNow('yyyy-MM-ddTHH:mm:ssZ')
 // AB#1669 — imageTag default changed from 'latest' to 'main'.
 // Never use 'latest' in stage or prod. CI must always pass an explicit SHA or semver tag.
 // For first-time dev deploys, 'main' resolves to the most recent main-branch image.
-@description('Container image tag to deploy. Use explicit semver or SHA in stage/prod. Never "latest".')
+@description('Default container image tag. Used for both API and portal unless overridden.')
 param imageTag string = 'main'
+
+@description('Optional override for the API image tag. Empty = use imageTag. Use when the API repo has shipped a fix that the portal repo has not.')
+param apiImageTag string = ''
+
+@description('Optional override for the portal image tag. Empty = use imageTag. Portal repo has its own commit history; pin independently when SHAs diverge.')
+param portalImageTag string = ''
 
 // ---- PostgreSQL Flexible Server SKU + sizing (ADR-048 parameter surface) ----
 @description('PostgreSQL administrator login.')
@@ -398,6 +404,8 @@ module resources 'resources.bicep' = {
     commonTags: commonTags
     autoTags: autoTags
     imageTag: imageTag
+    apiImageTag: apiImageTag
+    portalImageTag: portalImageTag
     postgresAdminUser: postgresAdminUser
     postgresAdminPassword: postgresAdminPassword
     postgresSkuName: postgresSkuName
@@ -490,10 +498,14 @@ module policyAssignments 'policy.bicep' = if (enablePolicyAssignments) {
 var ownerLooksLikeEmail = contains(commonTags, 'Owner') && contains(string(commonTags.Owner), '@')
 var budgetContactEmail  = ownerLooksLikeEmail ? string(commonTags.Owner) : 'cloudsmith-alerts@example.com'
 
+// Budget startDate must be the first day of the current month for monthly time
+// grain — Azure rejects past start dates. Derive from deploymentTime.
+var _budgetStartDate = '${substring(deploymentTime, 0, 7)}-01'
+
 resource budget 'Microsoft.Consumption/budgets@2021-10-01' = if (monthlyBudgetUSD > 0) {
   name: 'budget-${workload}-${environment}'
   properties: {
-    timePeriod: { startDate: '2026-01-01' }
+    timePeriod: { startDate: _budgetStartDate }
     timeGrain: 'Monthly'
     amount: monthlyBudgetUSD
     category: 'Cost'
