@@ -445,6 +445,7 @@ resource dcrPublisherRole 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 var amwId = amw.id
 var amwQueryEndpoint = amw.properties.metrics.prometheusQueryEndpoint
 var dceMetricsIngestionEndpoint = dce.properties.metricsIngestion.endpoint
+var dcrImmutableId = dcr.properties.immutableId
 
 // =============================================================================
 // Identity — User-Assigned Managed Identity
@@ -769,9 +770,10 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'AZURE_CLIENT_ID', value: miClientId }
               { name: 'Monitoring__Endpoints__1__HealthUrl', value: 'https://${portalAppNameEffective}.${caeDomain}' }
               // AMW env vars — used by AzureMonitorBackend (IMetricsBackend, ADR-016).
-              { name: 'AzureMonitor__WorkspaceId', value: amwId }
-              { name: 'AzureMonitor__QueryEndpoint', value: amwQueryEndpoint }
-              { name: 'AzureMonitor__MetricsIngestionEndpoint', value: dceMetricsIngestionEndpoint }
+              // AB#1928: env var names standardised to AZURE_MONITOR_* for cross-language compatibility.
+              { name: 'AZURE_MONITOR_WORKSPACE_ENDPOINT', value: amwQueryEndpoint }
+              { name: 'AZURE_MONITOR_DCE_ENDPOINT', value: dceMetricsIngestionEndpoint }
+              { name: 'AZURE_MONITOR_DCR_IMMUTABLE_ID', value: dcrImmutableId }
               // H1 security remediation — master key injected via KV secret reference.
               // The raw base64 key is NEVER stored as a plaintext env var value.
               { name: 'CLOUDSMITH_MASTER_KEY', secretRef: 'cloudsmith-master-key' }
@@ -939,3 +941,4 @@ output managedIdentityClientId string = miClientId
 output azureMonitorWorkspaceId string = amwId
 output azureMonitorQueryEndpoint string = amwQueryEndpoint
 output azureMonitorMetricsIngestionEndpoint string = dceMetricsIngestionEndpoint
+output azureMonitorDcrImmutableId string = dcrImmutableId

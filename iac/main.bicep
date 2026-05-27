@@ -523,6 +523,7 @@ output API_URL string = resources.outputs.apiUrl
 output AZURE_MONITOR_WORKSPACE_ID string = resources.outputs.azureMonitorWorkspaceId
 output AZURE_MONITOR_QUERY_ENDPOINT string = resources.outputs.azureMonitorQueryEndpoint
 output AZURE_MONITOR_METRICS_INGESTION_ENDPOINT string = resources.outputs.azureMonitorMetricsIngestionEndpoint
+output AZURE_MONITOR_DCR_IMMUTABLE_ID string = resources.outputs.azureMonitorDcrImmutableId
 // AB#1605 — used by the postprovision hook to restart the API ACA for migration
 output API_APP_NAME string = resources.outputs.apiAppName
 output PORTAL_APP_NAME string = resources.outputs.portalAppName
