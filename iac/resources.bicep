@@ -676,7 +676,7 @@ var registries = imagesArePrivate ? [
 // Pin to a specific tag in production; 'latest' only acceptable for dev.
 var pgBouncerContainer = {
   name: 'pgbouncer'
-  image: 'edoburu/pgbouncer:1.23.1-p3'
+  image: 'edoburu/pgbouncer:v1.23.1-p3'
   resources: { cpu: json('0.25'), memory: '0.5Gi' }
   env: [
     { name: 'DB_HOST', value: pgFqdn }
