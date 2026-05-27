@@ -28,8 +28,9 @@ infra:
 
 # Post-provision hook — runs FluentMigrator migrations via the cloudsmith-api container (AB#1605).
 # The API is designed to auto-migrate on startup (CoreKernelExtensions.MigrateCloudSmithDatabase);
-# the hook simply restarts the API ACA revision so the migration runs in a known-fresh context
-# before the smoke test or operator hands-off.
+# the hook restarts the API ACA revision so the migration runs in a known-fresh context
+# and then polls the /health/ready endpoint to confirm the API became healthy.
+# AB#1669 — added health-check poll (HIGH operational excellence finding from WAF-CAF assessment).
 hooks:
   postprovision:
     shell: sh
@@ -42,12 +43,59 @@ hooks:
         echo "WARNING: API_APP_NAME or AZURE_RESOURCE_GROUP not set in azd env — skipping migration restart."
         exit 0
       fi
+
       # Restart the latest active revision to force migration run
-      az containerapp revision restart \
+      ACTIVE_REVISION=$(az containerapp revision list \
         --name "$API_APP" \
         --resource-group "$RG" \
-        --revision "$(az containerapp revision list --name "$API_APP" --resource-group "$RG" --query '[?properties.active==`true`].name | [0]' -o tsv)"
-      echo "Migration restart complete."
+        --query '[?properties.active==`true`].name | [0]' \
+        -o tsv 2>/dev/null || echo "")
+
+      if [ -n "$ACTIVE_REVISION" ]; then
+        az containerapp revision restart \
+          --name "$API_APP" \
+          --resource-group "$RG" \
+          --revision "$ACTIVE_REVISION"
+        echo "Migration restart issued for revision: $ACTIVE_REVISION"
+      else
+        echo "WARNING: No active revision found — skipping restart."
+      fi
+
+      # AB#1669 — poll /health/ready until the API reports healthy or timeout expires.
+      # Resolves the HIGH operational excellence finding: the hook previously completed
+      # immediately after restart, hiding crash-loop failures from the operator.
+      echo "Waiting for API to become healthy..."
+      MAX_WAIT=120
+      INTERVAL=10
+      ELAPSED=0
+      FQDN=$(az containerapp show \
+        --name "$API_APP" \
+        --resource-group "$RG" \
+        --query 'properties.configuration.ingress.fqdn' \
+        -o tsv 2>/dev/null || echo "")
+
+      if [ -z "$FQDN" ]; then
+        echo "WARNING: Could not retrieve API FQDN — skipping health check."
+      else
+        while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://${FQDN}/health/ready" 2>/dev/null || echo "000")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "API is healthy (HTTP 200 from /health/ready)."
+            break
+          fi
+          echo "API not yet healthy (HTTP $HTTP_CODE) — waiting ${INTERVAL}s (${ELAPSED}/${MAX_WAIT}s elapsed)..."
+          sleep "$INTERVAL"
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+        if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+          echo "WARNING: API did not become healthy within ${MAX_WAIT}s. Check container logs:"
+          echo "  az containerapp logs show --name $API_APP --resource-group $RG --follow"
+          # Not a hard failure — operator may be deploying to a cold environment.
+          # continueOnError is set below so provisioning reports success regardless.
+        fi
+      fi
+
       # AB#1628 — print the first-run setup URL after provision
       PORTAL_URL=$(azd env get-value PORTAL_URL 2>/dev/null || echo "")
       if [ -n "$PORTAL_URL" ]; then

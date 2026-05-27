@@ -22,36 +22,103 @@
     "postgresAdminUser": { "value": "cloudsmith" },
     "postgresAdminPassword": { "value": "REPLACE-ME-USE-KEY-VAULT-REFERENCE" },
 
-    "postgresSkuName": { "value": "Standard_B1ms" },
-    "postgresSkuTier": { "value": "Burstable" },
-    "postgresStorageGB": { "value": 32 },
+    "postgresSkuName": {
+      "value": "Standard_D2ds_v5",
+      "_comment": "Burstable B1ms for dev (~$15/mo). GeneralPurpose D2ds_v5 for prod (~$130/mo). ZoneRedundant HA requires GeneralPurpose or MemoryOptimized."
+    },
+    "postgresSkuTier": {
+      "value": "GeneralPurpose",
+      "_comment": "Burstable for dev. GeneralPurpose for prod (required for ZoneRedundant HA)."
+    },
+    "postgresStorageGB": { "value": 64 },
     "postgresVersion": { "value": "16" },
-    "postgresBackupRetentionDays": { "value": 7 },
-    "postgresHighAvailabilityMode": { "value": "Disabled" },
+    "postgresBackupRetentionDays": { "value": 35 },
+    "postgresHighAvailabilityMode": {
+      "value": "ZoneRedundant",
+      "_comment": "dev=Disabled (saves ~$35/mo). prod=ZoneRedundant (99.99% SLA). ZoneRedundant requires GeneralPurpose or MemoryOptimized SKU — incompatible with Burstable."
+    },
+    "postgresGeoRedundantBackup": {
+      "value": "Enabled",
+      "_comment": "dev=Disabled. prod=Enabled for cross-region restore capability."
+    },
+    "postgresPublicNetworkAccess": {
+      "value": "Enabled",
+      "_comment": "Phase IV: Enabled (AllowAllAzureServices firewall rule). Phase V: Disabled once VNet + private endpoint are configured (ADR-043 Phase V scope)."
+    },
 
     "keyVaultSku": { "value": "standard" },
-    "keyVaultSoftDeleteRetentionDays": { "value": 7 },
+    "keyVaultSoftDeleteRetentionDays": { "value": 90 },
 
     "logAnalyticsSku": { "value": "PerGB2018" },
-    "logAnalyticsRetentionDays": { "value": 30 },
+    "logAnalyticsRetentionDays": { "value": 90 },
+    "logAnalyticsDailyCapGB": {
+      "value": 0,
+      "_comment": "dev=1 (1 GB/day cap). stage=5. prod=0 (unlimited; set up Azure Monitor alert at 10 GB instead). 0 maps to -1 (unlimited) in the LAW workspaceCapping property."
+    },
 
-    "apiAppCpu": { "value": "0.5" },
-    "apiAppMemory": { "value": "1Gi" },
-    "apiAppMinReplicas": { "value": 1 },
-    "apiAppMaxReplicas": { "value": 3 },
+    "apiAppCpu": {
+      "value": "1.0",
+      "_comment": "dev: 0.5 acceptable. prod: 1.0 recommended for .NET 9 cold JIT + OTel + FluentMigrator startup path."
+    },
+    "apiAppMemory": {
+      "value": "2Gi",
+      "_comment": "dev: 1Gi acceptable. prod: 2Gi recommended."
+    },
+    "apiAppMinReplicas": {
+      "value": 1,
+      "_comment": "dev=0 (scale-to-zero saves cost). test=0. stage=1. prod=1 (always available)."
+    },
+    "apiAppMaxReplicas": { "value": 10 },
     "apiAppTargetPort": { "value": 8080 },
+    "apiAppScaleThreshold": {
+      "value": 100,
+      "_comment": "Number of concurrent HTTP requests per replica before scaling out."
+    },
+    "apiAppRevisionsMode": {
+      "value": "Multiple",
+      "_comment": "dev/test=Single. prod=Multiple enables weighted traffic split for zero-downtime deploys."
+    },
 
-    "portalAppCpu": { "value": "0.25" },
-    "portalAppMemory": { "value": "0.5Gi" },
-    "portalAppMinReplicas": { "value": 1 },
-    "portalAppMaxReplicas": { "value": 2 },
+    "portalAppCpu": { "value": "0.5" },
+    "portalAppMemory": { "value": "1Gi" },
+    "portalAppMinReplicas": {
+      "value": 1,
+      "_comment": "dev=0. prod=1."
+    },
+    "portalAppMaxReplicas": { "value": 3 },
     "portalAppTargetPort": { "value": 80 },
+    "portalAppScaleThreshold": { "value": 50 },
 
     "entraTenantId": { "value": "" },
     "entraClientId": { "value": "" },
     "entraClientSecret": { "value": "" },
 
-    "imageTag": { "value": "latest" },
+    "imageTag": {
+      "value": "${CLOUDSMITH_IMAGE_TAG}",
+      "_comment": "Required. Never use 'latest' in stage or prod. CI must always pass an explicit semver tag or SHA digest. For dev first-time deploys use 'main'."
+    },
+
+    "enablePgBouncer": {
+      "value": true,
+      "_comment": "Recommended: true for all environments. Prevents PG connection exhaustion under load."
+    },
+
+    "enableDefenderForCloud": {
+      "value": true,
+      "_comment": "Enables Defender for Containers + OpenSourceRelationalDatabases at the subscription level. Set false in non-prod to reduce cost."
+    },
+    "enablePolicyAssignments": {
+      "value": true,
+      "_comment": "Assigns built-in Azure Policy definitions for KV, PG, and required tags at the RG scope."
+    },
+    "enableAlertRules": {
+      "value": true,
+      "_comment": "Creates Azure Monitor metric alert rules for ACA, PG, and KV."
+    },
+    "monthlyBudgetUSD": {
+      "value": 350,
+      "_comment": "0 = no budget alert. Set to expected monthly spend. Notifications sent at 80% and 100% to commonTags.Owner."
+    },
 
     "logAnalyticsName": { "value": "" },
     "logAnalyticsTags": { "value": {} },

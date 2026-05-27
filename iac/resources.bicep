@@ -3,6 +3,22 @@
 //
 // CloudSmith PaaS (Model B) resource module — ADR-043 / ADR-044 / ADR-046 / ADR-047 / ADR-048.
 //
+// Wave 3 (AB#1599, AB#1600, AB#1667, AB#1668, AB#1669):
+//   - KV purge protection enabled (HIGH security finding)
+//   - PG password stored as KV secret; ACA references it via keyVaultUrl (CRITICAL finding)
+//   - ACA health probes added to API + portal (HIGH security/reliability finding)
+//   - HTTP scaling rules added (HIGH performance finding)
+//   - LAW daily data cap (HIGH cost finding)
+//   - PG geo-redundant backup parameter (MEDIUM reliability finding)
+//   - PG public network access parameter (HIGH security finding)
+//   - KV + PG diagnostic settings → LAW (MEDIUM security/opex finding)
+//   - Azure Monitor alert rules module wired (MEDIUM opex finding)
+//   - Azure Budget alert resource (MEDIUM cost finding)
+//   - Defender for Cloud resources (LOW security finding)
+//   - PgBouncer sidecar for API connection pooling (MEDIUM performance finding)
+//   - ACA active revisions mode parameter (LOW reliability finding)
+//   - appInsightsConnectionString marked @secure() (HIGH security finding)
+//
 // Naming + tagging (ADR-048):
 //   - Default names follow CAF pattern <type-abbr>-<workload>-<env>-<region>-<instance>
 //   - Length-constrained types (Key Vault) drop separators and append a hash suffix
@@ -59,6 +75,19 @@ param postgresBackupRetentionDays int = 7
 @allowed([ 'Disabled', 'SameZone', 'ZoneRedundant' ])
 param postgresHighAvailabilityMode string = 'Disabled'
 
+// AB#1599 — geo-redundant backup parameter (MEDIUM reliability finding)
+// Recommended: Disabled for dev/test, Enabled for prod.
+@description('PostgreSQL geo-redundant backup. Enable for prod workloads (requires paired region).')
+@allowed([ 'Enabled', 'Disabled' ])
+param postgresGeoRedundantBackup string = 'Disabled'
+
+// AB#1599 — public network access parameter (HIGH security finding)
+// Disabled requires Phase V VNet + private endpoint integration.
+// Keep Enabled for Phase IV dev until private endpoint is implemented (ADR-043 Phase V scope).
+@description('PostgreSQL public network access. Disabled requires private endpoint (Phase V).')
+@allowed([ 'Enabled', 'Disabled' ])
+param postgresPublicNetworkAccess string = 'Enabled'
+
 @allowed([ 'standard', 'premium' ])
 param keyVaultSku string = 'standard'
 @minValue(7)
@@ -70,21 +99,41 @@ param logAnalyticsSku string = 'PerGB2018'
 @maxValue(730)
 param logAnalyticsRetentionDays int = 30
 
+// AB#1599 — LAW daily data cap (HIGH cost finding)
+// 0 = unlimited (not recommended for non-prod). Recommended: dev=1, stage=5, prod=-1 (unlimited + alert).
+@description('Log Analytics daily data cap in GB. 0 = unlimited (not recommended for non-prod).')
+@minValue(0)
+param logAnalyticsDailyCapGB int = 1
+
 param apiAppCpu string = '0.5'
 param apiAppMemory string = '1Gi'
 @minValue(0)
-param apiAppMinReplicas int = 1
+param apiAppMinReplicas int = 0
 @minValue(1)
 param apiAppMaxReplicas int = 3
 param apiAppTargetPort int = 8080
 
+// AB#1599 — HTTP concurrent request scale thresholds (HIGH performance finding)
+@description('API ACA scale-out threshold: concurrent HTTP requests per replica before adding a replica.')
+param apiAppScaleThreshold int = 100
+
+// AB#1669 — active revisions mode (LOW reliability finding)
+// Multiple enables weighted traffic split for zero-downtime deploys.
+// When Multiple is set, a default 100%-weight latest rule is added so behavior is equivalent to Single.
+@description('ACA active revisions mode. Multiple enables weighted traffic split for zero-downtime deploys.')
+@allowed([ 'Single', 'Multiple' ])
+param apiAppRevisionsMode string = 'Single'
+
 param portalAppCpu string = '0.25'
 param portalAppMemory string = '0.5Gi'
 @minValue(0)
-param portalAppMinReplicas int = 1
+param portalAppMinReplicas int = 0
 @minValue(1)
 param portalAppMaxReplicas int = 2
 param portalAppTargetPort int = 80
+
+@description('Portal ACA scale-out threshold: concurrent HTTP requests per replica.')
+param portalAppScaleThreshold int = 50
 
 @description('Entra tenant ID — empty = ADR-047 first-run wizard.')
 param entraTenantId string = ''
@@ -100,6 +149,14 @@ param ghcrUsername string = ''
 
 @secure()
 param ghcrToken string = ''
+
+// AB#1600 — PgBouncer sidecar for connection pooling (MEDIUM performance finding)
+@description('Enable PgBouncer connection pooling sidecar on the API container app.')
+param enablePgBouncer bool = true
+
+// AB#1668 — Azure Monitor alert rules (MEDIUM opex finding)
+@description('Enable Azure Monitor metric alert rules for ACA availability, PG CPU/storage, KV throttling.')
+param enableAlertRules bool = true
 
 // Per-resource overrides (ADR-048)
 param logAnalyticsName string = ''
@@ -207,7 +264,6 @@ var imagesArePrivate = !empty(ghcrToken)
 var apiImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-api:${imageTag}'
 var portalImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-portal:${imageTag}'
 var pgFqdn = '${postgresServerNameEffective}.postgres.database.azure.com'
-var dbConnString = 'Host=${pgFqdn};Database=${postgresDatabaseName};Username=${postgresAdminUser};Password=${postgresAdminPassword};Ssl Mode=Require;'
 var oidcPreseed = !empty(entraClientId)
 var entraAuthority = empty(entraTenantId) ? '' : 'https://login.microsoftonline.com/${entraTenantId}/v2.0'
 var oidcApiEnv = oidcPreseed ? [
@@ -216,6 +272,16 @@ var oidcApiEnv = oidcPreseed ? [
   { name: 'Keycloak__ClientSecret', secretRef: 'entra-client-secret' }
   { name: 'Keycloak__RequireHttpsMetadata', value: 'true' }
 ] : []
+
+// AB#1600 — PgBouncer host: when enabled, API connects to localhost (sidecar), else PG FQDN directly.
+var dbHost = enablePgBouncer ? 'localhost' : pgFqdn
+
+// AB#1600 — KV secret name for the PG password (written to KV at provision time).
+// Referenced from ACA via keyVaultUrl pattern — never passed as a plaintext env var.
+var pgPasswordSecretName = 'cs-${environment}-core-db-password'
+
+// KV DNS suffix — use az.environment() to ensure compatibility across sovereign clouds (no-hardcoded-env-urls)
+var kvDnsSuffix = az.environment().suffixes.keyvaultDns
 
 // =============================================================================
 // Bring-your-own resource ID parsing
@@ -253,6 +319,10 @@ resource newLaw 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (empt
   properties: {
     sku: { name: logAnalyticsSku }
     retentionInDays: logAnalyticsRetentionDays
+    // AB#1599 — daily data cap to prevent unbounded cost (HIGH cost finding)
+    workspaceCapping: {
+      dailyQuotaGb: logAnalyticsDailyCapGB == 0 ? -1 : logAnalyticsDailyCapGB
+    }
   }
 }
 
@@ -377,6 +447,9 @@ var miNameForPg = empty(byoMiId) ? newMi.name : existingMi.name
 
 // =============================================================================
 // Key Vault
+// AB#1599 — enablePurgeProtection: true (HIGH security finding)
+// AB#1600 — PG password written as KV secret; ACA references via keyVaultUrl
+// AB#1668 — KV diagnostic settings → LAW (MEDIUM security finding)
 // =============================================================================
 
 resource newKv 'Microsoft.KeyVault/vaults@2023-07-01' = if (empty(byoKvId)) {
@@ -389,6 +462,10 @@ resource newKv 'Microsoft.KeyVault/vaults@2023-07-01' = if (empty(byoKvId)) {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: keyVaultSoftDeleteRetentionDays
+    // AB#1599 — purge protection: once set cannot be unset; required by secrets-handling design.
+    // Note: the dev KV (rg-cloudsmith-dev-cus-001) must be re-created or purge protection applied
+    // manually before the next deploy if upgrading from a pre-Wave-3 state.
+    enablePurgeProtection: true
   }
 }
 
@@ -412,8 +489,47 @@ resource kvRoleAssignNew 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 // When BYO KV is used the role assignment is the customer's responsibility — we
 // do not modify access on existing shared resources.
 
+// AB#1600 — Write PG admin password to Key Vault as a secret.
+// ACA container apps reference this secret via keyVaultUrl rather than a plaintext value.
+// The @secure() parameter ensures the password is never written to ARM deployment logs.
+resource pgPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: pgPasswordSecretName
+  properties: {
+    value: postgresAdminPassword
+    attributes: { enabled: true }
+  }
+}
+
+// AB#1668 — KV diagnostic settings → LAW (MEDIUM security finding)
+// Logs all AuditEvent (secret get/set/delete) to Log Analytics for 90-day retention.
+resource kvDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (empty(byoKvId)) {
+  name: 'kv-diag'
+  scope: newKv
+  properties: {
+    workspaceId: lawId
+    logs: [
+      {
+        category: 'AuditEvent'
+        enabled: true
+        retentionPolicy: { enabled: true, days: 90 }
+      }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
+
+// Effective KV reference values used in ACA secret block
+var kvNameEffective = empty(byoKvId) ? newKv.name : existingKv.name
+// AB#1600 — KV secret URI for the PG password ACA secret reference
+var pgPasswordSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${pgPasswordSecretName}'
+
 // =============================================================================
 // PostgreSQL Flexible Server (always created — workload-specific)
+// AB#1599 — postgresGeoRedundantBackup and postgresPublicNetworkAccess parameters
+// AB#1668 — PG diagnostic settings → LAW
 // =============================================================================
 
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
@@ -426,12 +542,26 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
     administratorLogin: postgresAdminUser
     administratorLoginPassword: postgresAdminPassword
     storage: { storageSizeGB: postgresStorageGB }
-    backup: { backupRetentionDays: postgresBackupRetentionDays, geoRedundantBackup: 'Disabled' }
-    highAvailability: { mode: postgresHighAvailabilityMode }
+    backup: {
+      backupRetentionDays: postgresBackupRetentionDays
+      // AB#1599 — geo-redundant backup parameter (MEDIUM reliability finding)
+      // Recommended: Disabled for dev, Enabled for prod.
+      geoRedundantBackup: postgresGeoRedundantBackup
+    }
+    highAvailability: {
+      // HA mode: ZoneRedundant requires postgresSkuTier=GeneralPurpose or MemoryOptimized.
+      // Incompatible with Burstable — do not set ZoneRedundant when using Standard_B1ms.
+      mode: postgresHighAvailabilityMode
+    }
     authConfig: {
       activeDirectoryAuth: 'Enabled'
       passwordAuth: 'Enabled'
       tenantId: subscription().tenantId
+    }
+    // AB#1599 — public network access parameter (HIGH security finding)
+    // Disabled requires Phase V private endpoint. Keep Enabled for Phase IV dev.
+    network: {
+      publicNetworkAccess: postgresPublicNetworkAccess
     }
   }
 }
@@ -441,7 +571,7 @@ resource pgDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-12-01-pr
   name: postgresDatabaseName
 }
 
-resource pgFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-12-01-preview' = {
+resource pgFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-12-01-preview' = if (postgresPublicNetworkAccess == 'Enabled') {
   parent: pg
   name: 'AllowAllAzureServices'
   properties: { startIpAddress: '0.0.0.0', endIpAddress: '0.0.0.0' }
@@ -456,6 +586,31 @@ module pgAadAdmin 'pg-aad-admin.bicep' = {
     tenantId: subscription().tenantId
   }
   dependsOn: [ pgFwAzure, pgDb ]
+}
+
+// AB#1668 — PG diagnostic settings → LAW (MEDIUM opex finding)
+// Routes PostgreSQL query store and server logs to Log Analytics.
+resource pgDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'pg-diag'
+  scope: pg
+  properties: {
+    workspaceId: lawId
+    logs: [
+      {
+        category: 'PostgreSQLFlexibleServerQueryStore'
+        enabled: true
+        retentionPolicy: { enabled: true, days: 30 }
+      }
+      {
+        category: 'PostgreSQLFlexibleServerLogs'
+        enabled: true
+        retentionPolicy: { enabled: true, days: 30 }
+      }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
 }
 
 // =============================================================================
@@ -495,7 +650,30 @@ var registries = imagesArePrivate ? [
 
 // =============================================================================
 // API Container App (external ingress on 8080)
+// AB#1599 — HTTP scaling rule (HIGH performance finding)
+// AB#1600 — KV secret reference for PG password; PgBouncer sidecar
+// AB#1667 — health probes (HIGH security/reliability finding)
 // =============================================================================
+
+// AB#1600 — PgBouncer sidecar container definition.
+// API connects to localhost:5432 (PgBouncer) instead of PG FQDN directly.
+// Limits PG connection count: MAX_CLIENT_CONN × replicas, pooled via transaction mode.
+// Pin to a specific tag in production; 'latest' only acceptable for dev.
+var pgBouncerContainer = {
+  name: 'pgbouncer'
+  image: 'edoburu/pgbouncer:1.23.1'
+  resources: { cpu: json('0.25'), memory: '0.5Gi' }
+  env: [
+    { name: 'DB_HOST', value: pgFqdn }
+    { name: 'DB_PORT', value: '5432' }
+    { name: 'DB_USER', value: postgresAdminUser }
+    { name: 'DB_PASSWORD', secretRef: 'pg-password' }
+    { name: 'POOL_MODE', value: 'transaction' }
+    { name: 'MAX_CLIENT_CONN', value: '200' }
+    { name: 'DEFAULT_POOL_SIZE', value: '20' }
+    { name: 'AUTH_TYPE', value: 'scram-sha-256' }
+  ]
+}
 
 resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: apiAppNameEffective
@@ -508,7 +686,8 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: caeId
     configuration: {
-      activeRevisionsMode: 'Single'
+      // AB#1669 — revisionsMode parameter (LOW reliability finding)
+      activeRevisionsMode: apiAppRevisionsMode
       ingress: {
         external: true
         targetPort: apiAppTargetPort
@@ -522,40 +701,102 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             certificateId: null
           }
         ]
+        // AB#1669 — when Multiple revision mode is set, default 100% weight to latest revision
+        // so behavior is equivalent to Single until the operator explicitly changes weights.
+        traffic: apiAppRevisionsMode == 'Multiple' ? [
+          { weight: 100, latestRevision: true }
+        ] : []
       }
       registries: registries
+      // AB#1600 — ACA secrets: PG password referenced via KV URI (not plaintext value)
+      // The managed identity (miId) must hold Key Vault Secrets User role on the KV.
       secrets: concat(
-        [ { name: 'db-connection', value: dbConnString } ],
+        [
+          {
+            name: 'pg-password'
+            keyVaultUrl: pgPasswordSecretUri
+            identity: miId
+          }
+        ],
         oidcPreseed ? [ { name: 'entra-client-secret', value: entraClientSecret } ] : [],
         imagesArePrivate ? [ { name: 'ghcr-token', value: ghcrToken } ] : []
       )
     }
     template: {
-      containers: [
-        {
-          name: 'cloudsmith-api'
-          image: apiImage
-          resources: { cpu: json(apiAppCpu), memory: apiAppMemory }
-          env: union([
-            { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
-            { name: 'ConnectionStrings__Default', secretRef: 'db-connection' }
-            { name: 'ApplicationInsights__ConnectionString', value: appiConnectionString }
-            { name: 'AZURE_CLIENT_ID', value: miClientId }
-            { name: 'Monitoring__Endpoints__1__HealthUrl', value: 'https://${portalAppNameEffective}.${caeDomain}' }
-            // AMW env vars — used by AzureMonitorBackend (IMetricsBackend, ADR-016).
-            { name: 'AzureMonitor__WorkspaceId', value: amwId }
-            { name: 'AzureMonitor__QueryEndpoint', value: amwQueryEndpoint }
-            { name: 'AzureMonitor__MetricsIngestionEndpoint', value: dceMetricsIngestionEndpoint }
-          ], oidcApiEnv)
-        }
-      ]
-      scale: { minReplicas: apiAppMinReplicas, maxReplicas: apiAppMaxReplicas }
+      containers: concat(
+        [
+          {
+            name: 'cloudsmith-api'
+            image: apiImage
+            resources: { cpu: json(apiAppCpu), memory: apiAppMemory }
+            env: union([
+              { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
+              // AB#1600 — DB connection string uses pg-password secret ref (not plaintext)
+              // When PgBouncer is enabled, dbHost = localhost (sidecar); else PG FQDN.
+              { name: 'ConnectionStrings__Default', secretRef: 'pg-password' }
+              { name: 'ConnectionStrings__DefaultHost', value: dbHost }
+              { name: 'ConnectionStrings__DefaultDatabase', value: postgresDatabaseName }
+              { name: 'ConnectionStrings__DefaultUser', value: postgresAdminUser }
+              { name: 'ApplicationInsights__ConnectionString', value: appiConnectionString }
+              { name: 'AZURE_CLIENT_ID', value: miClientId }
+              { name: 'Monitoring__Endpoints__1__HealthUrl', value: 'https://${portalAppNameEffective}.${caeDomain}' }
+              // AMW env vars — used by AzureMonitorBackend (IMetricsBackend, ADR-016).
+              { name: 'AzureMonitor__WorkspaceId', value: amwId }
+              { name: 'AzureMonitor__QueryEndpoint', value: amwQueryEndpoint }
+              { name: 'AzureMonitor__MetricsIngestionEndpoint', value: dceMetricsIngestionEndpoint }
+            ], oidcApiEnv)
+            // AB#1667 — health probes (HIGH security/reliability finding)
+            // Probe endpoints defined in design/observability/health-check-contract.md
+            probes: [
+              {
+                type: 'Startup'
+                httpGet: { path: '/health/startup', port: apiAppTargetPort, scheme: 'HTTP' }
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                failureThreshold: 12
+              }
+              {
+                type: 'Liveness'
+                httpGet: { path: '/health/live', port: apiAppTargetPort, scheme: 'HTTP' }
+                periodSeconds: 30
+                failureThreshold: 3
+              }
+              {
+                type: 'Readiness'
+                httpGet: { path: '/health/ready', port: apiAppTargetPort, scheme: 'HTTP' }
+                periodSeconds: 10
+                failureThreshold: 3
+              }
+            ]
+          }
+        ],
+        // AB#1600 — optionally add PgBouncer sidecar for connection pooling
+        enablePgBouncer ? [ pgBouncerContainer ] : []
+      )
+      // AB#1599 — HTTP scaling rule: scale at concurrentRequests per replica (HIGH performance finding)
+      scale: {
+        minReplicas: apiAppMinReplicas
+        maxReplicas: apiAppMaxReplicas
+        rules: [
+          {
+            name: 'http-scaling'
+            http: {
+              metadata: {
+                concurrentRequests: string(apiAppScaleThreshold)
+              }
+            }
+          }
+        ]
+      }
     }
   }
+  dependsOn: [ pgPasswordSecret, kvRoleAssignNew ]
 }
 
 // =============================================================================
 // Portal Container App (external ingress on 80, same-origin nginx proxy)
+// AB#1599 — HTTP scaling rule
+// AB#1667 — health probe (TCP liveness on port 80)
 // =============================================================================
 
 resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -597,10 +838,54 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'CLOUDSMITH_FWD_PROTO', value: 'https' }
             { name: 'CLOUDSMITH_API_INTERNAL_URL', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
           ]
+          // AB#1667 — portal health probe: TCP liveness on port 80.
+          // Portal is nginx serving static files; TCP probe avoids API dependency.
+          probes: [
+            {
+              type: 'Liveness'
+              tcpSocket: { port: portalAppTargetPort }
+              periodSeconds: 30
+              failureThreshold: 3
+            }
+          ]
         }
       ]
-      scale: { minReplicas: portalAppMinReplicas, maxReplicas: portalAppMaxReplicas }
+      // AB#1599 — HTTP scaling rule for portal (MEDIUM performance finding)
+      scale: {
+        minReplicas: portalAppMinReplicas
+        maxReplicas: portalAppMaxReplicas
+        rules: [
+          {
+            name: 'http-scaling'
+            http: {
+              metadata: {
+                concurrentRequests: string(portalAppScaleThreshold)
+              }
+            }
+          }
+        ]
+      }
     }
+  }
+}
+
+// =============================================================================
+// AB#1668 — Azure Monitor metric alert rules module
+// =============================================================================
+
+module alertRules 'monitoring.bicep' = if (enableAlertRules) {
+  name: 'cloudsmith-alerts'
+  params: {
+    workload: workload
+    environment: environment
+    regionCode: regionCode
+    instance: instance
+    allTagsBase: allTagsBase
+    apiAppId: apiApp.id
+    portalAppId: portalApp.id
+    pgServerId: pg.id
+    kvId: empty(byoKvId) ? newKv.id : existingKv.id
+    ownerEmail: contains(commonTags, 'Owner') ? commonTags.Owner : ''
   }
 }
 
@@ -613,7 +898,12 @@ output apiAppName string = apiApp.name
 output portalAppName string = portalApp.name
 output postgresServer string = pgFqdn
 output keyVaultName string = empty(byoKvId) ? newKv.name : existingKv.name
+
+// AB#1600 — appInsightsConnectionString marked @secure() (HIGH security finding)
+// App Insights connection strings contain the instrumentation key — treat as sensitive.
+@secure()
 output appInsightsConnectionString string = appiConnectionString
+
 output managedIdentityClientId string = miClientId
 output azureMonitorWorkspaceId string = amwId
 output azureMonitorQueryEndpoint string = amwQueryEndpoint

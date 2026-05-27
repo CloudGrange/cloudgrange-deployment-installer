@@ -8,9 +8,15 @@
 //   - Per-resource <resource>Name and <resource>Tags overrides
 //   - bringYourOwn parameter set for shared LAW/KV/UAMI/ACA env / App Insights
 //
+// Wave 3 additions (AB#1599, AB#1600, AB#1667, AB#1668, AB#1669):
+//   - Passes new WAF-CAF security/reliability/cost parameters to resources module
+//   - Defender for Cloud Standard tier (AB#1668, LOW security finding)
+//   - Azure Policy assignments for governance (AB#1668)
+//   - Azure Budget alert (AB#1668, MEDIUM cost finding)
+//
 // Deploy:
 //   az deployment sub create --location centralus --template-file iac/main.bicep \
-//     --parameters iac/main.parameters.json
+//     --parameters @iac/main.parameters.json
 
 targetScope = 'subscription'
 
@@ -51,8 +57,11 @@ param deploymentTime string = utcNow('yyyy-MM-ddTHH:mm:ssZ')
 // Application parameters (Phase IV)
 // =============================================================================
 
-@description('Container image tag to deploy.')
-param imageTag string = 'latest'
+// AB#1669 — imageTag default changed from 'latest' to 'main'.
+// Never use 'latest' in stage or prod. CI must always pass an explicit SHA or semver tag.
+// For first-time dev deploys, 'main' resolves to the most recent main-branch image.
+@description('Container image tag to deploy. Use explicit semver or SHA in stage/prod. Never "latest".')
+param imageTag string = 'main'
 
 // ---- PostgreSQL Flexible Server SKU + sizing (ADR-048 parameter surface) ----
 @description('PostgreSQL administrator login.')
@@ -80,9 +89,19 @@ param postgresVersion string = '16'
 @maxValue(35)
 param postgresBackupRetentionDays int = 7
 
-@description('PostgreSQL high availability mode.')
+@description('PostgreSQL high availability mode. ZoneRedundant requires postgresSkuTier=GeneralPurpose or MemoryOptimized. Incompatible with Burstable.')
 @allowed([ 'Disabled', 'SameZone', 'ZoneRedundant' ])
 param postgresHighAvailabilityMode string = 'Disabled'
+
+// AB#1599
+@description('PostgreSQL geo-redundant backup. Enable for prod workloads. Disabled for dev to save cost.')
+@allowed([ 'Enabled', 'Disabled' ])
+param postgresGeoRedundantBackup string = 'Disabled'
+
+// AB#1599
+@description('PostgreSQL public network access. Disabled requires private endpoint (Phase V VNet integration).')
+@allowed([ 'Enabled', 'Disabled' ])
+param postgresPublicNetworkAccess string = 'Enabled'
 
 // ---- Key Vault SKU + retention ----
 @description('Key Vault SKU.')
@@ -103,6 +122,11 @@ param logAnalyticsSku string = 'PerGB2018'
 @maxValue(730)
 param logAnalyticsRetentionDays int = 30
 
+// AB#1599
+@description('Log Analytics daily data cap in GB. 0 = unlimited (not recommended for non-prod). Recommended: dev=1, stage=5, prod=-1 (unlimited + alert).')
+@minValue(0)
+param logAnalyticsDailyCapGB int = 1
+
 // ---- API container app sizing ----
 @description('API container app CPU (cores).')
 param apiAppCpu string = '0.5'
@@ -110,9 +134,11 @@ param apiAppCpu string = '0.5'
 @description('API container app memory.')
 param apiAppMemory string = '1Gi'
 
-@description('API container app minimum replica count.')
+// AB#1599 — default changed to 0 for scale-to-zero in dev (HIGH reliability/cost finding)
+// Recommended per-environment: dev=0, test=0, stage=1, prod=1
+@description('API container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod.')
 @minValue(0)
-param apiAppMinReplicas int = 1
+param apiAppMinReplicas int = 0
 
 @description('API container app maximum replica count.')
 @minValue(1)
@@ -121,6 +147,15 @@ param apiAppMaxReplicas int = 3
 @description('API container app external ingress target port.')
 param apiAppTargetPort int = 8080
 
+// AB#1599
+@description('API ACA HTTP scale-out threshold (concurrent requests per replica).')
+param apiAppScaleThreshold int = 100
+
+// AB#1669
+@description('ACA active revisions mode for API. Multiple enables weighted traffic split for zero-downtime deploys.')
+@allowed([ 'Single', 'Multiple' ])
+param apiAppRevisionsMode string = 'Single'
+
 // ---- Portal container app sizing ----
 @description('Portal container app CPU (cores).')
 param portalAppCpu string = '0.25'
@@ -128,9 +163,10 @@ param portalAppCpu string = '0.25'
 @description('Portal container app memory.')
 param portalAppMemory string = '0.5Gi'
 
-@description('Portal container app minimum replica count.')
+// AB#1599 — default changed to 0 for scale-to-zero in dev
+@description('Portal container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod.')
 @minValue(0)
-param portalAppMinReplicas int = 1
+param portalAppMinReplicas int = 0
 
 @description('Portal container app maximum replica count.')
 @minValue(1)
@@ -138,6 +174,9 @@ param portalAppMaxReplicas int = 2
 
 @description('Portal container app external ingress target port.')
 param portalAppTargetPort int = 80
+
+@description('Portal ACA HTTP scale-out threshold (concurrent requests per replica).')
+param portalAppScaleThreshold int = 50
 
 @description('Optional Entra tenant ID for OIDC pre-seed. Empty = ADR-047 first-run wizard.')
 param entraTenantId string = ''
@@ -155,6 +194,23 @@ param ghcrUsername string = ''
 @secure()
 @description('GHCR token for private image pull. Empty when images are public.')
 param ghcrToken string = ''
+
+// AB#1600
+@description('Enable PgBouncer connection pooling sidecar on the API container app.')
+param enablePgBouncer bool = true
+
+// AB#1668 — governance parameters
+@description('Enable Defender for Cloud Standard tier for Containers and OpenSource Relational Databases.')
+param enableDefenderForCloud bool = true
+
+@description('Enable Azure Policy assignments for required tags and PG/KV audit policies.')
+param enablePolicyAssignments bool = true
+
+@description('Enable Azure Monitor metric alert rules for ACA availability, PG CPU/storage, KV throttling.')
+param enableAlertRules bool = true
+
+@description('Monthly budget alert threshold in USD. 0 = no alert.')
+param monthlyBudgetUSD int = 0
 
 // =============================================================================
 // Per-resource name and tag overrides (ADR-048)
@@ -303,6 +359,22 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
 }
 
 // =============================================================================
+// AB#1668 — Defender for Cloud Standard tier (LOW security finding)
+// Enables Defender for Containers and OpenSourceRelationalDatabases at the subscription level.
+// Gate behind enableDefenderForCloud to allow cost-conscious operators to opt out in non-prod.
+// =============================================================================
+
+resource defenderContainers 'Microsoft.Security/pricings@2024-01-01' = if (enableDefenderForCloud) {
+  name: 'Containers'
+  properties: { pricingTier: 'Standard' }
+}
+
+resource defenderDatabases 'Microsoft.Security/pricings@2024-01-01' = if (enableDefenderForCloud) {
+  name: 'OpenSourceRelationalDatabases'
+  properties: { pricingTier: 'Standard' }
+}
+
+// =============================================================================
 // Resources module
 // =============================================================================
 
@@ -326,25 +398,33 @@ module resources 'resources.bicep' = {
     postgresVersion: postgresVersion
     postgresBackupRetentionDays: postgresBackupRetentionDays
     postgresHighAvailabilityMode: postgresHighAvailabilityMode
+    postgresGeoRedundantBackup: postgresGeoRedundantBackup
+    postgresPublicNetworkAccess: postgresPublicNetworkAccess
     keyVaultSku: keyVaultSku
     keyVaultSoftDeleteRetentionDays: keyVaultSoftDeleteRetentionDays
     logAnalyticsSku: logAnalyticsSku
     logAnalyticsRetentionDays: logAnalyticsRetentionDays
+    logAnalyticsDailyCapGB: logAnalyticsDailyCapGB
     apiAppCpu: apiAppCpu
     apiAppMemory: apiAppMemory
     apiAppMinReplicas: apiAppMinReplicas
     apiAppMaxReplicas: apiAppMaxReplicas
     apiAppTargetPort: apiAppTargetPort
+    apiAppScaleThreshold: apiAppScaleThreshold
+    apiAppRevisionsMode: apiAppRevisionsMode
     portalAppCpu: portalAppCpu
     portalAppMemory: portalAppMemory
     portalAppMinReplicas: portalAppMinReplicas
     portalAppMaxReplicas: portalAppMaxReplicas
     portalAppTargetPort: portalAppTargetPort
+    portalAppScaleThreshold: portalAppScaleThreshold
     entraTenantId: entraTenantId
     entraClientId: entraClientId
     entraClientSecret: entraClientSecret
     ghcrUsername: ghcrUsername
     ghcrToken: ghcrToken
+    enablePgBouncer: enablePgBouncer
+    enableAlertRules: enableAlertRules
     logAnalyticsName: logAnalyticsName
     logAnalyticsTags: logAnalyticsTags
     applicationInsightsName: applicationInsightsName
@@ -367,6 +447,61 @@ module resources 'resources.bicep' = {
     portalCustomDomain: portalCustomDomain
     apiCustomDomain: apiCustomDomain
     bringYourOwn: bringYourOwn
+  }
+}
+
+// =============================================================================
+// AB#1668 — Azure Policy assignments (governance finding)
+// Deployed as a module at resource group scope (policy.bicep).
+// Policy assignments must be RG-scoped; deploying inline at subscription scope
+// requires the BCP139 workaround of a nested module.
+// enablePolicyAssignments = false to skip in environments without policy permissions
+// (e.g. a dev subscription where the deployer lacks Policy Contributor).
+// =============================================================================
+
+module policyAssignments 'policy.bicep' = if (enablePolicyAssignments) {
+  name: 'cloudsmith-policy'
+  scope: rg
+  params: {
+    environment: environment
+    location: location
+  }
+}
+
+// =============================================================================
+// AB#1668 — Azure Budget alert (MEDIUM cost finding)
+// monthlyBudgetUSD = 0 → no budget resource created (default — operator opt-in).
+// Set to expected monthly spend to receive notifications at 80% and 100% of threshold.
+// =============================================================================
+
+resource budget 'Microsoft.Consumption/budgets@2021-10-01' = if (monthlyBudgetUSD > 0) {
+  name: 'budget-${workload}-${environment}'
+  properties: {
+    timePeriod: { startDate: '2026-01-01' }
+    timeGrain: 'Monthly'
+    amount: monthlyBudgetUSD
+    category: 'Cost'
+    filter: {
+      dimensions: {
+        name: 'ResourceGroupName'
+        operator: 'In'
+        values: [ rgNameEffective ]
+      }
+    }
+    notifications: {
+      actual80: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 80
+        contactEmails: [ contains(commonTags, 'Owner') ? commonTags.Owner : 'cloudsmith-alerts@example.com' ]
+      }
+      actual100: {
+        enabled: true
+        operator: 'GreaterThan'
+        threshold: 100
+        contactEmails: [ contains(commonTags, 'Owner') ? commonTags.Owner : 'cloudsmith-alerts@example.com' ]
+      }
+    }
   }
 }
 

@@ -5,7 +5,10 @@
     "location": { "value": "eastus" },
     "environmentName": { "value": "${AZURE_ENV_NAME=cloudsmith-mvp}" },
     "namePrefix": { "value": "cloudsmith" },
-    "imageTag": { "value": "${CLOUDSMITH_IMAGE_TAG=latest}" },
+    "imageTag": {
+      "value": "${CLOUDSMITH_IMAGE_TAG=main}",
+      "_comment": "Never use 'latest' in stage or prod. CI must pass an explicit semver tag or SHA. 'main' is acceptable for dev first-run."
+    },
     "postgresAdminUser": { "value": "cloudsmith" },
     "postgresAdminPassword": { "value": "${POSTGRES_ADMIN_PASSWORD}" },
     "entraTenantId": { "value": "${ENTRA_TENANT_ID}" },
