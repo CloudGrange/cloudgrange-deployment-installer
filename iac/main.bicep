@@ -172,6 +172,12 @@ param applicationInsightsName string = ''
 @description('Additional tags for Application Insights.')
 param applicationInsightsTags object = {}
 
+@description('Override Azure Monitor Workspace name. Empty = CAF pattern.')
+param azureMonitorWorkspaceName string = ''
+
+@description('Additional tags for the Azure Monitor Workspace.')
+param azureMonitorWorkspaceTags object = {}
+
 @description('Override managed identity name. Empty = CAF pattern.')
 param managedIdentityName string = ''
 
@@ -343,6 +349,8 @@ module resources 'resources.bicep' = {
     logAnalyticsTags: logAnalyticsTags
     applicationInsightsName: applicationInsightsName
     applicationInsightsTags: applicationInsightsTags
+    azureMonitorWorkspaceName: azureMonitorWorkspaceName
+    azureMonitorWorkspaceTags: azureMonitorWorkspaceTags
     managedIdentityName: managedIdentityName
     managedIdentityTags: managedIdentityTags
     keyVaultName: keyVaultName
@@ -368,6 +376,9 @@ module resources 'resources.bicep' = {
 
 output PORTAL_URL string = resources.outputs.portalUrl
 output API_URL string = resources.outputs.apiUrl
+output AZURE_MONITOR_WORKSPACE_ID string = resources.outputs.azureMonitorWorkspaceId
+output AZURE_MONITOR_QUERY_ENDPOINT string = resources.outputs.azureMonitorQueryEndpoint
+output AZURE_MONITOR_METRICS_INGESTION_ENDPOINT string = resources.outputs.azureMonitorMetricsIngestionEndpoint
 // AB#1605 — used by the postprovision hook to restart the API ACA for migration
 output API_APP_NAME string = resources.outputs.apiAppName
 output PORTAL_APP_NAME string = resources.outputs.portalAppName

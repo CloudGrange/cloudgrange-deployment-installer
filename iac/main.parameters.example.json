@@ -57,6 +57,8 @@
     "logAnalyticsTags": { "value": {} },
     "applicationInsightsName": { "value": "" },
     "applicationInsightsTags": { "value": {} },
+    "azureMonitorWorkspaceName": { "value": "" },
+    "azureMonitorWorkspaceTags": { "value": {} },
     "managedIdentityName": { "value": "" },
     "managedIdentityTags": { "value": {} },
     "keyVaultName": { "value": "" },

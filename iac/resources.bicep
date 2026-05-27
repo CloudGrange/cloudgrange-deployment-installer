@@ -104,6 +104,8 @@ param ghcrToken string = ''
 // Per-resource overrides (ADR-048)
 param logAnalyticsName string = ''
 param logAnalyticsTags object = {}
+param azureMonitorWorkspaceName string = ''
+param azureMonitorWorkspaceTags object = {}
 param applicationInsightsName string = ''
 param applicationInsightsTags object = {}
 param managedIdentityName string = ''
@@ -152,6 +154,9 @@ var typeAbbr = {
   postgresqlFlexibleServer: 'psql'
   containerAppsEnvironment: 'cae'
   containerApp: 'ca'
+  azureMonitorWorkspace: 'amw'
+  dataCollectionEndpoint: 'dce'
+  dataCollectionRule: 'dcr'
 }
 
 // 6-char deterministic hash from the resource group ID — used to keep
@@ -180,6 +185,7 @@ func cafNameLengthConstrained(typeAbbrValue string, workloadValue string, envVal
 
 // Effective names — override wins, otherwise derive from the pattern.
 var logAnalyticsNameEffective = empty(logAnalyticsName) ? cafName(typeAbbr.logAnalyticsWorkspace, workload, environment, regionCode, instance) : logAnalyticsName
+var azureMonitorWorkspaceNameEffective = empty(azureMonitorWorkspaceName) ? cafName(typeAbbr.azureMonitorWorkspace, workload, environment, regionCode, instance) : azureMonitorWorkspaceName
 var applicationInsightsNameEffective = empty(applicationInsightsName) ? cafName(typeAbbr.applicationInsights, workload, environment, regionCode, instance) : applicationInsightsName
 var managedIdentityNameEffective = empty(managedIdentityName) ? cafName(typeAbbr.userAssignedManagedIdentity, workload, environment, regionCode, instance) : managedIdentityName
 var keyVaultNameEffective = empty(keyVaultName) ? cafNameLengthConstrained(typeAbbr.keyVault, workloadShort, environment, regionCode, instance, rgHash) : keyVaultName
@@ -276,6 +282,78 @@ resource existingAppi 'Microsoft.Insights/components@2020-02-02' existing = if (
 }
 
 var appiConnectionString = empty(byoAppiId) ? newAppi.properties.ConnectionString : existingAppi.properties.ConnectionString
+
+// =============================================================================
+// Observability — Azure Monitor Workspace + DCE + DCR (metrics / Prometheus)
+// ADR-016 (amendment 1, AB#1927): AMW is the PaaS metrics backend.
+// LAW is logs only. All metrics MUST flow via remote_write → AMW.
+// AB#1928: provisions this stack.
+// =============================================================================
+
+resource amw 'Microsoft.Monitor/accounts@2023-04-03' = {
+  name: azureMonitorWorkspaceNameEffective
+  location: location
+  tags: union(allTagsBase, azureMonitorWorkspaceTags)
+}
+
+// DCE provides the metricsIngestion.endpoint URL for Prometheus remote_write.
+resource dce 'Microsoft.Insights/dataCollectionEndpoints@2022-06-01' = {
+  name: cafName(typeAbbr.dataCollectionEndpoint, workload, environment, regionCode, instance)
+  location: location
+  tags: allTagsBase
+  properties: {
+    networkAcls: { publicNetworkAccess: 'Enabled' }
+  }
+}
+
+// DCR routes Microsoft-PrometheusMetrics from the DCE ingestion endpoint to the AMW.
+resource dcr 'Microsoft.Insights/dataCollectionRules@2022-06-01' = {
+  name: cafName(typeAbbr.dataCollectionRule, workload, environment, regionCode, instance)
+  location: location
+  tags: allTagsBase
+  properties: {
+    dataCollectionEndpointId: dce.id
+    dataSources: {
+      prometheusForwarder: [
+        {
+          name: 'PrometheusDataSource'
+          streams: [ 'Microsoft-PrometheusMetrics' ]
+        }
+      ]
+    }
+    destinations: {
+      monitoringAccounts: [
+        {
+          name: 'cloudsmithAmw'
+          accountResourceId: amw.id
+        }
+      ]
+    }
+    dataFlows: [
+      {
+        streams: [ 'Microsoft-PrometheusMetrics' ]
+        destinations: [ 'cloudsmithAmw' ]
+      }
+    ]
+  }
+}
+
+// Monitoring Metrics Publisher on the DCR — allows the managed identity to push
+// Prometheus remote_write samples to AMW via this DCR ingestion endpoint.
+var monitoringMetricsPublisherRoleId = '3913510d-42f4-11e9-9b75-db5a05f2ec8e'
+resource dcrPublisherRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(dcr.id, miId, monitoringMetricsPublisherRoleId)
+  scope: dcr
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherRoleId)
+    principalId: miPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+var amwId = amw.id
+var amwQueryEndpoint = amw.properties.metrics.prometheusQueryEndpoint
+var dceMetricsIngestionEndpoint = dce.properties.metricsIngestion.endpoint
 
 // =============================================================================
 // Identity — User-Assigned Managed Identity
@@ -464,6 +542,10 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ApplicationInsights__ConnectionString', value: appiConnectionString }
             { name: 'AZURE_CLIENT_ID', value: miClientId }
             { name: 'Monitoring__Endpoints__1__HealthUrl', value: 'https://${portalAppNameEffective}.${caeDomain}' }
+            // AMW env vars — used by AzureMonitorBackend (IMetricsBackend, ADR-016).
+            { name: 'AzureMonitor__WorkspaceId', value: amwId }
+            { name: 'AzureMonitor__QueryEndpoint', value: amwQueryEndpoint }
+            { name: 'AzureMonitor__MetricsIngestionEndpoint', value: dceMetricsIngestionEndpoint }
           ], oidcApiEnv)
         }
       ]
@@ -533,3 +615,6 @@ output postgresServer string = pgFqdn
 output keyVaultName string = empty(byoKvId) ? newKv.name : existingKv.name
 output appInsightsConnectionString string = appiConnectionString
 output managedIdentityClientId string = miClientId
+output azureMonitorWorkspaceId string = amwId
+output azureMonitorQueryEndpoint string = amwQueryEndpoint
+output azureMonitorMetricsIngestionEndpoint string = dceMetricsIngestionEndpoint
