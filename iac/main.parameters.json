@@ -15,6 +15,7 @@
     "entraClientId": { "value": "${ENTRA_CLIENT_ID}" },
     "entraClientSecret": { "value": "${ENTRA_CLIENT_SECRET}" },
     "ghcrUsername": { "value": "${GHCR_USERNAME=}" },
-    "ghcrToken": { "value": "${GHCR_TOKEN=}" }
+    "ghcrToken": { "value": "${GHCR_TOKEN=}" },
+    "masterKey": { "value": "${CLOUDSMITH_MASTER_KEY}" }
   }
 }

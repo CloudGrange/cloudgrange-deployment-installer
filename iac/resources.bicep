@@ -19,6 +19,10 @@
 //   - ACA active revisions mode parameter (LOW reliability finding)
 //   - appInsightsConnectionString marked @secure() (HIGH security finding)
 //
+// Security remediation (H1):
+//   - CLOUDSMITH_MASTER_KEY stored in KV (secret name: cloudsmith-master-key); ACA
+//     references it via keyVaultUrl — never exposed as a plaintext ACA env var.
+//
 // Naming + tagging (ADR-048):
 //   - Default names follow CAF pattern <type-abbr>-<workload>-<env>-<region>-<instance>
 //   - Length-constrained types (Key Vault) drop separators and append a hash suffix
@@ -150,6 +154,14 @@ param ghcrUsername string = ''
 @secure()
 param ghcrToken string = ''
 
+// H1 security remediation — master key for AES-256 envelope encryption.
+// Passed as @secure() so the value is never written to ARM deployment logs.
+// Stored in Key Vault (secret name: cloudsmith-master-key) and referenced
+// by ACA via keyVaultUrl — never exposed as a plaintext environment variable.
+@secure()
+@description('256-bit AES master key (base64-encoded). Written to KV at deploy time; referenced by ACA via KV secret reference. Generated externally and passed via environment or @secure() parameter.')
+param masterKey string
+
 // AB#1600 — PgBouncer sidecar for connection pooling (MEDIUM performance finding)
 @description('Enable PgBouncer connection pooling sidecar on the API container app.')
 param enablePgBouncer bool = true
@@ -279,6 +291,9 @@ var dbHost = enablePgBouncer ? 'localhost' : pgFqdn
 // AB#1600 — KV secret name for the PG password (written to KV at provision time).
 // Referenced from ACA via keyVaultUrl pattern — never passed as a plaintext env var.
 var pgPasswordSecretName = 'cs-${environment}-core-db-password'
+
+// H1 security remediation — KV secret name for the AES-256 master key.
+var masterKeySecretName = 'cloudsmith-master-key'
 
 // KV DNS suffix — use az.environment() to ensure compatibility across sovereign clouds (no-hardcoded-env-urls)
 var kvDnsSuffix = az.environment().suffixes.keyvaultDns
@@ -501,6 +516,19 @@ resource pgPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (e
   }
 }
 
+// H1 security remediation — Write the AES-256 master key to Key Vault at deploy time.
+// The @secure() parameter ensures the raw key is never written to ARM deployment logs.
+// ACA references this secret via keyVaultUrl (see apiApp secrets block) — the plaintext
+// key is never visible in az containerapp show, ARM exports, or the Azure portal.
+resource masterKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: masterKeySecretName
+  properties: {
+    value: masterKey
+    attributes: { enabled: true }
+  }
+}
+
 // AB#1668 — KV diagnostic settings → LAW (MEDIUM security finding)
 // Logs all AuditEvent (secret get/set/delete) to Log Analytics for 90-day retention.
 resource kvDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (empty(byoKvId)) {
@@ -525,6 +553,8 @@ resource kvDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview
 var kvNameEffective = empty(byoKvId) ? newKv.name : existingKv.name
 // AB#1600 — KV secret URI for the PG password ACA secret reference
 var pgPasswordSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${pgPasswordSecretName}'
+// H1 — KV secret URI for the AES-256 master key ACA secret reference
+var masterKeySecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${masterKeySecretName}'
 
 // =============================================================================
 // PostgreSQL Flexible Server (always created — workload-specific)
@@ -709,12 +739,20 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
       registries: registries
       // AB#1600 — ACA secrets: PG password referenced via KV URI (not plaintext value)
+      // H1   — ACA secrets: master key referenced via KV URI (not plaintext value)
       // The managed identity (miId) must hold Key Vault Secrets User role on the KV.
       secrets: concat(
         [
           {
             name: 'pg-password'
             keyVaultUrl: pgPasswordSecretUri
+            identity: miId
+          }
+          // H1 security remediation — master key KV secret reference.
+          // Never set as a direct env var value; always resolved via Key Vault.
+          {
+            name: 'cloudsmith-master-key'
+            keyVaultUrl: masterKeySecretUri
             identity: miId
           }
         ],
@@ -744,6 +782,9 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'AzureMonitor__WorkspaceId', value: amwId }
               { name: 'AzureMonitor__QueryEndpoint', value: amwQueryEndpoint }
               { name: 'AzureMonitor__MetricsIngestionEndpoint', value: dceMetricsIngestionEndpoint }
+              // H1 security remediation — master key injected via KV secret reference.
+              // The raw base64 key is NEVER stored as a plaintext env var value.
+              { name: 'CLOUDSMITH_MASTER_KEY', secretRef: 'cloudsmith-master-key' }
             ], oidcApiEnv)
             // AB#1667 — health probes (HIGH security/reliability finding)
             // Probe endpoints defined in design/observability/health-check-contract.md
@@ -790,7 +831,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
-  dependsOn: [ pgPasswordSecret, kvRoleAssignNew ]
+  dependsOn: [ pgPasswordSecret, masterKeySecret, kvRoleAssignNew ]
 }
 
 // =============================================================================

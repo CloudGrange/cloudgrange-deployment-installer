@@ -195,6 +195,14 @@ param ghcrUsername string = ''
 @description('GHCR token for private image pull. Empty when images are public.')
 param ghcrToken string = ''
 
+// H1 security remediation — AES-256 master key for envelope encryption.
+// Passed @secure() so the value is never written to ARM deployment logs.
+// Stored in Key Vault (secret name: cloudsmith-master-key) at deploy time;
+// injected into ACA via KV secret reference — never a plaintext env var.
+@secure()
+@description('256-bit AES master key (base64-encoded). Must be supplied at deploy time via environment variable CLOUDSMITH_MASTER_KEY or azd env set. Written to Key Vault; ACA reads it via KV secret reference.')
+param masterKey string
+
 // AB#1600
 @description('Enable PgBouncer connection pooling sidecar on the API container app.')
 param enablePgBouncer bool = true
@@ -423,6 +431,7 @@ module resources 'resources.bicep' = {
     entraClientSecret: entraClientSecret
     ghcrUsername: ghcrUsername
     ghcrToken: ghcrToken
+    masterKey: masterKey
     enablePgBouncer: enablePgBouncer
     enableAlertRules: enableAlertRules
     logAnalyticsName: logAnalyticsName

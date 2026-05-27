@@ -93,6 +93,11 @@
     "entraClientId": { "value": "" },
     "entraClientSecret": { "value": "" },
 
+    "masterKey": {
+      "value": "REPLACE-ME-USE-KEY-VAULT-REFERENCE",
+      "_comment": "H1 security remediation. Generate with: [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) | ForEach-Object { [byte]$_ }). Supply via azd env set CLOUDSMITH_MASTER_KEY or environment variable — never commit a real value here."
+    },
+
     "imageTag": {
       "value": "${CLOUDSMITH_IMAGE_TAG}",
       "_comment": "Required. Never use 'latest' in stage or prod. CI must always pass an explicit semver tag or SHA digest. For dev first-time deploys use 'main'."
