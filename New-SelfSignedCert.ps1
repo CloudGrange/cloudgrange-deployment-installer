@@ -84,7 +84,7 @@ openssl x509 -in "\$CERT_DIR/cloudsmith.crt" -noout -subject -dates 2>/dev/null
 # The volume is named {compose_project_name}_nginx_certs; compose project = 'cloudsmith'.
 docker run --rm \
     -v cloudsmith_nginx_certs:/certs \
-    -v "\$CERT_DIR:/src:ro" \
+    -v "`${CERT_DIR}:/src:ro" \
     alpine:latest \
     sh -c "cp /src/cloudsmith.crt /certs/cloudsmith.crt && cp /src/cloudsmith.key /certs/cloudsmith.key && chmod 644 /certs/cloudsmith.crt && chmod 600 /certs/cloudsmith.key"
 
