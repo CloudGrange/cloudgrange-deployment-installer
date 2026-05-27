@@ -261,7 +261,11 @@ var keyVaultNameEffective = empty(keyVaultName) ? cafNameLengthConstrained(typeA
 var postgresServerNameEffective = empty(postgresServerName) ? cafName(typeAbbr.postgresqlFlexibleServer, workload, environment, regionCode, instance) : postgresServerName
 var containerAppsEnvironmentNameEffective = empty(containerAppsEnvironmentName) ? cafName(typeAbbr.containerAppsEnvironment, workload, environment, regionCode, instance) : containerAppsEnvironmentName
 var apiAppNameEffective = empty(apiAppName) ? cafNameWithRole(typeAbbr.containerApp, workload, 'api', environment, regionCode, instance) : apiAppName
-var portalAppNameEffective = empty(portalAppName) ? cafNameWithRole(typeAbbr.containerApp, workload, 'portal', environment, regionCode, instance) : portalAppName
+// AB#1669 — ACA name limit is 32 chars. 'portal' role makes the name 33 chars for common
+// workload='cloudsmith' deployments. Clamp to 32 by substring. API uses 'api' (3 chars) and
+// fits in 30; portal uses 'portal' (6 chars) and would be 33 — trim to 32.
+var _portalAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'portal', environment, regionCode, instance)
+var portalAppNameEffective = empty(portalAppName) ? (length(_portalAppNameRaw) > 32 ? substring(_portalAppNameRaw, 0, 32) : _portalAppNameRaw) : portalAppName
 
 // Tag composition helper — every resource gets commonTags + autoTags + own.
 // Length-constrained types also get a DisplayName tag with the readable CAF form.
