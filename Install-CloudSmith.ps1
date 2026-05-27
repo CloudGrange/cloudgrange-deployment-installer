@@ -209,13 +209,17 @@ function Invoke-CloudSmithInstall {
     Deploy-DockerCompose @composeArgs
 
     # Step 7: Wait for API health, then emit setup URL (AB#1627, ADR-047)
+    # AB#1593: nginx terminates TLS on 443 and proxies to portal on 80 (internal).
+    # The API is directly on port 8081 (not routed through nginx).
+    # Portal URL uses HTTPS via nginx; API health check uses the direct API port.
     Write-Progress-Step "Waiting for CloudSmith API to become healthy"
-    $apiBase  = "http://$VmIp"
-    $healthOk = Wait-ForHttpOk -Url "$apiBase/api/v1/health" -TimeoutSeconds 600
+    $apiHealthBase = "http://$VmIp:8081"
+    $portalBase    = "https://$VmIp"
+    $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/api/v1/health" -TimeoutSeconds 600
     if (-not $healthOk) {
         # CS-INST-ERR-030: API did not become healthy within 10 minutes
         try {
-            $lastResp = Invoke-WebRequest -Uri "$apiBase/api/v1/health" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction SilentlyContinue
+            $lastResp = Invoke-WebRequest -Uri "$apiHealthBase/api/v1/health" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction SilentlyContinue
             $lastStatus = $lastResp.StatusCode
         } catch {
             $lastStatus = 'unreachable'
@@ -227,7 +231,7 @@ function Invoke-CloudSmithInstall {
     # Check setup state — print first-run URL if setup is still pending
     $setupPending = $false
     try {
-        $statusResp = Invoke-RestMethod -Uri "$apiBase/api/v1/platform/setup-status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
+        $statusResp = Invoke-RestMethod -Uri "$apiHealthBase/api/v1/platform/setup-status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
         $setupPending = ($statusResp.setupState -eq 'pending')
     } catch {
         # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
@@ -241,13 +245,15 @@ function Invoke-CloudSmithInstall {
 
     Write-Host ""
     Write-Host "  CloudSmith installed successfully!" -ForegroundColor Green
-    Write-Host "  Portal: $apiBase" -ForegroundColor Cyan
+    Write-Host "  Portal: $portalBase" -ForegroundColor Cyan
+    Write-Host "  Note: The portal uses a self-signed certificate. Your browser will show a security warning." -ForegroundColor Yellow
+    Write-Host "        Replace /etc/nginx/certs/ in the nginx_certs volume with a CA-signed cert for production." -ForegroundColor Gray
     if ($setupPending) {
         Write-Host "  First-run setup required. Navigate to:" -ForegroundColor Yellow
-        Write-Host "    $apiBase/setup" -ForegroundColor White
+        Write-Host "    $portalBase/setup" -ForegroundColor White
         Write-Host "  Complete the setup wizard to configure your platform name, timezone, and admin account." -ForegroundColor Gray
     } else {
-        Write-Host "  Sign in at: $apiBase/login" -ForegroundColor Cyan
+        Write-Host "  Sign in at: $portalBase/login" -ForegroundColor Cyan
     }
     Write-Host ""
 }

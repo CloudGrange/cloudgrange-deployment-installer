@@ -44,14 +44,32 @@ services:
   cloudsmith-portal:
     image: ghcr.io/cloudsmith-cloud/cloudsmith-portal:${CLOUDSMITH_VERSION:-latest}
     restart: always
-    ports:
-      - "80:80"
-      - "443:443"
+    # AB#1593: port 443 is now handled by the nginx TLS terminator.
+    # Port 80 is internal only (not exposed on the host); nginx proxies to it.
+    expose:
+      - "80"
     environment:
       - CLOUDSMITH_API_URL=${CLOUDSMITH_API_URL:-http://localhost:8081}
     depends_on:
       cloudsmith-api:
         condition: service_healthy
+    networks:
+      - cloudsmith
+
+  # AB#1593: nginx TLS terminator — terminates HTTPS on 443, proxies to portal on port 80.
+  # Self-signed cert is generated at install time; mounted from the nginx_certs named volume.
+  # To use a CA-signed cert, replace the contents of the nginx_certs volume with your cert files.
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_certs:/etc/nginx/certs:ro
+    depends_on:
+      - cloudsmith-portal
     networks:
       - cloudsmith
 
@@ -176,6 +194,9 @@ volumes:
   postgres_data:
   prometheus_data:
   loki_data:
+  # AB#1593: TLS certs for nginx. Populated by New-SelfSignedCert.ps1 at install time.
+  # Replace with CA-signed certs for production use.
+  nginx_certs:
 
 networks:
   cloudsmith:

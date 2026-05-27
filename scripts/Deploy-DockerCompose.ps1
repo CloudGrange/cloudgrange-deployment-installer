@@ -78,6 +78,12 @@ echo "Restart policy check complete."
         $wslPath = "/opt/cloudsmith"
         wsl -d Ubuntu -u root -- mkdir -p $wslPath
         wsl -d Ubuntu -u root -- bash -c "cp /mnt/$(($composeSrc -replace '\\','/' -replace ':','').ToLower())/* $wslPath/"
+
+        # AB#1593: Generate self-signed TLS cert and install into nginx_certs volume before stack starts.
+        Write-Host "  Generating TLS certificate for nginx..." -ForegroundColor Gray
+        . "$PSScriptRoot\..\New-SelfSignedCert.ps1"
+        New-SelfSignedCert -VmIp $VmIp -UseWsl2
+
         $bashDeploy | wsl -d Ubuntu -u root -- bash -s
     } elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
         # SSH path — copy compose files then run deploy script.
@@ -98,6 +104,11 @@ echo "Restart policy check complete."
             & scp.exe @sshOpts $f.FullName "${sshTarget}:${composeDir}/$($rel -replace '\\','/')"
         }
 
+        # AB#1593: Generate self-signed TLS cert and install into nginx_certs volume before stack starts.
+        Write-Host "  Generating TLS certificate for nginx..." -ForegroundColor Gray
+        . "$PSScriptRoot\..\New-SelfSignedCert.ps1"
+        New-SelfSignedCert -VmIp $VmIp -SshKeyPath $SshKeyPath
+
         # Run the deploy script.
         $bashDeploy | & ssh.exe @sshOpts $sshTarget 'sudo bash -s'
         if ($LASTEXITCODE -ne 0) {
@@ -110,16 +121,23 @@ echo "Restart policy check complete."
         # Hyper-V PowerShell Direct — only for Windows guests or Linux guests with PowerShell.
         $session = New-PSSession -VMName $VmName -Credential $Credential
         Copy-Item -Path "$composeSrc\*" -Destination $composeDir -ToSession $session -Recurse -Force
+
+        # AB#1593: Generate self-signed TLS cert and install into nginx_certs volume before stack starts.
+        Write-Host "  Generating TLS certificate for nginx..." -ForegroundColor Gray
+        . "$PSScriptRoot\..\New-SelfSignedCert.ps1"
+        New-SelfSignedCert -VmIp $VmIp -VmName $VmName -Credential $Credential
+
         $deployBlock = [scriptblock]::Create($bashDeploy)
         Invoke-Command -Session $session -ScriptBlock { param($s) $s | bash -s } -ArgumentList $bashDeploy
         Remove-PSSession $session
     }
 
-    # AB#1590 Step 3: Probe portal at http://<VmIp>/health (retry up to 30s).
-    # The portal health endpoint returns 200 when the SPA container is ready.
+    # AB#1590 Step 3: Probe portal via nginx at https://<VmIp>/health (retry up to 30s).
+    # AB#1593: nginx now terminates TLS on 443 and proxies to portal on 80.
+    # SkipCertificateCheck is required for the self-signed cert generated at install time.
     # Falls back to probing '/' if /health is not available.
-    Write-Host "  Probing portal at http://$VmIp/health (timeout: 30s)..."
-    $portalHealthUrl = "http://$VmIp/health"
+    Write-Host "  Probing portal at https://$VmIp/health (timeout: 30s)..."
+    $portalHealthUrl = "https://$VmIp/health"
     $portalOk = $false
     $portalDeadline = [DateTime]::UtcNow.AddSeconds(30)
     while ([DateTime]::UtcNow -lt $portalDeadline) {
@@ -129,7 +147,7 @@ echo "Restart policy check complete."
         } catch {
             # /health not implemented — try root path
             try {
-                $r2 = Invoke-WebRequest -Uri "http://$VmIp/" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction Stop
+                $r2 = Invoke-WebRequest -Uri "https://$VmIp/" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction Stop
                 if ($r2.StatusCode -lt 400) { $portalOk = $true; break }
             } catch { }
         }
@@ -138,9 +156,9 @@ echo "Restart policy check complete."
 
     if (-not $portalOk) {
         Write-Host ""
-        Write-Host "  [FAILURE] Portal is not reachable at http://$VmIp after 30 seconds." -ForegroundColor Red
+        Write-Host "  [FAILURE] Portal is not reachable at https://$VmIp after 30 seconds." -ForegroundColor Red
         Write-Host "  Check container logs with: docker compose -f /opt/cloudsmith/docker-compose.yml logs --tail=50" -ForegroundColor Yellow
         Write-Error "Deploy-DockerCompose: portal reachability check failed. See container logs for details."
     }
-    Write-Host "  Portal is reachable at http://$VmIp" -ForegroundColor Green
+    Write-Host "  Portal is reachable at https://$VmIp" -ForegroundColor Green
 }
