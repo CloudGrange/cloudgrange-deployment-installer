@@ -48,17 +48,29 @@ function Invoke-CloudSmithInstall {
     Write-Host "`n  CloudSmith Installer — Mode: $Mode" -ForegroundColor Cyan
     Write-Host "  ─────────────────────────────────────" -ForegroundColor DarkGray
 
-    # Step 1: Self-integrity check
-    $checksumFile = Join-Path $PSScriptRoot 'Install-CloudSmith.sha256'
-    if (Test-Path $checksumFile) {
-        Write-Progress-Step "Verifying installer integrity"
-        $expected = (Get-Content $checksumFile -Raw).Trim().Split(' ')[0]
-        $actual = (Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash
-        if ($expected -ine $actual) {
-            Write-Error "Installer integrity check failed. Re-download the installer from the CloudSmith release page."
-        }
-        Write-Host "  Integrity OK" -ForegroundColor Green
+    # Step 1: Mandatory package integrity self-check (AB#1598)
+    # The .sha256 file MUST be present alongside the installer before any host changes are made.
+    # This prevents tampered or partially-downloaded installers from mutating the host.
+    $checksumFile = Join-Path $PSScriptRoot 'cloudsmith-installer.sha256'
+    Write-Progress-Step "Verifying installer package integrity"
+    if (-not (Test-Path $checksumFile)) {
+        Write-Host ""
+        Write-Host "  [ERROR] Package integrity check failed. Do not proceed." -ForegroundColor Red
+        Write-Host "  The file 'cloudsmith-installer.sha256' was not found alongside Install-CloudSmith.ps1." -ForegroundColor Red
+        Write-Host "  Re-download the complete CloudSmith installer package from the release page." -ForegroundColor Yellow
+        Write-Error "[ERROR] Package integrity check failed. Do not proceed."
     }
+    $expected = (Get-Content $checksumFile -Raw).Trim().Split()[0]
+    $actual   = (Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash
+    if ($expected -ine $actual) {
+        Write-Host ""
+        Write-Host "  [ERROR] Package integrity check failed. Do not proceed." -ForegroundColor Red
+        Write-Host "  Expected SHA-256: $expected" -ForegroundColor Gray
+        Write-Host "  Actual   SHA-256: $actual"   -ForegroundColor Gray
+        Write-Host "  The installer file may be corrupted or tampered. Re-download from the release page." -ForegroundColor Yellow
+        Write-Error "[ERROR] Package integrity check failed. Do not proceed."
+    }
+    Write-Host "  Integrity OK ($($actual.Substring(0,16))...)" -ForegroundColor Green
 
     # Step 2: Hyper-V detection (AB#1581)
     Write-Progress-Step "Checking Hyper-V availability"
