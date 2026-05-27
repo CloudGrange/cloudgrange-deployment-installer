@@ -106,29 +106,42 @@ services:
       - cloudsmith
 
   # --- Optional: Keycloak (--profile keycloak) ---
+  # AB#1592: Production-mode Keycloak using PostgreSQL backend.
   # Enable when using Keycloak as the external IdP. Not required for first-run setup;
   # the CloudSmith first-run wizard can configure Keycloak as an IdP after initial setup.
   keycloak:
     profiles: ["keycloak"]
     image: quay.io/keycloak/keycloak:26.6
-    command: start-dev --import-realm
+    # AB#1592: production start (not start-dev) with realm import on first boot.
+    command: start --import-realm
     restart: always
     environment:
-      KC_DB: dev-file
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-localhost}
+      # AB#1592: use PostgreSQL — not dev-file in-process DB.
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-cloudsmith}
+      KC_DB_USERNAME: ${POSTGRES_USER:-cloudsmith}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # AB#1592: configurable hostname; defaults to localhost for standalone installs.
+      KC_HOSTNAME: ${CLOUDSMITH_HOSTNAME:-localhost}
       KC_HTTP_PORT: "8080"
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USER}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # KC_HTTP_ENABLED required in production mode when TLS termination is handled externally.
+      KC_HTTP_ENABLED: "true"
+      # Bootstrap admin — only used on first run to create the initial admin account.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
     volumes:
       - ./keycloak/cloudsmith-realm.json:/opt/keycloak/data/import/cloudsmith-realm.json:ro
     ports:
       - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "(echo >/dev/tcp/localhost/8080) 2>/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 60s
     networks:
       - cloudsmith
 
