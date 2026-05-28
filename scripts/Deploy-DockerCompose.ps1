@@ -13,7 +13,10 @@ function Deploy-DockerCompose {
         # When $null and $SshKeyPath is also empty, falls back to Get-Credential.
         [System.Management.Automation.PSCredential]$Credential = $null,
         # Path to the SSH private key file. Preferred for Linux guests.
-        [string]$SshKeyPath = ''
+        [string]$SshKeyPath = '',
+        # AB#1852: path to pre-saved Docker image tar (for Bundled/offline installs).
+        # When provided, images are loaded via 'docker load' instead of 'docker pull'.
+        [string]$BundledImagesPath = ''
     )
 
     $composeDir = '/opt/cloudsmith'
@@ -26,13 +29,23 @@ function Deploy-DockerCompose {
     #   1. Poll up to 60s for all services to be running.
     #   2. Verify every service has restart: always in the compose definition.
     #   3. Probe portal at http://<host>/health (retry up to 30s).
+    # AB#1852: In bundled mode, the image tar is scp'd to the guest and loaded via docker load.
+    # The remote path where the tar will land (if applicable).
+    $remoteTarPath = '/opt/cloudsmith-images.tar'
+
+    $pullOrLoad = if (-not [string]::IsNullOrEmpty($BundledImagesPath)) {
+        "docker load -i $remoteTarPath && rm -f $remoteTarPath"
+    } else {
+        "docker compose pull"
+    }
+
     $bashDeploy = @"
 set -euo pipefail
 mkdir -p $composeDir
 export DB_PASSWORD="$dbPassword"
 export CLOUDSMITH_VERSION="$Version"
 cd $composeDir
-docker compose pull
+$pullOrLoad
 docker compose up -d
 
 # --- AB#1590 Step 1: Wait up to 60s for all services to be running ---
@@ -102,6 +115,12 @@ echo "Restart policy check complete."
                 & ssh.exe @sshOpts $sshTarget "mkdir -p $destDir"
             }
             & scp.exe @sshOpts $f.FullName "${sshTarget}:${composeDir}/$($rel -replace '\\','/')"
+        }
+
+        # AB#1852: upload bundled image tar before deploy (bundled/offline mode)
+        if (-not [string]::IsNullOrEmpty($BundledImagesPath) -and (Test-Path $BundledImagesPath)) {
+            Write-Host "  Uploading bundled images tar (~$('{0:N0}' -f ((Get-Item $BundledImagesPath).Length / 1MB)) MB)..." -ForegroundColor Gray
+            & scp.exe @sshOpts $BundledImagesPath "${sshTarget}:${remoteTarPath}"
         }
 
         # AB#1593: Generate self-signed TLS cert and install into nginx_certs volume before stack starts.

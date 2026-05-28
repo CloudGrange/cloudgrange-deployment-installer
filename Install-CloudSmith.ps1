@@ -17,6 +17,9 @@ param(
     [string]$ProxyUser = '',
     [SecureString]$ProxyPassword,
     [string]$Version = 'latest',
+    # AB#1852: path to the cloudsmith bundle directory (extracted zip) for offline installs.
+    # When not specified and Mode=Bundled, the installer looks in $PSScriptRoot for bundle files.
+    [string]$BundlePath = '',
     [switch]$AcceptDefaults,
     [switch]$Force
 )
@@ -169,7 +172,13 @@ function Invoke-CloudSmithInstall {
 
         Write-Progress-Step "Provisioning Hyper-V VM"
         . "$PSScriptRoot\scripts\New-CloudSmithVm.ps1"
-        New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode -SshPublicKey $sshPublicKey
+        # AB#1852: in Bundled mode, resolve the Ubuntu image path from the bundle directory
+        $bundledUbuntuPath = ''
+        if ($Mode -eq 'Bundled') {
+            $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
+            $bundledUbuntuPath = Join-Path $bundleRoot 'ubuntu-24.04-cloudimg.img'
+        }
+        New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode -SshPublicKey $sshPublicKey -BundledImagePath $bundledUbuntuPath
     } else {
         Write-Progress-Step "Configuring WSL2 environment"
         . "$PSScriptRoot\scripts\Install-Wsl2Fallback.ps1"
@@ -205,6 +214,16 @@ function Invoke-CloudSmithInstall {
         $composeArgs['SshKeyPath'] = $sshKeyPath
     } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
         $composeArgs['Credential'] = $vmGuestCred
+    }
+    # AB#1852: in Bundled mode, pass the pre-saved images tar path
+    if ($Mode -eq 'Bundled') {
+        $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
+        $bundledImageTar = Join-Path $bundleRoot 'cloudsmith-images.tar'
+        if (Test-Path $bundledImageTar) {
+            $composeArgs['BundledImagesPath'] = $bundledImageTar
+        } else {
+            Write-Warning "Bundled images tar not found at $bundledImageTar — falling back to docker pull"
+        }
     }
     Deploy-DockerCompose @composeArgs
 
