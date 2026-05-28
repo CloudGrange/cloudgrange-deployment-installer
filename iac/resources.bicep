@@ -504,14 +504,18 @@ resource existingKv 'Microsoft.KeyVault/vaults@2023-07-01' existing = if (!empty
   scope: resourceGroup(byoKvParts[2], byoKvParts[4])
 }
 
-// Key Vault Secrets User role assignment for the managed identity — applied to
-// whichever KV we ended up using.
-var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+// AB#2349 / ADR-047 amendment: managed identity needs Secrets Officer (not just User)
+// so the API can write the initial admin token to KV at first start. Secrets Officer
+// grants Get + List + Set + Delete; User is read-only.
+// Role IDs from https://learn.microsoft.com/azure/role-based-access-control/built-in-roles
+//   Key Vault Secrets User    : 4633458b-17de-408a-b874-0445c86b69e6 (read)
+//   Key Vault Secrets Officer : b86a8fe4-44ce-4948-aee5-eccb2c155cd7 (read+write+delete)
+var kvSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
 resource kvRoleAssignNew 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(byoKvId)) {
-  name: guid(newKv.id, miId, kvSecretsUserRoleId)
+  name: guid(newKv.id, miId, kvSecretsOfficerRoleId)
   scope: newKv
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsOfficerRoleId)
     principalId: miPrincipalId
     principalType: 'ServicePrincipal'
   }
@@ -785,6 +789,12 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               // H1 security remediation — master key injected via KV secret reference.
               // The raw base64 key is NEVER stored as a plaintext env var value.
               { name: 'CLOUDSMITH_MASTER_KEY', secretRef: 'cloudsmith-master-key' }
+              // AB#2349 / ADR-047 amendment — substrate flag + KV name so the bootstrap
+              // can write the initial admin token to KV instead of an unreachable file.
+              // Operator retrieves with:
+              //   az keyvault secret show --vault-name <kv> --name cloudsmith-initial-admin-token --query value -o tsv
+              { name: 'CLOUDSMITH_DEPLOYMENT_MODE', value: 'paas' }
+              { name: 'CLOUDSMITH_KEY_VAULT_NAME',  value: kvNameEffective }
             ], oidcApiEnv)
             // AB#1667 — health probes (HIGH security/reliability finding)
             // Probe endpoints defined in design/observability/health-check-contract.md
