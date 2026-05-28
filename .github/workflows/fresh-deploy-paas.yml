@@ -1,0 +1,148 @@
+name: Fresh Deploy — PaaS Smoke
+# AB#2350 — manual gate: provision a throwaway PaaS RG from main.bicep + run the unified
+# smoke test against the fresh stack. Drift fails CI. Designed for operator-triggered
+# pre-release validation, not every push.
+#
+# Inputs come from GitHub Organisation Variables + Secrets so nothing is hardcoded:
+#   vars:    AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, FRESH_DEPLOY_LOCATION (default centralus)
+#   secrets: AZURE_FEDERATED_CLIENT_ID (OIDC workload-identity federation for this repo)
+#
+# Reference: design/cicd/fresh-deploy-ci-gates.md (cloudsmith-internal)
+
+on:
+  workflow_dispatch:
+    inputs:
+      suffix:
+        description: 'Unique suffix for the throwaway RG (e.g. preflight-001). Lowercase, alphanumeric.'
+        required: true
+        type: string
+      image_tag:
+        description: 'Image tag for both API and portal (use SHAs in stage/prod, "main" or "latest" for dev).'
+        required: true
+        default: 'latest'
+        type: string
+      keep_on_failure:
+        description: 'Skip RG cleanup if the deploy fails (so you can inspect the broken state).'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write   # for federated OIDC login
+  contents: read
+
+env:
+  AZURE_LOCATION:     ${{ vars.FRESH_DEPLOY_LOCATION || 'centralus' }}
+  RG_NAME:            rg-cs-preflight-${{ inputs.suffix }}
+  DEPLOYMENT_NAME:    fresh-deploy-${{ github.run_id }}-${{ inputs.suffix }}
+
+jobs:
+  fresh-deploy:
+    name: Provision + smoke + cleanup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (workload identity federation)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_FEDERATED_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate Bicep
+        run: az bicep build --file iac/main.bicep --stdout > /dev/null
+
+      - name: Generate ephemeral secrets
+        id: secrets
+        run: |
+          PG_PWD="Cs!$(openssl rand -hex 12)9z"
+          MASTER_KEY=$(openssl rand -base64 32)
+          echo "::add-mask::$PG_PWD"
+          echo "::add-mask::$MASTER_KEY"
+          echo "pg_pwd=$PG_PWD"           >> $GITHUB_OUTPUT
+          echo "master_key=$MASTER_KEY"   >> $GITHUB_OUTPUT
+
+      - name: Render parameters file
+        run: |
+          cat > /tmp/preflight.parameters.json <<EOF
+          {
+            "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {
+              "location":        { "value": "${AZURE_LOCATION}" },
+              "environment":     { "value": "test" },
+              "instance":        { "value": "001" },
+              "resourceGroupName": { "value": "${RG_NAME}" },
+              "commonTags": {
+                "value": {
+                  "Environment":        "test",
+                  "Workload":           "cloudsmith",
+                  "CostCenter":         "Preflight",
+                  "Owner":              "ci-preflight@cloudsmith.cloud",
+                  "BusinessUnit":       "Engineering",
+                  "DataClassification": "Internal",
+                  "Criticality":        "Low"
+                }
+              },
+              "apiImageTag":            { "value": "${{ inputs.image_tag }}" },
+              "portalImageTag":         { "value": "${{ inputs.image_tag }}" },
+              "postgresAdminUser":      { "value": "cloudsmith" },
+              "postgresAdminPassword":  { "value": "${{ steps.secrets.outputs.pg_pwd }}" },
+              "masterKey":              { "value": "${{ steps.secrets.outputs.master_key }}" },
+              "entraTenantId":          { "value": "" },
+              "entraClientId":          { "value": "" },
+              "entraClientSecret":      { "value": "" },
+              "monthlyBudgetUSD":       { "value": 0 }
+            }
+          }
+          EOF
+
+      - name: Deploy
+        id: deploy
+        run: |
+          set -e
+          az deployment sub create \
+            --name "${DEPLOYMENT_NAME}" \
+            --location "${AZURE_LOCATION}" \
+            --template-file iac/main.bicep \
+            --parameters @/tmp/preflight.parameters.json \
+            --query "properties.outputs" -o json > /tmp/outputs.json
+          API_URL=$(jq -r '.apI_URL.value'    /tmp/outputs.json)
+          PORTAL_URL=$(jq -r '.portaL_URL.value' /tmp/outputs.json)
+          KV_NAME=$(jq -r '.keY_VAULT_NAME.value' /tmp/outputs.json)
+          echo "api_url=$API_URL"       >> $GITHUB_OUTPUT
+          echo "portal_url=$PORTAL_URL" >> $GITHUB_OUTPUT
+          echo "kv_name=$KV_NAME"       >> $GITHUB_OUTPUT
+
+      - name: Run unified smoke test
+        env:
+          BASE_API_URL:    ${{ steps.deploy.outputs.api_url }}
+          BASE_PORTAL_URL: ${{ steps.deploy.outputs.portal_url }}
+          KV_NAME:         ${{ steps.deploy.outputs.kv_name }}
+        run: |
+          # Health probes + setup-status pre-wizard checks.
+          # The full unified suite lives in cloudsmith-tests (AB#2353) — until that
+          # ships this gate runs the inline pre-setup smoke.
+          set -e
+          for url in "${BASE_API_URL}/health/ready" "${BASE_API_URL}/health/live" "${BASE_PORTAL_URL}/" "${BASE_PORTAL_URL}/login" "${BASE_PORTAL_URL}/setup"; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+            if [ "$code" != "200" ]; then echo "::error::$url returned $code"; exit 1; fi
+            echo "  PASS $url"
+          done
+          # Setup gate: clusters returns 409 pre-setup
+          code=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_API_URL}/api/v1/clusters")
+          if [ "$code" != "409" ]; then echo "::error::pre-setup gate broken (expected 409, got $code)"; exit 1; fi
+          echo "  PASS pre-setup gate (clusters -> 409)"
+          # Token retrievable from KV
+          if ! az keyvault secret show --vault-name "$KV_NAME" --name cloudsmith-initial-admin-token --query value -o tsv > /dev/null 2>&1; then
+            echo "::warning::initial admin token not yet in KV — bootstrap may still be starting"
+          else
+            echo "  PASS initial admin token retrievable from KV"
+          fi
+
+      - name: Cleanup (delete RG)
+        if: ${{ always() && !(failure() && inputs.keep_on_failure) }}
+        run: |
+          az group delete --name "${RG_NAME}" --yes --no-wait
+          echo "  Deletion initiated for ${RG_NAME}"

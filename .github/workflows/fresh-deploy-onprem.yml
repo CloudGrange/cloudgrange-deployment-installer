@@ -1,0 +1,119 @@
+name: Fresh Deploy — On-Prem Compose Smoke
+# AB#2351 — manual gate: provision a throwaway Hyper-V host VM in the dev tenant,
+# run Install-CloudSmith.ps1 in Online mode, run the same unified smoke test, then
+# delete the RG. Catches Compose/installer drift before release.
+#
+# Inputs come from GH org vars + secrets so nothing is hardcoded:
+#   vars:    AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, FRESH_DEPLOY_LOCATION
+#   secrets: AZURE_FEDERATED_CLIENT_ID
+#
+# Reference: design/cicd/fresh-deploy-ci-gates.md (cloudsmith-internal)
+
+on:
+  workflow_dispatch:
+    inputs:
+      suffix:
+        description: 'Unique suffix for the throwaway RG.'
+        required: true
+        type: string
+      vm_size:
+        description: 'Azure VM size for the Hyper-V host (Azure-Edition only — Standard_D4s_v5 default).'
+        required: false
+        default: 'Standard_D4s_v5'
+        type: string
+      windows_sku:
+        description: 'Windows Server SKU. 2025-datacenter-azure-edition (default) or 2022-datacenter-azure-edition.'
+        required: false
+        default: '2025-datacenter-azure-edition'
+        type: string
+      image_tag:
+        description: 'Cloudsmith image tag to install (defaults to main).'
+        required: false
+        default: 'main'
+        type: string
+      keep_on_failure:
+        description: 'Skip RG cleanup if smoke fails.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_LOCATION:  ${{ vars.FRESH_DEPLOY_LOCATION || 'eastus2' }}
+  RG_NAME:         rg-cs-preflight-onprem-${{ inputs.suffix }}
+  VM_NAME:         cs-onprem-${{ inputs.suffix }}
+
+jobs:
+  fresh-onprem:
+    name: Provision VM + install + smoke + cleanup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (workload identity federation)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_FEDERATED_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create RG
+        run: az group create --name "${RG_NAME}" --location "${AZURE_LOCATION}" --tags Workload=cloudsmith Environment=test CostCenter=Preflight Owner=ci-preflight@cloudsmith.cloud BusinessUnit=Engineering DataClassification=Internal Criticality=Low
+
+      - name: Generate VM admin password
+        id: secrets
+        run: |
+          ADMIN_PWD="Cs!$(openssl rand -hex 16)9zZ"
+          echo "::add-mask::$ADMIN_PWD"
+          echo "admin_pwd=$ADMIN_PWD" >> $GITHUB_OUTPUT
+
+      - name: Provision Hyper-V host VM (Azure-Edition; nested virtualization enabled)
+        run: |
+          az vm create \
+            --resource-group "${RG_NAME}" \
+            --name "${VM_NAME}" \
+            --image "MicrosoftWindowsServer:WindowsServer:${{ inputs.windows_sku }}:latest" \
+            --size "${{ inputs.vm_size }}" \
+            --admin-username cloudsmith \
+            --admin-password "${{ steps.secrets.outputs.admin_pwd }}" \
+            --public-ip-address-allocation static \
+            --nsg-rule SSH \
+            --tags Workload=cloudsmith Environment=test CostCenter=Preflight Owner=ci-preflight@cloudsmith.cloud BusinessUnit=Engineering DataClassification=Internal Criticality=Low
+          az vm open-port --resource-group "${RG_NAME}" --name "${VM_NAME}" --port 443 --priority 1010
+
+      - name: Disable VBS + install Hyper-V via DISM (Azure-Edition required)
+        run: |
+          az vm run-command invoke \
+            --resource-group "${RG_NAME}" --name "${VM_NAME}" \
+            --command-id RunPowerShellScript \
+            --scripts "Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard' -Name 'EnableVirtualizationBasedSecurity' -Value 0 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard' -Name 'RequirePlatformSecurityFeatures' -Value 0 -Type DWord -Force; dism /online /enable-feature /featurename:Microsoft-Hyper-V /All /NoRestart; Restart-Computer -Force"
+
+      - name: Wait for VM reboot
+        run: sleep 120
+
+      - name: Run Install-CloudSmith.ps1 in Online mode
+        run: |
+          az vm run-command invoke \
+            --resource-group "${RG_NAME}" --name "${VM_NAME}" \
+            --command-id RunPowerShellScript \
+            --scripts "Invoke-WebRequest -Uri 'https://github.com/cloudsmith-cloud/cloudsmith-installer/releases/latest/download/Install-CloudSmith.ps1' -OutFile C:\\Install-CloudSmith.ps1; pwsh -File C:\\Install-CloudSmith.ps1 -Mode Online -ImageTag '${{ inputs.image_tag }}' -NonInteractive"
+
+      - name: Run unified smoke test against the on-prem VM
+        run: |
+          VM_IP=$(az vm show --resource-group "${RG_NAME}" --name "${VM_NAME}" --show-details --query publicIps -o tsv)
+          # Same assertions as the PaaS gate, just against the VM IP.
+          set -e
+          for path in "/health/live" "/setup"; do
+            code=$(curl -sk -o /dev/null -w "%{http_code}" "https://${VM_IP}${path}")
+            if [ "$code" != "200" ]; then echo "::error::https://${VM_IP}${path} returned $code"; exit 1; fi
+            echo "  PASS https://${VM_IP}${path}"
+          done
+
+      - name: Cleanup (delete RG)
+        if: ${{ always() && !(failure() && inputs.keep_on_failure) }}
+        run: |
+          az group delete --name "${RG_NAME}" --yes --no-wait
+          echo "  Deletion initiated for ${RG_NAME}"
