@@ -99,7 +99,9 @@ function Invoke-CloudSmithInstall {
     $useWsl2 = $false
 
     # PS7 does not auto-import the Hyper-V module — explicit import required.
-    Import-Module Hyper-V -ErrorAction SilentlyContinue
+    # -UseWindowsPowerShell is needed because Hyper-V module cmdlets use .NET Framework COM
+    # underpinnings that don't load directly into PS7's .NET Core runtime.
+    Import-Module Hyper-V -UseWindowsPowerShell -ErrorAction SilentlyContinue
 
     # Nested virtualization check — required when this host is itself a virtual machine (AB#1581)
     Write-Progress-Step "Checking nested virtualization support"
