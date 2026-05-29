@@ -68,7 +68,7 @@ if [ -n "$PROXY" ]; then
     systemctl daemon-reload
     systemctl restart docker
 fi
-
+exit 0
 '@
 
     # Substitute the proxy placeholder safely (single-quoted in bash, so no shell expansion risk).
