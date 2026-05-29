@@ -57,8 +57,11 @@ param commonTags object
 @description('Auto-injected tags (ManagedBy, DeployedAt). Applied to every resource.')
 param autoTags object
 
+// AB#2380 — default changed from 'latest' to 'main'. 'latest' is an unstable tag that
+// floats unpredictably; 'main' always resolves to the most recent main-branch image.
+// CI must always pass an explicit SHA or semver tag for stage/prod deploys.
 @description('Default container image tag. Used for API and portal unless overridden.')
-param imageTag string = 'latest'
+param imageTag string = 'main'
 
 @description('Optional override for the API image tag. Empty = use imageTag.')
 param apiImageTag string = ''
@@ -153,6 +156,14 @@ param entraClientId string = ''
 
 @secure()
 param entraClientSecret string = ''
+
+// AB#2379 — authority base URL is now a parameter so operators targeting sovereign clouds
+// (Azure Government, Azure China, etc.) can override the default public cloud endpoint.
+// Default: https://login.microsoftonline.com  (Azure Public Cloud)
+// GovCloud: https://login.microsoftonline.us
+// China:    https://login.partner.microsoftonline.cn
+@description('Entra authority base URL. Override for sovereign clouds (GovCloud, China). Default = https://login.microsoftonline.com.')
+param entraAuthorityBase string = 'https://login.microsoftonline.com'
 
 @description('GHCR username. Empty = images public (ADR-046).')
 param ghcrUsername string = ''
@@ -289,7 +300,11 @@ var apiImage    = 'ghcr.io/cloudsmith-cloud/cloudsmith-api:${_apiImageTagEff}'
 var portalImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-portal:${_portalImageTagEff}'
 var pgFqdn = '${postgresServerNameEffective}.postgres.database.azure.com'
 var oidcPreseed = !empty(entraClientId)
-var entraAuthority = empty(entraTenantId) ? '' : 'https://login.microsoftonline.com/${entraTenantId}/v2.0'
+// AB#2379 — use entraAuthorityBase parameter instead of hardcoded public cloud URL.
+// Trailing slash is stripped from the base before appending tenant path, so both
+// 'https://login.microsoftonline.com' and 'https://login.microsoftonline.com/' work.
+var _entraAuthorityBase = endsWith(entraAuthorityBase, '/') ? substring(entraAuthorityBase, 0, length(entraAuthorityBase) - 1) : entraAuthorityBase
+var entraAuthority = empty(entraTenantId) ? '' : '${_entraAuthorityBase}/${entraTenantId}/v2.0'
 var oidcApiEnv = oidcPreseed ? [
   { name: 'Keycloak__Authority', value: entraAuthority }
   { name: 'Keycloak__ClientId', value: entraClientId }
@@ -306,6 +321,15 @@ var pgPasswordSecretName = 'cs-${environment}-core-db-password'
 
 // H1 security remediation — KV secret name for the AES-256 master key.
 var masterKeySecretName = 'cloudsmith-master-key'
+
+// AB#2374 — KV secret name for the Entra/AAD OIDC client secret.
+// Stored in KV at deploy time; ACA references via keyVaultUrl — never as plaintext env var.
+var entraClientSecretName = 'cloudsmith-entra-client-secret'
+
+// AB#2375 — KV secret name for the Application Insights connection string.
+// Connection strings contain the instrumentation key and are treated as sensitive.
+// Stored in KV at deploy time; ACA references via keyVaultUrl — never as plaintext env var.
+var appInsightsSecretName = 'cloudsmith-appinsights-connection-string'
 
 // KV DNS suffix — use az.environment() to ensure compatibility across sovereign clouds (no-hardcoded-env-urls)
 var kvDnsSuffix = az.environment().suffixes.keyvaultDns
@@ -548,6 +572,31 @@ resource masterKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (em
   }
 }
 
+// AB#2374 — Write the Entra/AAD OIDC client secret to Key Vault at deploy time.
+// Only written when OIDC pre-seed is active (entraClientId non-empty).
+// ACA references this secret via keyVaultUrl — never as a plaintext env-var value.
+// The @secure() parameter on entraClientSecret prevents the value appearing in ARM logs.
+resource entraClientSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId) && oidcPreseed) {
+  parent: newKv
+  name: entraClientSecretName
+  properties: {
+    value: entraClientSecret
+    attributes: { enabled: true }
+  }
+}
+
+// AB#2375 — Write the Application Insights connection string to Key Vault at deploy time.
+// Connection strings contain the instrumentation key and are treated as sensitive.
+// ACA references this secret via keyVaultUrl — never as a plaintext env-var value.
+resource appInsightsSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: appInsightsSecretName
+  properties: {
+    value: appiConnectionString
+    attributes: { enabled: true }
+  }
+}
+
 // AB#1668 — KV diagnostic settings → LAW (MEDIUM security finding)
 // Logs all AuditEvent (secret get/set/delete) to Log Analytics for 90-day retention.
 resource kvDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (empty(byoKvId)) {
@@ -575,6 +624,10 @@ var kvNameEffective = empty(byoKvId) ? newKv.name : existingKv.name
 var pgPasswordSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${pgPasswordSecretName}'
 // H1 — KV secret URI for the AES-256 master key ACA secret reference
 var masterKeySecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${masterKeySecretName}'
+// AB#2374 — KV secret URI for the Entra OIDC client secret ACA secret reference
+var entraClientSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${entraClientSecretName}'
+// AB#2375 — KV secret URI for the App Insights connection string ACA secret reference
+var appInsightsSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${appInsightsSecretName}'
 
 // =============================================================================
 // PostgreSQL Flexible Server (always created — workload-specific)
@@ -743,7 +796,9 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       registries: registries
       // AB#1600 — ACA secrets: PG password referenced via KV URI (not plaintext value)
       // H1   — ACA secrets: master key referenced via KV URI (not plaintext value)
-      // The managed identity (miId) must hold Key Vault Secrets User role on the KV.
+      // AB#2374 — ACA secrets: Entra client secret referenced via KV URI (not plaintext value)
+      // AB#2375 — ACA secrets: App Insights connection string referenced via KV URI (not plaintext value)
+      // The managed identity (miId) must hold Key Vault Secrets Officer role on the KV.
       secrets: concat(
         [
           {
@@ -758,8 +813,16 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             keyVaultUrl: masterKeySecretUri
             identity: miId
           }
+          // AB#2375 — App Insights connection string KV secret reference.
+          // Connection strings contain the instrumentation key — treat as sensitive.
+          {
+            name: 'appinsights-connection-string'
+            keyVaultUrl: appInsightsSecretUri
+            identity: miId
+          }
         ],
-        oidcPreseed ? [ { name: 'entra-client-secret', value: entraClientSecret } ] : [],
+        // AB#2374 — Entra client secret stored in KV; referenced via keyVaultUrl (not inline value).
+        oidcPreseed ? [ { name: 'entra-client-secret', keyVaultUrl: entraClientSecretUri, identity: miId } ] : [],
         imagesArePrivate ? [ { name: 'ghcr-token', value: ghcrToken } ] : []
       )
     }
@@ -778,7 +841,9 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'ConnectionStrings__DefaultHost', value: dbHost }
               { name: 'ConnectionStrings__DefaultDatabase', value: postgresDatabaseName }
               { name: 'ConnectionStrings__DefaultUser', value: postgresAdminUser }
-              { name: 'ApplicationInsights__ConnectionString', value: appiConnectionString }
+              // AB#2375 — App Insights connection string injected via KV secret reference.
+              // Connection strings contain the instrumentation key and must not be plaintext.
+              { name: 'ApplicationInsights__ConnectionString', secretRef: 'appinsights-connection-string' }
               { name: 'AZURE_CLIENT_ID', value: miClientId }
               { name: 'Monitoring__Endpoints__1__HealthUrl', value: 'https://${portalAppNameEffective}.${caeDomain}' }
               // AMW env vars — used by AzureMonitorBackend (IMetricsBackend, ADR-016).
@@ -847,7 +912,9 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
-  dependsOn: [ pgPasswordSecret, masterKeySecret, kvRoleAssignNew ]
+  // AB#2374/2375 — also depend on the Entra client secret + App Insights secret writes to KV
+  // so the KV references resolve before ACA revision activation.
+  dependsOn: [ pgPasswordSecret, masterKeySecret, appInsightsSecret, kvRoleAssignNew ]
 }
 
 // =============================================================================

@@ -194,6 +194,14 @@ param entraClientId string = ''
 @description('Optional Entra client secret. Empty when first-run wizard is used.')
 param entraClientSecret string = ''
 
+// AB#2379 — authority base URL parameter so operators targeting sovereign clouds
+// (Azure Government, Azure China) can override the public cloud default.
+// Default: https://login.microsoftonline.com (Azure Public Cloud)
+// GovCloud: https://login.microsoftonline.us
+// China:    https://login.partner.microsoftonline.cn
+@description('Entra authority base URL. Override for sovereign clouds. Default = https://login.microsoftonline.com.')
+param entraAuthorityBase string = 'https://login.microsoftonline.com'
+
 @description('GHCR username for private image pull. Empty when images are public (ADR-046).')
 param ghcrUsername string = ''
 
@@ -458,6 +466,7 @@ module resources 'resources.bicep' = {
     entraTenantId: entraTenantId
     entraClientId: entraClientId
     entraClientSecret: entraClientSecret
+    entraAuthorityBase: entraAuthorityBase
     ghcrUsername: ghcrUsername
     ghcrToken: ghcrToken
     masterKey: masterKey

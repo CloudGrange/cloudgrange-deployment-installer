@@ -89,11 +89,14 @@ jobs:
           # once a CI service principal with Reader + Policy Reader roles is provisioned.
           # For now, emit the policy definition IDs that will be assigned so they are
           # visible in CI output and can be cross-referenced manually.
+          # AB#2381 — policy ID 24fde369-2374-4b4c-a418-b4d97d0b0cef (PG infrastructure encryption)
+          # removed: this definition does not exist in the Azure built-in policy catalog.
+          # PG Flexible Server uses Microsoft-managed key encryption on by default;
+          # CMK encryption is a Phase V enhancement (tracked separately).
           $policyIds = @(
             '5ff38825-c5d8-47c5-b70e-069a21955146',  # KV key expiry
             '55615ac9-af46-4a59-874e-391cc3dfb490',  # KV firewall
             'c9299215-ae47-4f50-9c54-8a392f68a052',  # PG public access
-            '24fde369-2374-4b4c-a418-b4d97d0b0cef',  # PG infrastructure encryption
             '871b6d14-10aa-478d-b590-94f262ecfa99'   # Require tag on resources
           )
           Write-Host "Azure Policy definitions referenced in main.bicep:"
