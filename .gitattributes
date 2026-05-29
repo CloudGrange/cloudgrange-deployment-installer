@@ -1,0 +1,9 @@
+# Force LF line endings for all PowerShell files so SHA-256 manifests remain
+# consistent across Windows clone, GitHub raw download, and bundle extraction.
+* text=auto eol=lf
+*.ps1 text eol=lf
+*.sha256 text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
