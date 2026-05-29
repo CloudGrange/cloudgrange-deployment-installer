@@ -295,6 +295,27 @@ param portalCustomDomain string = ''
 param apiCustomDomain string = ''
 
 // =============================================================================
+// Deployment authentication (AB#2412)
+// =============================================================================
+
+// Option A: Interactive deploy — the deploying user authenticates with az login.
+//   Requires Contributor + Role Based Access Control Administrator (or Owner) on
+//   the target subscription. No extra parameters needed.
+//
+// Option B: Pre-created User-Assigned Managed Identity (enterprise / CI-CD).
+//   A privileged administrator creates the UAMI once and assigns it the required
+//   roles. Operators deploy from a resource (Cloud Shell, VM, GitHub Actions /
+//   Azure DevOps with Workload Identity Federation) that has the UAMI attached.
+//   azd picks up the identity automatically via DefaultAzureCredential.
+//   Supply the resource ID here as a record of which identity is authorised.
+//
+// This parameter is SEPARATE from the runtime UAMI created for the ACA apps
+// (API → Key Vault, API → PostgreSQL). That identity is always provisioned by
+// the resources module and is referenced via managedIdentityName / bringYourOwn.
+@description('Optional resource ID of a pre-existing User-Assigned Managed Identity used to authenticate this deployment (Method B). Empty = interactive az login (Method A). This identity must hold Contributor + Role Based Access Control Administrator on the target subscription. It is not used at runtime — runtime identity is the workload UAMI created by the resources module.')
+param deploymentManagedIdentityId string = ''
+
+// =============================================================================
 // Bring-your-own (ADR-048) — supply resource IDs to skip creation and reuse
 // =============================================================================
 

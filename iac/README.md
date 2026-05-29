@@ -70,40 +70,105 @@ the server for Entra-only once the API's MI DB connection is verified
   PAT). Once the images are **public** (ADR-046), leave both empty and the
   registry credential block is omitted automatically.
 
-## Required Azure Permissions
+## Deployment Authentication
 
-To deploy CloudSmith PaaS you need the following on the **target Azure
-subscription**:
+Two deployment authentication methods are supported. Choose the one that fits
+your environment.
 
-- **Contributor** — to create resources (resource group, ACA, Key Vault,
-  PostgreSQL, etc.)
-- **Role Based Access Control Administrator** — to assign the managed identity
-  its built-in roles (Key Vault Secrets Officer, Monitoring Metrics Publisher)
+### Option A — Interactive (personal Azure account)
 
-**Owner** covers both permissions above. Either combination works.
-
-No Azure Active Directory / Entra ID **directory** roles are required. No
-service principal (SPN) or app registration is needed to deploy the platform.
-
-### Authentication
-
-**Interactive deploy (recommended for first-time setup):**
+The deploying user authenticates with their own Azure account. Recommended for
+first-time setup and individual operator deploys.
 
 ```bash
 az login
-azd auth login
+azd up
 ```
 
-**CI/CD pipelines — use Workload Identity Federation (OIDC):**
+**Required permissions on the target Azure subscription:**
 
-Configure a federated credential on a User-Assigned Managed Identity or an
-Entra app registration in your CI environment, then authenticate with:
+- **Contributor** — creates all resources (resource group, ACA, Key Vault,
+  PostgreSQL, etc.)
+- **Role Based Access Control Administrator** — assigns built-in roles to the
+  CloudSmith workload managed identity (Key Vault Secrets Officer, Monitoring
+  Metrics Publisher)
+- **Owner** covers both; either combination works.
+
+No Azure Active Directory / Entra ID directory roles are required. No service
+principal or app registration is needed to deploy the platform.
+
+### Option B — Pre-provisioned Managed Identity (enterprise / CI-CD)
+
+A privileged administrator creates a User-Assigned Managed Identity (UAMI) once
+and assigns it the required subscription roles. Operators then deploy from any
+Azure resource that has the UAMI attached — no personal subscription-level
+rights are needed at deploy time.
+
+The deployment UAMI is **separate** from the workload UAMI that the ACA apps use
+at runtime (API → Key Vault, API → PostgreSQL). The workload UAMI is always
+created by the Bicep templates. The deployment UAMI is pre-created by an admin
+and never modified by CloudSmith.
+
+**One-time admin setup (run as Owner or User Access Admin):**
 
 ```bash
-azd auth login --client-id <client-id> --tenant-id <tenant-id> --federated-credential-provider github
+# Create the deployment identity
+az identity create \
+  --name id-cloudsmith-deploy \
+  --resource-group rg-your-platform \
+  --location eastus
+
+MI_PRINCIPAL=$(az identity show \
+  --name id-cloudsmith-deploy \
+  --resource-group rg-your-platform \
+  --query principalId -o tsv)
+
+SUB_ID=$(az account show --query id -o tsv)
+
+# Assign required roles on the target subscription
+az role assignment create \
+  --assignee "$MI_PRINCIPAL" \
+  --role "Contributor" \
+  --scope "/subscriptions/$SUB_ID"
+
+az role assignment create \
+  --assignee "$MI_PRINCIPAL" \
+  --role "Role Based Access Control Administrator" \
+  --scope "/subscriptions/$SUB_ID"
 ```
 
-No service principal client secret is needed when using OIDC federation.
+**Deploy (as any operator):**
+
+Deploy from a resource that has the UAMI attached. `azd` picks up the identity
+automatically via DefaultAzureCredential — no `az login` required.
+
+| Deploy surface | How the UAMI is attached |
+|---|---|
+| Azure Cloud Shell | Attach the UAMI to your Cloud Shell storage account's identity |
+| Azure VM / VMSS | Assign the UAMI to the VM at creation or via `az vm identity assign` |
+| GitHub Actions | Workload Identity Federation — federate the UAMI to the GitHub Actions OIDC token |
+| Azure DevOps | Workload Identity Federation — federate the UAMI to the ADO service connection OIDC token |
+
+For GitHub Actions / Azure DevOps pipelines using Workload Identity Federation:
+
+```bash
+azd auth login --federated-credential-provider github   # GitHub Actions
+azd auth login --federated-credential-provider azuredevops  # Azure DevOps
+azd up
+```
+
+**Record the deployment identity in your parameters file:**
+
+Uncomment and populate the `deploymentManagedIdentityId` field in
+`main.parameters.json` to record which UAMI is authorised for this deployment.
+This field has no effect on provisioned resources — it serves as operational
+documentation and a reference for audit tooling.
+
+```json
+"deploymentManagedIdentityId": {
+  "value": "/subscriptions/<sub-id>/resourceGroups/rg-your-platform/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-cloudsmith-deploy"
+}
+```
 
 ## Deploy
 

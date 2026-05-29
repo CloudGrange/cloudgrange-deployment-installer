@@ -153,6 +153,9 @@
         "keyVaultId": "",
         "containerAppsEnvironmentId": ""
       }
-    }
+    },
+
+    "_deploymentManagedIdentityId_comment": "Method B (enterprise/CI-CD): uncomment deploymentManagedIdentityId and set to your pre-created deployment UAMI resource ID. Leave absent for Method A (interactive az login). See iac/README.md — Deployment Authentication.",
+    "_deploymentManagedIdentityId_example": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-your-platform/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-cloudsmith-deploy"
   }
 }
