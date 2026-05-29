@@ -133,10 +133,9 @@ foreach (`$f in @('$($composeFiles -join "','")')) {
 Write-Host "Scripts downloaded."
 
 # Register scheduled task to run installer as $AdminUser (not SYSTEM)
-`$taskArg = "-NonInteractive -ExecutionPolicy Bypass -File `"$installDir\Install-CloudSmith.ps1`" -Mode $Mode -VmIp 192.168.100.10 -AcceptDefaults *> `"$logPath`" 2>&1"
-`$action    = New-ScheduledTaskAction -Execute `$pwshPath -Argument `$taskArg
-`$principal = New-ScheduledTaskPrincipal -UserId '.\$AdminUser' -LogonType Password -RunLevel Highest
-Register-ScheduledTask -TaskName 'CloudSmithInstall' -Action `$action -Principal `$principal -Password `$AdminPassword -Force | Out-Null
+`$taskArg = "-NonInteractive -ExecutionPolicy Bypass -Command & '$installDir\Install-CloudSmith.ps1' -Mode $Mode -VmIp 192.168.100.10 -AcceptDefaults *> '$logPath'"
+`$action = New-ScheduledTaskAction -Execute `$pwshPath -Argument `$taskArg
+Register-ScheduledTask -TaskName 'CloudSmithInstall' -Action `$action -User '.\$AdminUser' -Password `$AdminPassword -RunLevel Highest -Force | Out-Null
 Write-Host "Starting installer as $AdminUser..."
 Start-ScheduledTask -TaskName 'CloudSmithInstall'
 
