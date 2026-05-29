@@ -51,41 +51,46 @@ docker compose up -d
 # --- AB#1590 Step 1: Wait up to 60s for all services to be running ---
 echo "Verifying all services are running (timeout: 60s)..."
 TIMEOUT=60; ELAPSED=0; VERIFY_OK=false
-while [ \$ELAPSED -lt \$TIMEOUT ]; do
+while [ `$ELAPSED -lt `$TIMEOUT ]; do
     # docker compose ps --format json emits one JSON object per line (Compose v2).
     # A service is considered running when State == "running".
     NOT_RUNNING=`$(docker compose ps --format json 2>/dev/null \
         | jq -r 'select(.State != "running") | .Name' 2>/dev/null || true)
-    if [ -z "\$NOT_RUNNING" ]; then
+    if [ -z "`$NOT_RUNNING" ]; then
         VERIFY_OK=true
         break
     fi
     sleep 5; ELAPSED=`$((ELAPSED+5))
 done
 
-if [ "\$VERIFY_OK" != "true" ]; then
+if [ "`$VERIFY_OK" != "true" ]; then
     echo ""
-    echo "ERROR: The following services are not running after \${TIMEOUT}s:"
+    echo "ERROR: The following services are not running after `${TIMEOUT}s:"
     docker compose ps --format json 2>/dev/null \
         | jq -r 'select(.State != "running") | "  " + .Name + " — " + .State' 2>/dev/null || docker compose ps
     echo ""
     docker compose logs --tail=50 2>&1 || true
     exit 1
 fi
-echo "All services are running. Elapsed: \${ELAPSED}s"
+echo "All services are running. Elapsed: `${ELAPSED}s"
 
 # --- AB#1590 Step 2: Verify every service has restart: always ---
 echo "Verifying restart policies..."
 MISSING_RESTART=`$(docker compose ps -q 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' 2>/dev/null \
     | grep -v 'always' | sed 's|^/||' || true)
-if [ -n "\$MISSING_RESTART" ]; then
+if [ -n "`$MISSING_RESTART" ]; then
     echo "WARNING: The following services do not have restart:always:"
-    echo "\$MISSING_RESTART"
+    echo "`$MISSING_RESTART"
     # Non-fatal warning — compose definition is authoritative; running containers
     # may temporarily show a different policy during first start.
 fi
 echo "Restart policy check complete."
+exit 0
 "@
+
+    # Strip CR bytes — PS here-strings on Windows embed CRLF; bash rejects \r in set -euo pipefail scripts.
+    $deployBytes = [System.Text.Encoding]::UTF8.GetBytes($bashDeploy)
+    $deployBytes = [byte[]]($deployBytes | Where-Object { $_ -ne 13 })
 
     if ($UseWsl2) {
         $wslPath = "/opt/cloudsmith"
@@ -128,10 +133,25 @@ echo "Restart policy check complete."
         . "$PSScriptRoot\..\New-SelfSignedCert.ps1"
         New-SelfSignedCert -VmIp $VmIp -SshKeyPath $SshKeyPath
 
-        # Run the deploy script.
-        $bashDeploy | & ssh.exe @sshOpts $sshTarget 'sudo bash -s'
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Docker Compose deploy via SSH failed (exit $LASTEXITCODE)."
+        # Run the deploy script — write raw bytes to SSH stdin to prevent PowerShell
+        # StreamWriter.WriteLine() from appending \r\n and corrupting the last bash command.
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = 'ssh.exe'
+        foreach ($arg in $sshOpts) { $psi.ArgumentList.Add($arg) }
+        $psi.ArgumentList.Add($sshTarget)
+        $psi.ArgumentList.Add('sudo')
+        $psi.ArgumentList.Add('bash')
+        $psi.ArgumentList.Add('-s')
+        $psi.RedirectStandardInput = $true
+        $psi.UseShellExecute = $false
+        $deployProc = [System.Diagnostics.Process]::new()
+        $deployProc.StartInfo = $psi
+        $deployProc.Start() | Out-Null
+        $deployProc.StandardInput.BaseStream.Write($deployBytes, 0, $deployBytes.Length)
+        $deployProc.StandardInput.Close()
+        $deployProc.WaitForExit()
+        if ($deployProc.ExitCode -ne 0) {
+            Write-Error "Docker Compose deploy via SSH failed (exit $($deployProc.ExitCode))."
         }
     } else {
         if ($null -eq $Credential) {
