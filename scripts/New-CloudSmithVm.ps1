@@ -156,28 +156,21 @@ function New-CloudSmithVm {
             Write-Error "qemu-img is still missing after bootstrap. Aborting."
         }
     }
+    # Resize the source qcow2 image to 30 GB BEFORE converting to VHDX.
+    # qemu-img resize supports qcow2/raw but not VHDX subformat=dynamic.
+    # Resize-VHD and diskpart both fail post-conversion in SYSTEM context.
+    # The resulting VHDX will have a 30 GB virtual disk; cloud-init growpart
+    # expands the root partition to fill it on first boot.
+    # The source .img is safe to resize in place — it is re-downloaded when
+    # the Canonical SHA256SUM check fails, so the mutated size is transient.
+    Write-Host "  Expanding source image to 30 GB before conversion..."
+    & $qemuImg resize $cloudImagePath 30G
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "qemu-img resize of source image failed (exit $LASTEXITCODE)."
+    }
+
     Write-Host "  Converting cloud image to VHDX..."
     & $qemuImg convert -f qcow2 -O vhdx -o subformat=dynamic $cloudImagePath $VhdxPath
-
-    # Expand the VHDX to 30 GB before first boot so cloud-init's growpart module
-    # fills the root partition to the full size. The raw Ubuntu cloud image is ~3.5 GB
-    # which is far too small for Docker CE + compose plugin + container images.
-    # Use diskpart (not Resize-VHD or qemu-img resize): Resize-VHD fails on a freshly-
-    # converted dynamic VHDX in SYSTEM context; qemu-img resize does not support VHDX format.
-    # diskpart /s is reliable in SYSTEM context and supports both VHD and VHDX.
-    Write-Host "  Expanding VHDX to 30 GB..."
-    $dpScript = Join-Path $env:TEMP 'cloudsmith-expand-vhdx.txt'
-    @"
-select vdisk file="$VhdxPath"
-expand vdisk maximum=30720
-exit
-"@ | Set-Content -Path $dpScript -Encoding ASCII
-    $dpResult = & diskpart /s $dpScript 2>&1
-    Remove-Item $dpScript -Force -ErrorAction SilentlyContinue
-    if ($dpResult -match 'error|failed|not found' -and $dpResult -notmatch 'successfully') {
-        Write-Error "diskpart expand failed: $dpResult"
-    }
-    Write-Host "  VHDX expanded to 30 GB"
 
     # Clear the NTFS Sparse attribute on the freshly-converted VHDX. Hyper-V
     # Gen2 refuses to power on a sparse VHDX with 0xC03A001A; qemu-img can
