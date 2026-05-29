@@ -34,7 +34,7 @@ function Initialize-CloudSmithPrereqs {
 
     # qemu-img is required to convert the Ubuntu cloud .img to a Hyper-V Gen2 .vhdx.
     if (-not (Get-Command qemu-img.exe -ErrorAction SilentlyContinue)) {
-        Write-Host "  qemu-img not found — installing QEMU for Windows..."
+        Write-Host "  qemu-img not found - installing QEMU for Windows..."
         Install-CloudSmithQemu
     } else {
         Write-Host "  qemu-img: available" -ForegroundColor Green
@@ -109,7 +109,7 @@ function Clear-CloudSmithSparseAttribute {
     )
 
     if (-not (Test-Path $Path)) {
-        Write-Error "Cannot clear sparse attribute — file not found: $Path"
+        Write-Error "Cannot clear sparse attribute - file not found: $Path"
     }
 
     # Get-Item returns System.IO.FileAttributes which may include SparseFile.
@@ -118,7 +118,7 @@ function Clear-CloudSmithSparseAttribute {
         Write-Host "  Clearing NTFS sparse attribute on VHDX..."
         & fsutil sparse setflag $Path 0 | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "fsutil exit code $LASTEXITCODE — VM may fail to start with 0xC03A001A."
+            Write-Warning "fsutil exit code $LASTEXITCODE - VM may fail to start with 0xC03A001A."
         }
     }
 }
@@ -230,6 +230,6 @@ public class ISOFile {
     }
 
     if (-not (Test-Path $OutputIso) -or (Get-Item -LiteralPath $OutputIso).Length -eq 0) {
-        Write-Error "IMAPI2 wrote zero bytes — ISO not produced at $OutputIso."
+        Write-Error "IMAPI2 wrote zero bytes - ISO not produced at $OutputIso."
     }
 }
