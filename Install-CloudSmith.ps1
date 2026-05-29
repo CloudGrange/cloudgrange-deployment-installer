@@ -165,7 +165,22 @@ function Invoke-CloudSmithInstall {
         New-Item -ItemType Directory -Path $sshKeyDir -Force | Out-Null
         $sshKeyPath = Join-Path $sshKeyDir 'installer_ed25519'
         if (Test-Path $sshKeyPath) { Remove-Item $sshKeyPath, "$sshKeyPath.pub" -Force }
-        & ssh-keygen.exe -t ed25519 -f $sshKeyPath -N "" -C "cloudsmith-installer-ephemeral" -q
+        # Use ProcessStartInfo.ArgumentList to reliably pass the empty passphrase.
+        # In PS7.3+ on Windows, the default native arg-passing mode drops empty string
+        # arguments — so `& ssh-keygen -N ""` arrives at the process as `-N -C` (passphrase
+        # becomes the literal string "-C"), producing a passphrase-protected key that SSH
+        # cannot use non-interactively. ProcessStartInfo.ArgumentList builds the argv array
+        # directly via CreateProcess, bypassing PowerShell's marshaling entirely.
+        $sshKeygenExe = (Get-Command ssh-keygen.exe -ErrorAction Stop).Source
+        $psi = New-Object System.Diagnostics.ProcessStartInfo($sshKeygenExe)
+        @('-t', 'ed25519', '-f', $sshKeyPath, '-N', '', '-C', 'cloudsmith-installer-ephemeral', '-q') |
+            ForEach-Object { $psi.ArgumentList.Add($_) }
+        $psi.UseShellExecute = $false
+        $keygen = [System.Diagnostics.Process]::Start($psi)
+        $keygen.WaitForExit()
+        if ($keygen.ExitCode -ne 0) {
+            Write-Error "ssh-keygen exited with code $($keygen.ExitCode). Ensure OpenSSH Client is installed."
+        }
         if (-not (Test-Path $sshKeyPath)) {
             Write-Error "Failed to generate SSH key pair. Ensure OpenSSH Client is installed (ssh-keygen.exe must be in PATH)."
         }
