@@ -26,23 +26,16 @@ function Install-DockerCe {
     # verbatim. The PROXY placeholder is substituted in PowerShell before the script ships.
     $bashTemplate = @'
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
-# Cloud-init runs apt-get update/upgrade on first boot; wait for those locks to clear
-# before attempting any apt operations to avoid "Could not get lock" failures.
-echo "Waiting for apt/dpkg locks to be released..."
-LOCK_WAITED=0
-while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
-    sleep 5
-    LOCK_WAITED=$((LOCK_WAITED + 5))
-    if [ $LOCK_WAITED -ge 300 ]; then
-        echo "ERROR: apt lock not released after 5 minutes" >&2
-        exit 1
-    fi
-done
-echo "apt locks clear (waited ${LOCK_WAITED}s)"
+# Cloud-init runs apt-get update/upgrade on first boot and may hold dpkg locks for
+# several minutes. Add DPkg::Lock::Timeout=300 to every apt-get call so apt waits
+# natively (with retries) rather than failing immediately on a busy lock.
+APT="apt-get -o DPkg::Lock::Timeout=300"
 
-apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg
+echo "Starting Docker CE installation..."
+$APT update -qq
+$APT install -y -qq ca-certificates curl gnupg
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -53,8 +46,8 @@ ARCH=$(dpkg --print-architecture)
 REPO="deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable"
 echo "$REPO" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-apt-get update -qq
-apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+$APT update -qq
+$APT install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 systemctl enable docker
 systemctl start docker
