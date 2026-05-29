@@ -71,7 +71,8 @@ function New-CloudSmithVm {
             Remove-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue
             New-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -IPAddress $hostIp -PrefixLength 24 | Out-Null
         }
-        Write-Host "  Host gateway IP: $(Get-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue | Where-Object { $_.IPAddress -eq $hostIp } | Select-Object -ExpandProperty IPAddress -EA SilentlyContinue)"
+        $assignedIp = (Get-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue | Where-Object { $_.IPAddress -eq $hostIp }).IPAddress
+        Write-Host "  Host gateway IP: $assignedIp"
     } else {
         Write-Warning "  vEthernet ($switchName) adapter not found after 10s — host IP not assigned."
     }
@@ -201,6 +202,10 @@ echo "cloudsmith-runcmd-done $(date)" >> $LOG
     # Substitute the actual IP/gateway into the script
     $netSetupScript = $netSetupScript -replace 'VMIP_PLACEHOLDER', $VmIp -replace 'GWIP_PLACEHOLDER', $vmGateway4
 
+    # Pre-compute indented script block outside here-string to avoid PS5.1 parse issues
+    # with complex ForEach-Object scriptblocks inside $(...)  in double-quoted strings.
+    $netSetupScriptIndented = ($netSetupScript -split "`n" | ForEach-Object { "      $_" }) -join "`n"
+
     $userData = @"
 #cloud-config
 hostname: cloudsmith-docker
@@ -216,7 +221,7 @@ write_files:
   - path: /usr/local/bin/cloudsmith-net-setup.sh
     permissions: '0755'
     content: |
-$(($netSetupScript -split "`n" | ForEach-Object { "      $_" }) -join "`n")
+$netSetupScriptIndented
 runcmd:
   - /usr/local/bin/cloudsmith-net-setup.sh
 "@
