@@ -98,6 +98,9 @@ function Invoke-CloudSmithInstall {
     Write-Host "  Hyper-V: available" -ForegroundColor Green
     $useWsl2 = $false
 
+    # PS7 does not auto-import the Hyper-V module — explicit import required.
+    Import-Module Hyper-V -ErrorAction SilentlyContinue
+
     # Nested virtualization check — required when this host is itself a virtual machine (AB#1581)
     Write-Progress-Step "Checking nested virtualization support"
     $isVm = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
