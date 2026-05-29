@@ -69,8 +69,8 @@ if [ -n "$PROXY" ]; then
     systemctl restart docker
 fi
 
-# Smoke test
-docker run --rm hello-world
+# Verify docker daemon is running (no network needed)
+docker info
 '@
 
     # Substitute the proxy placeholder safely (single-quoted in bash, so no shell expansion risk).
