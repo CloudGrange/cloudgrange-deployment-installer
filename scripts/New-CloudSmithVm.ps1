@@ -159,6 +159,12 @@ function New-CloudSmithVm {
     Write-Host "  Converting cloud image to VHDX..."
     & $qemuImg convert -f qcow2 -O vhdx -o subformat=dynamic $cloudImagePath $VhdxPath
 
+    # Expand the VHDX to 30 GB before first boot so cloud-init's growpart module
+    # fills the root partition to the full size. The raw Ubuntu cloud image is ~3.5 GB
+    # which is far too small for Docker CE + compose plugin + container images.
+    Write-Host "  Expanding VHDX to 30 GB..."
+    Resize-VHD -Path $VhdxPath -SizeBytes 30GB
+
     # Clear the NTFS Sparse attribute on the freshly-converted VHDX. Hyper-V
     # Gen2 refuses to power on a sparse VHDX with 0xC03A001A; qemu-img can
     # leave the file marked sparse on NTFS even when subformat=dynamic.
