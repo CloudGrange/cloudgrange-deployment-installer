@@ -186,7 +186,7 @@ function Invoke-CloudSmithInstall {
             -VmIp $VmIp `
             -VhdxPath $VhdxPath `
             -Mode $Mode `
-            -SshPublicKey $sshPublicKey `
+            -SshPublicKeyFile "$sshKeyPath.pub" `
             -BundledImagePath $bundledUbuntuPath
         if ($LASTEXITCODE -ne 0) {
             Write-Error "CS-INST-ERR-010: VM provisioning failed (exit $LASTEXITCODE). Check Hyper-V event log for details."

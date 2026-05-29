@@ -16,7 +16,10 @@ param(
     [string]$VhdxPath         = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
     [string]$Mode             = 'Online',
     [string]$BundledImagePath = '',
-    [string]$SshPublicKey     = ''
+    [string]$SshPublicKey     = '',
+    # Path to the SSH public key file. Preferred over -SshPublicKey when invoking via
+    # powershell.exe -File to avoid argument-splitting on the space inside the key string.
+    [string]$SshPublicKeyFile = ''
 )
 
 function New-CloudSmithVm {
@@ -333,7 +336,15 @@ ethernets:
 # When invoked directly via powershell.exe -File (not dot-sourced), load dependencies and run.
 # $MyInvocation.InvocationName is '.' when dot-sourced; the script path when run directly.
 if ($MyInvocation.InvocationName -ne '.') {
+    # Resolve the effective SSH public key: prefer reading from a file when -SshPublicKeyFile
+    # is provided, because the key string contains spaces that can be split by the OS
+    # argument parser when passed inline via powershell.exe -File ... -SshPublicKey <key>.
+    $effectiveSshKey = $SshPublicKey
+    if (-not [string]::IsNullOrEmpty($SshPublicKeyFile) -and (Test-Path -LiteralPath $SshPublicKeyFile)) {
+        $effectiveSshKey = (Get-Content -LiteralPath $SshPublicKeyFile -Raw).Trim()
+    }
+
     . "$PSScriptRoot\CloudSmith-Common.ps1"
     New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
-        -SshPublicKey $SshPublicKey -BundledImagePath $BundledImagePath
+        -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath
 }
