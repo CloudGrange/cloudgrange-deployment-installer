@@ -101,9 +101,21 @@ exit 0
             "cloudsmith@$VmIp",
             'sudo', 'bash', '-s'
         )
-        $bashScript | & ssh.exe @sshArgs
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Docker CE installation via SSH failed (exit $LASTEXITCODE)."
+        # Write raw bytes directly to SSH stdin — PowerShell's string pipeline appends
+        # \r\n (Windows [Environment]::NewLine) which corrupts the last bash command.
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = 'ssh.exe'
+        foreach ($arg in $sshArgs) { $psi.ArgumentList.Add($arg) }
+        $psi.RedirectStandardInput = $true
+        $psi.UseShellExecute = $false
+        $sshProc = [System.Diagnostics.Process]::new()
+        $sshProc.StartInfo = $psi
+        $sshProc.Start() | Out-Null
+        $sshProc.StandardInput.BaseStream.Write($bashBytes, 0, $bashBytes.Length)
+        $sshProc.StandardInput.Close()
+        $sshProc.WaitForExit()
+        if ($sshProc.ExitCode -ne 0) {
+            Write-Error "Docker CE installation via SSH failed (exit $($sshProc.ExitCode))."
         }
     } else {
         if ($null -eq $Credential) {
