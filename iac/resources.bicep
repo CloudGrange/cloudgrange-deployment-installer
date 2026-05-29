@@ -897,11 +897,20 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
           ]
           // AB#1667 — portal health probe: TCP liveness on port 80.
           // Portal is nginx serving static files; TCP probe avoids API dependency.
+          // AB#2378 — HTTP readiness probe on / (port 80). nginx returns 200 on /
+          // as soon as it finishes starting; this gates traffic until nginx is ready.
           probes: [
             {
               type: 'Liveness'
               tcpSocket: { port: portalAppTargetPort }
               periodSeconds: 30
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/', port: portalAppTargetPort, scheme: 'HTTP' }
+              initialDelaySeconds: 5
+              periodSeconds: 10
               failureThreshold: 3
             }
           ]
