@@ -195,25 +195,30 @@ function New-CiDataIso {
     # inside a small C# helper so the call goes through the typed interface
     # vtable rather than __ComObject's IDispatch shim.
     #
-    # /unsafe is required because the helper takes the address of a managed
-    # `int` (`&bytes`) to pass as the ULONG* pcbRead out-parameter; there is no
-    # safe-only equivalent for IStream::Read's signature.
+    # GCHandle.Alloc(Pinned) is used instead of /unsafe &-operator so the helper
+    # compiles under both PS7 (Roslyn) and PS5.1 (csc.exe) in restricted SYSTEM
+    # contexts where csc.exe may lack the /unsafe permission.
     if (-not ([System.Management.Automation.PSTypeName]'ISOFile').Type) {
-        Add-Type -CompilerOptions "/unsafe" -TypeDefinition @"
+        Add-Type -TypeDefinition @"
 public class ISOFile {
-    public unsafe static void Create(string Path, object Stream, int BlockSize, int TotalBlocks) {
-        int bytes = 0;
-        byte[] buf = new byte[BlockSize];
-        var ptr = (System.IntPtr)(&bytes);
-        var o = System.IO.File.OpenWrite(Path);
-        var i = Stream as System.Runtime.InteropServices.ComTypes.IStream;
-        if (o != null) {
-            while (TotalBlocks-- > 0) {
-                i.Read(buf, BlockSize, ptr);
-                o.Write(buf, 0, bytes);
+    public static void Create(string Path, object Stream, int BlockSize, int TotalBlocks) {
+        int[] pcbRead = new int[1];
+        var handle = System.Runtime.InteropServices.GCHandle.Alloc(
+            pcbRead, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try {
+            byte[] buf = new byte[BlockSize];
+            var o = System.IO.File.OpenWrite(Path);
+            var i = Stream as System.Runtime.InteropServices.ComTypes.IStream;
+            if (o != null) {
+                while (TotalBlocks-- > 0) {
+                    i.Read(buf, BlockSize, handle.AddrOfPinnedObject());
+                    o.Write(buf, 0, pcbRead[0]);
+                }
+                o.Flush();
+                o.Close();
             }
-            o.Flush();
-            o.Close();
+        } finally {
+            handle.Free();
         }
     }
 }
