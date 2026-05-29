@@ -41,6 +41,9 @@ function New-CloudSmithVm {
     $vmGateway  = '192.168.100.1'
     $natName    = 'CloudSmithNAT'
 
+    # Import Hyper-V module — required in PS5.1 subprocess context (PS7 cannot load it).
+    Import-Module Hyper-V -ErrorAction Stop
+
     # Hyper-V internal switch + WinNAT so the cloudsmith-docker VM has internet access.
     # An Internal switch provides a private network; WinNAT adds outbound NAT so the
     # nested VM can pull images from ghcr.io, update packages, etc.
