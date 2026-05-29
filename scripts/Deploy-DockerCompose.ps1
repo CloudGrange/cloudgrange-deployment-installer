@@ -42,8 +42,9 @@ function Deploy-DockerCompose {
     $bashDeploy = @"
 set -euo pipefail
 mkdir -p $composeDir
-export DB_PASSWORD="$dbPassword"
+export POSTGRES_PASSWORD="$dbPassword"
 export CLOUDSMITH_VERSION="$Version"
+export CLOUDSMITH_API_URL="http://$VmIp:8081"
 cd $composeDir
 $pullOrLoad
 docker compose up -d

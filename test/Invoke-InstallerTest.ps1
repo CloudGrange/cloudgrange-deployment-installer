@@ -88,8 +88,9 @@ $scripts = @('CloudSmith-Common.ps1','CloudSmith-Prereqs.ps1','New-CloudSmithVm.
 $rootScripts = @('New-SelfSignedCert.ps1')
 
 # Compose directory files (scp'd to the Docker VM by Deploy-DockerCompose.ps1)
+# Note: compose/.env is gitignored (contains secrets) — POSTGRES_PASSWORD is injected
+# by Deploy-DockerCompose.ps1 via environment variable export, not via .env file.
 $composeFiles = @(
-    'compose/.env',
     'compose/.env.example',
     'compose/docker-compose.yml',
     'compose/loki-config.yml',
