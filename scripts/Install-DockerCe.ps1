@@ -28,14 +28,17 @@ function Install-DockerCe {
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-# Cloud-init runs apt-get update/upgrade on first boot and may hold dpkg locks for
-# several minutes. Add DPkg::Lock::Timeout=300 to every apt-get call so apt waits
-# natively (with retries) rather than failing immediately on a busy lock.
-APT="apt-get -o DPkg::Lock::Timeout=300"
+# Block until cloud-init finishes all stages (package_update, package_install, runcmd).
+# This is the definitive fix for apt lock races on first boot — cloud-init holds
+# /var/lib/apt/lists/lock and /var/lib/dpkg/lock-frontend while it runs its
+# package phase. Waiting for cloud-init to complete eliminates all races.
+echo "Waiting for cloud-init to complete..."
+sudo cloud-init status --wait --long 2>/dev/null || true
+echo "cloud-init done: $(sudo cloud-init status 2>/dev/null || echo unknown)"
 
 echo "Starting Docker CE installation..."
-$APT update -qq
-$APT install -y -qq ca-certificates curl gnupg
+apt-get update -qq
+apt-get install -y -qq ca-certificates curl gnupg
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -46,8 +49,8 @@ ARCH=$(dpkg --print-architecture)
 REPO="deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable"
 echo "$REPO" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-$APT update -qq
-$APT install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+apt-get update -qq
+apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 systemctl enable docker
 systemctl start docker
