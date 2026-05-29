@@ -13,9 +13,9 @@
 #   - SAN includes the VM IP and localhost
 #
 # Usage:
-#   Called internally by Deploy-DockerCompose.ps1.
-#   Can also be run standalone:
-#     .\New-SelfSignedCert.ps1 -VmIp 192.168.100.10 -SshKeyPath $keyPath
+#   Dot-source this file, then call:
+#     . .\New-SelfSignedCert.ps1
+#     New-SelfSignedCert -VmIp 192.168.100.10 -SshKeyPath $keyPath
 #
 # Parameters:
 #   VmIp        — IP address of the CloudSmith VM (added to SAN)
@@ -26,33 +26,37 @@
 #   VmName      — Hyper-V VM name (used with Credential)
 #   UseWsl2     — Switch: use WSL2 instead of a Hyper-V VM
 
-[CmdletBinding()]
-param(
-    [string]$VmIp       = '192.168.100.10',
-    [string]$Hostname   = 'cloudsmith',
-    [string]$ComposeDir = '/opt/cloudsmith',
-    [string]$SshKeyPath = '',
-    [System.Management.Automation.PSCredential]$Credential = $null,
-    [string]$VmName     = 'cloudsmith-docker',
-    [switch]$UseWsl2
-)
+function New-SelfSignedCert {
+    [CmdletBinding()]
+    param(
+        [string]$VmIp       = '192.168.100.10',
+        [string]$Hostname   = 'cloudsmith',
+        [string]$ComposeDir = '/opt/cloudsmith',
+        [string]$SshKeyPath = '',
+        [System.Management.Automation.PSCredential]$Credential = $null,
+        [string]$VmName     = 'cloudsmith-docker',
+        [switch]$UseWsl2
+    )
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+    $ErrorActionPreference = 'Stop'
 
-# The bash script that runs inside the Linux guest.
-# It writes cloudsmith.crt and cloudsmith.key into the nginx_certs Docker volume
-# by running a temporary Alpine container that mounts the volume.
-#
-# AB#2347 — Defensive migration: if a previous install populated the volume with
-# server.crt/server.key (openssl defaults from a hand-deployed or pre-AB#1593 install),
-# rename them to cloudsmith.crt/cloudsmith.key before regenerating. This prevents nginx
-# from restart-looping on the "cloudsmith.crt: No such file" error.
-$bashScript = @"
+    # The bash script that runs inside the Linux guest.
+    # It writes cloudsmith.crt and cloudsmith.key into the nginx_certs Docker volume
+    # by running a temporary Alpine container that mounts the volume.
+    #
+    # AB#2347 — Defensive migration: if a previous install populated the volume with
+    # server.crt/server.key (openssl defaults from a hand-deployed or pre-AB#1593 install),
+    # rename them to cloudsmith.crt/cloudsmith.key before regenerating. This prevents nginx
+    # from restart-looping on the "cloudsmith.crt: No such file" error.
+    #
+    # ESCAPING NOTE: This is a PS double-quoted here-string. Bash variables must use
+    # backtick-dollar (`$VAR) to prevent PS from expanding them. PS variables ($VmIp,
+    # $Hostname) are intentionally expanded here so their values are baked into the script.
+    $bashScript = @"
 set -euo pipefail
 
-CERT_DIR="/tmp/cloudsmith-certs-$$"
-mkdir -p "\$CERT_DIR"
+CERT_DIR="/tmp/cloudsmith-certs-`$`$"
+mkdir -p "`$CERT_DIR"
 
 # AB#2347: Migrate any legacy server.crt/server.key in the volume to cloudsmith.crt/cloudsmith.key
 # so nginx can boot regardless of how the volume was first populated.
@@ -72,7 +76,7 @@ docker volume inspect cloudsmith_nginx_certs >/dev/null 2>&1 && docker run --rm 
     ' || true
 
 # Generate openssl config with SANs
-cat > "\$CERT_DIR/openssl.cnf" <<OPENSSL_EOF
+cat > "`$CERT_DIR/openssl.cnf" <<OPENSSL_EOF
 [req]
 distinguished_name = req_dn
 x509_extensions    = v3_req
@@ -95,12 +99,12 @@ OPENSSL_EOF
 
 # Generate private key and self-signed certificate
 openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
-    -keyout "\$CERT_DIR/cloudsmith.key" \
-    -out    "\$CERT_DIR/cloudsmith.crt" \
-    -config "\$CERT_DIR/openssl.cnf" 2>/dev/null
+    -keyout "`$CERT_DIR/cloudsmith.key" \
+    -out    "`$CERT_DIR/cloudsmith.crt" \
+    -config "`$CERT_DIR/openssl.cnf" 2>/dev/null
 
 echo "Certificate generated."
-openssl x509 -in "\$CERT_DIR/cloudsmith.crt" -noout -subject -dates 2>/dev/null
+openssl x509 -in "`$CERT_DIR/cloudsmith.crt" -noout -subject -dates 2>/dev/null
 
 # Copy certs into the nginx_certs Docker volume via a temporary alpine container.
 # The volume is named {compose_project_name}_nginx_certs; compose project = 'cloudsmith'.
@@ -111,31 +115,64 @@ docker run --rm \
     sh -c "cp /src/cloudsmith.crt /certs/cloudsmith.crt && cp /src/cloudsmith.key /certs/cloudsmith.key && chmod 644 /certs/cloudsmith.crt && chmod 600 /certs/cloudsmith.key"
 
 echo "Certificates installed into nginx_certs volume."
-rm -rf "\$CERT_DIR"
+rm -rf "`$CERT_DIR"
 "@
 
-Write-Host "  Generating self-signed TLS certificate (RSA-2048, 3650 days, SAN: $VmIp / $Hostname)..."
+    Write-Host "  Generating self-signed TLS certificate (RSA-2048, 3650 days, SAN: $VmIp / $Hostname)..."
 
-if ($UseWsl2) {
-    $bashScript | wsl -d Ubuntu -u root -- bash -s
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "New-SelfSignedCert: certificate generation failed in WSL2 (exit $LASTEXITCODE)."
+    # Strip \r bytes — PS here-strings on Windows produce CRLF; bash rejects \r under set -euo pipefail.
+    $bashBytes = [System.Text.Encoding]::UTF8.GetBytes($bashScript)
+    $bashBytes = [byte[]]($bashBytes | Where-Object { $_ -ne 13 })
+
+    if ($UseWsl2) {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = 'wsl.exe'
+        $psi.ArgumentList.Add('-d'); $psi.ArgumentList.Add('Ubuntu')
+        $psi.ArgumentList.Add('-u'); $psi.ArgumentList.Add('root')
+        $psi.ArgumentList.Add('--'); $psi.ArgumentList.Add('bash'); $psi.ArgumentList.Add('-s')
+        $psi.RedirectStandardInput = $true
+        $psi.UseShellExecute = $false
+        $p = [System.Diagnostics.Process]::new()
+        $p.StartInfo = $psi
+        $p.Start() | Out-Null
+        $p.StandardInput.BaseStream.Write($bashBytes, 0, $bashBytes.Length)
+        $p.StandardInput.Close()
+        $p.WaitForExit()
+        if ($p.ExitCode -ne 0) {
+            Write-Error "New-SelfSignedCert: certificate generation failed in WSL2 (exit $($p.ExitCode))."
+        }
+    } elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
+        $sshOpts   = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
+        $sshTarget = "cloudsmith@$VmIp"
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = 'ssh.exe'
+        foreach ($arg in $sshOpts) { $psi.ArgumentList.Add($arg) }
+        $psi.ArgumentList.Add($sshTarget)
+        $psi.ArgumentList.Add('sudo')
+        $psi.ArgumentList.Add('bash')
+        $psi.ArgumentList.Add('-s')
+        $psi.RedirectStandardInput = $true
+        $psi.UseShellExecute = $false
+        $p = [System.Diagnostics.Process]::new()
+        $p.StartInfo = $psi
+        $p.Start() | Out-Null
+        $p.StandardInput.BaseStream.Write($bashBytes, 0, $bashBytes.Length)
+        $p.StandardInput.Close()
+        $p.WaitForExit()
+        if ($p.ExitCode -ne 0) {
+            Write-Error "New-SelfSignedCert: certificate generation failed via SSH (exit $($p.ExitCode))."
+        }
+    } else {
+        if ($null -eq $Credential) {
+            $Credential = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+        }
+        $session = New-PSSession -VMName $VmName -Credential $Credential
+        # Pass LF-only bytes to bash to prevent \r injection over the PSSession pipe.
+        $bashScriptLf = $bashScript -replace "`r`n", "`n"
+        Invoke-Command -Session $session -ScriptBlock { param($s) $s | sudo bash -s } -ArgumentList $bashScriptLf
+        Remove-PSSession $session
     }
-} elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
-    $sshOpts   = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
-    $sshTarget = "cloudsmith@$VmIp"
-    $bashScript | & ssh.exe @sshOpts $sshTarget 'sudo bash -s'
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "New-SelfSignedCert: certificate generation failed via SSH (exit $LASTEXITCODE)."
-    }
-} else {
-    if ($null -eq $Credential) {
-        $Credential = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
-    }
-    $session = New-PSSession -VMName $VmName -Credential $Credential
-    Invoke-Command -Session $session -ScriptBlock { param($s) $s | sudo bash -s } -ArgumentList $bashScript
-    Remove-PSSession $session
+
+    Write-Host "  TLS certificate installed into nginx_certs volume." -ForegroundColor Green
+    Write-Host "  Replace with a CA-signed certificate for production use." -ForegroundColor Yellow
 }
-
-Write-Host "  TLS certificate installed into nginx_certs volume." -ForegroundColor Green
-Write-Host "  Replace with a CA-signed certificate for production use." -ForegroundColor Yellow
