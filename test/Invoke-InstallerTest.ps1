@@ -84,6 +84,21 @@ $scripts = @('CloudSmith-Common.ps1','CloudSmith-Prereqs.ps1','New-CloudSmithVm.
              'Install-DockerCe.ps1','Initialize-CloudSmith.ps1','Deploy-DockerCompose.ps1',
              'Register-EntraApp.ps1')
 
+# Root-level support scripts referenced by the scripts/ directory (relative path ..\)
+$rootScripts = @('New-SelfSignedCert.ps1')
+
+# Compose directory files (scp'd to the Docker VM by Deploy-DockerCompose.ps1)
+$composeFiles = @(
+    'compose/.env',
+    'compose/.env.example',
+    'compose/docker-compose.yml',
+    'compose/loki-config.yml',
+    'compose/otel-collector.yml',
+    'compose/prometheus.yml',
+    'compose/keycloak/cloudsmith-realm.json',
+    'compose/nginx/nginx.conf'
+)
+
 # Script runs as SYSTEM (run-command constraint) but immediately hands off
 # to a scheduled task that runs as the real local admin ($AdminUser).
 # The admin password is passed via Azure protectedParameters — never in the script body.
@@ -99,11 +114,20 @@ if (-not (Test-Path `$pwshPath)) {
 if (Test-Path '$installDir') { Remove-Item '$installDir' -Recurse -Force }
 New-Item -ItemType Directory -Force '$installDir' | Out-Null
 New-Item -ItemType Directory -Force '$installDir\scripts' | Out-Null
+New-Item -ItemType Directory -Force '$installDir\compose\keycloak' | Out-Null
+New-Item -ItemType Directory -Force '$installDir\compose\nginx' | Out-Null
 foreach (`$f in @('Install-CloudSmith.ps1','cloudsmith-installer.sha256')) {
     Invoke-WebRequest -Uri '$raw/`$f' -OutFile '$installDir\`$f' -UseBasicParsing
 }
 foreach (`$f in @('$($scripts -join "','")')) {
     Invoke-WebRequest -Uri '$raw/scripts/`$f' -OutFile '$installDir\scripts\`$f' -UseBasicParsing
+}
+foreach (`$f in @('$($rootScripts -join "','")')) {
+    Invoke-WebRequest -Uri '$raw/`$f' -OutFile '$installDir\`$f' -UseBasicParsing
+}
+foreach (`$f in @('$($composeFiles -join "','")')) {
+    `$dest = '$installDir\' + (`$f -replace '/', '\')
+    Invoke-WebRequest -Uri '$raw/`$f' -OutFile `$dest -UseBasicParsing
 }
 Write-Host "Scripts downloaded."
 
