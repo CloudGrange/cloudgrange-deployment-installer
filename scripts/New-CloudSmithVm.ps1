@@ -42,6 +42,16 @@ function New-CloudSmithVm {
     $natName    = 'CloudSmithNAT'
 
     # Import Hyper-V module — required in PS5.1 subprocess context (PS7 cannot load it).
+    # Auto-install the Hyper-V PowerShell management tools if missing (e.g. when Hyper-V
+    # hypervisor was installed via DISM without -IncludeManagementTools).
+    if (-not (Get-Module -Name Hyper-V -ListAvailable -ErrorAction SilentlyContinue)) {
+        Write-Host "  Installing Hyper-V PowerShell management tools..."
+        $feat = Install-WindowsFeature -Name Hyper-V-PowerShell -ErrorAction SilentlyContinue
+        if (-not $feat -or $feat.ExitCode -notin @('Success', 'NoChangeNeeded')) {
+            # DISM fallback for environments where Install-WindowsFeature is constrained.
+            & dism.exe /Online /Enable-Feature:Microsoft-Hyper-V-Management-PowerShell /NoRestart /Quiet 2>&1 | Out-Null
+        }
+    }
     Import-Module Hyper-V -ErrorAction Stop
 
     # Hyper-V internal switch + WinNAT so the cloudsmith-docker VM has internet access.
