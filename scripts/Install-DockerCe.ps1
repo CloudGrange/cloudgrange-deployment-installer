@@ -27,6 +27,20 @@ function Install-DockerCe {
     $bashTemplate = @'
 set -euo pipefail
 
+# Cloud-init runs apt-get update/upgrade on first boot; wait for those locks to clear
+# before attempting any apt operations to avoid "Could not get lock" failures.
+echo "Waiting for apt/dpkg locks to be released..."
+LOCK_WAITED=0
+while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
+    sleep 5
+    LOCK_WAITED=$((LOCK_WAITED + 5))
+    if [ $LOCK_WAITED -ge 300 ]; then
+        echo "ERROR: apt lock not released after 5 minutes" >&2
+        exit 1
+    fi
+done
+echo "apt locks clear (waited ${LOCK_WAITED}s)"
+
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg
 
