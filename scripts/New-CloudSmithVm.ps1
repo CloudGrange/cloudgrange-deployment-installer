@@ -2,6 +2,24 @@
 # Copyright 2026 CloudSmith Contributors
 # SPDX-License-Identifier: Apache-2.0
 # ADR-029: provisions cloudsmith-docker Hyper-V VM — Gen2, Ubuntu 24.04, Docker CE host
+#
+# Supports two invocation modes:
+#   Dot-sourced: . .\New-CloudSmithVm.ps1 then call New-CloudSmithVm -VmIp ...
+#   Direct:      powershell.exe -File New-CloudSmithVm.ps1 -VmIp ... (used by PS7 installer)
+#
+# Hyper-V cmdlets (Get-VMSwitch, New-VM, etc.) require Windows PowerShell (PS5.1).
+# The main installer (PS7) delegates VM provisioning here via powershell.exe.
+
+# Detect dot-source vs direct invocation before the param block takes control.
+$Script:_IsDotSourced = ($MyInvocation.InvocationName -eq '.')
+
+param(
+    [string]$VmIp             = '192.168.100.10',
+    [string]$VhdxPath         = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
+    [string]$Mode             = 'Online',
+    [string]$BundledImagePath = '',
+    [string]$SshPublicKey     = ''
+)
 
 function New-CloudSmithVm {
     [CmdletBinding()]
@@ -95,11 +113,13 @@ function New-CloudSmithVm {
     # Convert .img to VHDX using qemu-img (required for Hyper-V Gen2).
     # The installer auto-installs QEMU in Install-CloudSmithPrereqs; this is a
     # belt-and-braces check in case the function is called directly.
-    $qemuImg = (Get-Command qemu-img -ErrorAction SilentlyContinue)?.Source
+    $qemuImgCmd = Get-Command qemu-img -ErrorAction SilentlyContinue
+    $qemuImg = if ($qemuImgCmd) { $qemuImgCmd.Source } else { $null }
     if (-not $qemuImg) {
         . "$PSScriptRoot\CloudSmith-Prereqs.ps1"
         Initialize-CloudSmithPrereqs
-        $qemuImg = (Get-Command qemu-img -ErrorAction SilentlyContinue)?.Source
+        $qemuImgCmd = Get-Command qemu-img -ErrorAction SilentlyContinue
+        $qemuImg = if ($qemuImgCmd) { $qemuImgCmd.Source } else { $null }
         if (-not $qemuImg) {
             Write-Error "qemu-img is still missing after bootstrap. Aborting."
         }
@@ -292,4 +312,11 @@ ethernets:
     } else {
         Write-Host "  VM is reachable at $VmIp" -ForegroundColor Green
     }
+}
+
+# When invoked directly via powershell.exe -File (not dot-sourced), load dependencies and run.
+if (-not $Script:_IsDotSourced) {
+    . "$PSScriptRoot\CloudSmith-Common.ps1"
+    New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
+        -SshPublicKey $SshPublicKey -BundledImagePath $BundledImagePath
 }

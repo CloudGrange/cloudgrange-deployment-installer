@@ -98,11 +98,6 @@ function Invoke-CloudSmithInstall {
     Write-Host "  Hyper-V: available" -ForegroundColor Green
     $useWsl2 = $false
 
-    # PS7 does not auto-import the Hyper-V module — explicit import required.
-    # -UseWindowsPowerShell is needed because Hyper-V module cmdlets use .NET Framework COM
-    # underpinnings that don't load directly into PS7's .NET Core runtime.
-    Import-Module Hyper-V -UseWindowsPowerShell -ErrorAction SilentlyContinue
-
     # Nested virtualization check — required when this host is itself a virtual machine (AB#1581)
     Write-Progress-Step "Checking nested virtualization support"
     $isVm = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
@@ -143,9 +138,10 @@ function Invoke-CloudSmithInstall {
     }
 
     # Step 3: Validate VM IP doesn't conflict with existing Hyper-V switches
+    # Hyper-V cmdlets are not available in PS7 — this check runs via powershell.exe (PS5.1).
     if (-not $useWsl2) {
         Write-Progress-Step "Validating VM IP $VmIp"
-        $existing = Get-VMSwitch -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'cloudsmith-internal' }
+        $switchJson = & powershell.exe -NonInteractive -NoProfile -Command "Import-Module Hyper-V -ErrorAction SilentlyContinue; Get-VMSwitch -ErrorAction SilentlyContinue | Select-Object Name | ConvertTo-Json -Compress" 2>$null
         # Basic conflict check — a full subnet overlap check would require network math beyond installer scope
         Write-Host "  IP validation passed" -ForegroundColor Green
     }
@@ -176,14 +172,25 @@ function Invoke-CloudSmithInstall {
         $sshPublicKey = (Get-Content "$sshKeyPath.pub" -Raw).Trim()
 
         Write-Progress-Step "Provisioning Hyper-V VM"
-        . "$PSScriptRoot\scripts\New-CloudSmithVm.ps1"
         # AB#1852: in Bundled mode, resolve the Ubuntu image path from the bundle directory
         $bundledUbuntuPath = ''
         if ($Mode -eq 'Bundled') {
             $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
             $bundledUbuntuPath = Join-Path $bundleRoot 'ubuntu-24.04-cloudimg.img'
         }
-        New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode -SshPublicKey $sshPublicKey -BundledImagePath $bundledUbuntuPath
+        # New-CloudSmithVm.ps1 uses Hyper-V cmdlets that require Windows PowerShell (PS5.1).
+        # Invoke via powershell.exe so the Hyper-V module loads correctly while the main
+        # installer continues to run under PS7.
+        & powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass `
+            -File "$PSScriptRoot\scripts\New-CloudSmithVm.ps1" `
+            -VmIp $VmIp `
+            -VhdxPath $VhdxPath `
+            -Mode $Mode `
+            -SshPublicKey $sshPublicKey `
+            -BundledImagePath $bundledUbuntuPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "CS-INST-ERR-010: VM provisioning failed (exit $LASTEXITCODE). Check Hyper-V event log for details."
+        }
     } else {
         Write-Progress-Step "Configuring WSL2 environment"
         . "$PSScriptRoot\scripts\Install-Wsl2Fallback.ps1"
