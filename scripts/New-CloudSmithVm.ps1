@@ -74,7 +74,7 @@ function New-CloudSmithVm {
         $assignedIp = (Get-NetIPAddress -InterfaceIndex $hostNic.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue | Where-Object { $_.IPAddress -eq $hostIp }).IPAddress
         Write-Host "  Host gateway IP: $assignedIp"
     } else {
-        Write-Warning "  vEthernet ($switchName) adapter not found after 10s — host IP not assigned."
+        Write-Warning "  vEthernet ($switchName) adapter not found after 10s - host IP not assigned."
     }
     # Create WinNAT for outbound internet from the nested VM's subnet.
     if (-not (Get-NetNat -Name $natName -ErrorAction SilentlyContinue)) {
