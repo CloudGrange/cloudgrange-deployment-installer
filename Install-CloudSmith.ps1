@@ -261,11 +261,11 @@ function Invoke-CloudSmithInstall {
     Write-Progress-Step "Waiting for CloudSmith API to become healthy"
     $apiHealthBase = "http://$VmIp:8081"
     $portalBase    = "https://$VmIp"
-    $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/api/v1/health" -TimeoutSeconds 600
+    $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/health/ready" -TimeoutSeconds 600
     if (-not $healthOk) {
         # CS-INST-ERR-030: API did not become healthy within 10 minutes
         try {
-            $lastResp = Invoke-WebRequest -Uri "$apiHealthBase/api/v1/health" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction SilentlyContinue
+            $lastResp = Invoke-WebRequest -Uri "$apiHealthBase/health/ready" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction SilentlyContinue
             $lastStatus = $lastResp.StatusCode
         } catch {
             $lastStatus = 'unreachable'

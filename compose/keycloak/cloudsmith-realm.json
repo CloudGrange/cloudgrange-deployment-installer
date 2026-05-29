@@ -73,7 +73,7 @@
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "cloudsmith-api-dev-secret-2026",
+      "secret": "${KEYCLOAK_API_CLIENT_SECRET}",
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
@@ -90,7 +90,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "CloudSmith-Dev-2026!",
+          "value": "${KEYCLOAK_ADMIN_PASSWORD}",
           "temporary": true
         }
       ],

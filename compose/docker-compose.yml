@@ -175,18 +175,20 @@ services:
     image: ghcr.io/cloudsmith-cloud/cloudsmith-relay:${CLOUDSMITH_VERSION:-latest}
     restart: always
     ports:
-      - "8083:8080"
+      - "8443:8443"
     environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudsmith};Username=${POSTGRES_USER:-cloudsmith};Password=${POSTGRES_PASSWORD}}
-      - Relay__PlatformApiUrl=http://cloudsmith-api:8080
-      - Relay__AgentEnrollmentToken=${RELAY_ENROLLMENT_TOKEN}
-      - OpenTelemetry__Endpoint=${CLOUDSMITH_OTLP_ENDPOINT:-http://otel-collector:4317}
+      - RELAY_PAAS_URL=http://cloudsmith-api:8080
+      - RELAY_ENROLLMENT_TOKEN=${RELAY_ENROLLMENT_TOKEN}
+      - RELAY_DISPLAY_NAME=${RELAY_DISPLAY_NAME:-site-relay}
+      - RELAY_CLUSTER_ID=${RELAY_CLUSTER_ID:-default}
+      - RELAY_LISTEN_PORT=8443
+      - RELAY_IDENTITY_DIR=/var/lib/cloudsmith-relay/identity
+      - Logging__LogLevel__Default=Information
     depends_on:
       cloudsmith-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8080) 2>/dev/null || exit 1"]
+      test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8443) 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

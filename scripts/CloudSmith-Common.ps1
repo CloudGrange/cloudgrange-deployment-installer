@@ -37,7 +37,7 @@ function Wait-ForHttpOk {
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
             $resp = Invoke-WebRequest -Uri $Url -SkipCertificateCheck -TimeoutSec 5 -ErrorAction Stop
-            if ($resp.StatusCode -lt 400) { return $true }
+            if ($resp.StatusCode -eq 200) { return $true }
         } catch { }
         Start-Sleep -Seconds 5
     }

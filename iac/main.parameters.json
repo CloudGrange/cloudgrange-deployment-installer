@@ -2,20 +2,32 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "location": { "value": "eastus" },
-    "environmentName": { "value": "${AZURE_ENV_NAME=cloudsmith-mvp}" },
-    "namePrefix": { "value": "cloudsmith" },
+    "location":    { "value": "centralus" },
+    "environment": { "value": "dev" },
+    "workload":    { "value": "cloudsmith" },
+    "instance":    { "value": "001" },
+    "commonTags": {
+      "value": {
+        "Environment":        "dev",
+        "Workload":           "cloudsmith",
+        "CostCenter":         "Engineering",
+        "Owner":              "platform@cloudsmith.cloud",
+        "BusinessUnit":       "Engineering",
+        "DataClassification": "Internal",
+        "Criticality":        "Low"
+      }
+    },
     "imageTag": {
       "value": "${CLOUDSMITH_IMAGE_TAG=main}",
       "_comment": "Never use 'latest' in stage or prod. CI must pass an explicit semver tag or SHA. 'main' is acceptable for dev first-run."
     },
-    "postgresAdminUser": { "value": "cloudsmith" },
+    "postgresAdminUser":     { "value": "cloudsmith" },
     "postgresAdminPassword": { "value": "${POSTGRES_ADMIN_PASSWORD}" },
-    "entraTenantId": { "value": "${ENTRA_TENANT_ID}" },
-    "entraClientId": { "value": "${ENTRA_CLIENT_ID}" },
-    "entraClientSecret": { "value": "${ENTRA_CLIENT_SECRET}" },
-    "ghcrUsername": { "value": "${GHCR_USERNAME=}" },
-    "ghcrToken": { "value": "${GHCR_TOKEN=}" },
-    "masterKey": { "value": "${CLOUDSMITH_MASTER_KEY}" }
+    "entraTenantId":         { "value": "${ENTRA_TENANT_ID}" },
+    "entraClientId":         { "value": "${ENTRA_CLIENT_ID}" },
+    "entraClientSecret":     { "value": "${ENTRA_CLIENT_SECRET}" },
+    "ghcrUsername":          { "value": "${GHCR_USERNAME=}" },
+    "ghcrToken":             { "value": "${GHCR_TOKEN=}" },
+    "masterKey":             { "value": "${CLOUDSMITH_MASTER_KEY}" }
   }
 }

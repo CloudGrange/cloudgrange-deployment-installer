@@ -5,8 +5,6 @@ global:
 scrape_configs:
   - job_name: cloudsmith-api
     static_configs:
-      - targets: ['cloudsmith-api:9090']
+      - targets: ['cloudsmith-api:8080']
     metrics_path: /metrics
-    scheme: https
-    tls_config:
-      insecure_skip_verify: true
+    scheme: http
