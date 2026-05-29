@@ -284,9 +284,19 @@ ethernets:
       addresses: [8.8.8.8, 1.1.1.1]
 "@
 
-    Set-Content -Path (Join-Path $ciDir 'user-data') -Value $userData -Encoding UTF8 -NoNewline:$false
-    Set-Content -Path (Join-Path $ciDir 'meta-data') -Value $metaData -Encoding UTF8 -NoNewline:$false
-    Set-Content -Path (Join-Path $ciDir 'network-config') -Value $networkConfig -Encoding UTF8 -NoNewline:$false
+    # PS5.1 Set-Content -Encoding UTF8 emits a UTF-8 BOM (0xEF 0xBB 0xBF). Cloud-init
+    # checks whether user-data starts with the literal bytes '#cloud-config'; a BOM
+    # prefix causes that check to fail and every cloud-config module (users, write_files,
+    # runcmd) is skipped entirely. Use File.WriteAllText with an explicit no-BOM encoder.
+    # Also normalize CRLF -> LF: PS5.1 heredocs use CRLF; cloud-init's YAML parser
+    # handles mixed endings but pure LF avoids any edge cases.
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    $userData      = $userData      -replace "`r`n", "`n"
+    $metaData      = $metaData      -replace "`r`n", "`n"
+    $networkConfig = $networkConfig -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText((Join-Path $ciDir 'user-data'),      $userData,      $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $ciDir 'meta-data'),      $metaData,      $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $ciDir 'network-config'), $networkConfig, $utf8NoBom)
 
     $seedIso = Join-Path $vhdxDir 'cloud-init-seed.iso'
     # Build the NoCloud seed ISO via IMAPI2 (built into Windows since Vista).
