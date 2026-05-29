@@ -162,13 +162,22 @@ function New-CloudSmithVm {
     # Expand the VHDX to 30 GB before first boot so cloud-init's growpart module
     # fills the root partition to the full size. The raw Ubuntu cloud image is ~3.5 GB
     # which is far too small for Docker CE + compose plugin + container images.
-    # Use qemu-img resize (not Resize-VHD) — Resize-VHD fails on a freshly-converted
-    # dynamic VHDX in SYSTEM context (Hyper-V Virtual Disk service constraint).
+    # Use diskpart (not Resize-VHD or qemu-img resize): Resize-VHD fails on a freshly-
+    # converted dynamic VHDX in SYSTEM context; qemu-img resize does not support VHDX format.
+    # diskpart /s is reliable in SYSTEM context and supports both VHD and VHDX.
     Write-Host "  Expanding VHDX to 30 GB..."
-    & $qemuImg resize $VhdxPath 30G
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "qemu-img resize failed (exit $LASTEXITCODE). Cannot expand VHDX."
+    $dpScript = Join-Path $env:TEMP 'cloudsmith-expand-vhdx.txt'
+    @"
+select vdisk file="$VhdxPath"
+expand vdisk maximum=30720
+exit
+"@ | Set-Content -Path $dpScript -Encoding ASCII
+    $dpResult = & diskpart /s $dpScript 2>&1
+    Remove-Item $dpScript -Force -ErrorAction SilentlyContinue
+    if ($dpResult -match 'error|failed|not found' -and $dpResult -notmatch 'successfully') {
+        Write-Error "diskpart expand failed: $dpResult"
     }
+    Write-Host "  VHDX expanded to 30 GB"
 
     # Clear the NTFS Sparse attribute on the freshly-converted VHDX. Hyper-V
     # Gen2 refuses to power on a sparse VHDX with 0xC03A001A; qemu-img can
