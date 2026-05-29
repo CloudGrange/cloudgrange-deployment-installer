@@ -1,0 +1,2715 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "8842258598462945811"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "metadata": {
+        "description": "Azure region for the deployment."
+      }
+    },
+    "workload": {
+      "type": "string",
+      "defaultValue": "cloudsmith",
+      "minLength": 2,
+      "maxLength": 12,
+      "metadata": {
+        "description": "Workload identifier. Used in CAF-pattern names. Lowercase alphanumeric."
+      }
+    },
+    "environment": {
+      "type": "string",
+      "allowedValues": [
+        "dev",
+        "test",
+        "stage",
+        "prod"
+      ],
+      "metadata": {
+        "description": "Environment. One of dev, test, stage, prod."
+      }
+    },
+    "instance": {
+      "type": "string",
+      "defaultValue": "001",
+      "minLength": 3,
+      "maxLength": 3,
+      "metadata": {
+        "description": "Three-digit zero-padded instance number."
+      }
+    },
+    "commonTags": {
+      "type": "object",
+      "metadata": {
+        "description": "CAF mandatory tag set + operator additions. Merged into every resource."
+      }
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override the resource group name. Empty = derive from CAF pattern."
+      }
+    },
+    "resourceGroupTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags merged with commonTags for the resource group only."
+      }
+    },
+    "deploymentTime": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-ddTHH:mm:ssZ')]",
+      "metadata": {
+        "description": "Deployment timestamp recorded in the DeployedAt tag. Defaults to UTC now."
+      }
+    },
+    "imageTag": {
+      "type": "string",
+      "defaultValue": "main",
+      "metadata": {
+        "description": "Default container image tag. Used for both API and portal unless overridden."
+      }
+    },
+    "apiImageTag": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional override for the API image tag. Empty = use imageTag. Use when the API repo has shipped a fix that the portal repo has not."
+      }
+    },
+    "portalImageTag": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional override for the portal image tag. Empty = use imageTag. Portal repo has its own commit history; pin independently when SHAs diverge."
+      }
+    },
+    "postgresAdminUser": {
+      "type": "string",
+      "defaultValue": "cloudsmith",
+      "metadata": {
+        "description": "PostgreSQL administrator login."
+      }
+    },
+    "postgresAdminPassword": {
+      "type": "securestring"
+    },
+    "postgresSkuName": {
+      "type": "string",
+      "defaultValue": "Standard_B1ms",
+      "metadata": {
+        "description": "PostgreSQL Flexible Server SKU name."
+      }
+    },
+    "postgresSkuTier": {
+      "type": "string",
+      "defaultValue": "Burstable",
+      "allowedValues": [
+        "Burstable",
+        "GeneralPurpose",
+        "MemoryOptimized"
+      ],
+      "metadata": {
+        "description": "PostgreSQL Flexible Server SKU tier."
+      }
+    },
+    "postgresStorageGB": {
+      "type": "int",
+      "defaultValue": 32,
+      "minValue": 32,
+      "metadata": {
+        "description": "PostgreSQL storage size in GB."
+      }
+    },
+    "postgresVersion": {
+      "type": "string",
+      "defaultValue": "16",
+      "metadata": {
+        "description": "PostgreSQL major version."
+      }
+    },
+    "postgresBackupRetentionDays": {
+      "type": "int",
+      "defaultValue": 7,
+      "minValue": 7,
+      "maxValue": 35,
+      "metadata": {
+        "description": "PostgreSQL backup retention in days."
+      }
+    },
+    "postgresHighAvailabilityMode": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Disabled",
+        "SameZone",
+        "ZoneRedundant"
+      ],
+      "metadata": {
+        "description": "PostgreSQL high availability mode. ZoneRedundant requires postgresSkuTier=GeneralPurpose or MemoryOptimized. Incompatible with Burstable."
+      }
+    },
+    "postgresGeoRedundantBackup": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Enabled",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "PostgreSQL geo-redundant backup. Enable for prod workloads. Disabled for dev to save cost."
+      }
+    },
+    "postgresPublicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Enabled",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "PostgreSQL public network access. Disabled requires private endpoint (Phase V VNet integration). Default is Disabled — set to Enabled only when a private endpoint is not yet in place."
+      }
+    },
+    "keyVaultSku": {
+      "type": "string",
+      "defaultValue": "standard",
+      "allowedValues": [
+        "standard",
+        "premium"
+      ],
+      "metadata": {
+        "description": "Key Vault SKU."
+      }
+    },
+    "keyVaultSoftDeleteRetentionDays": {
+      "type": "int",
+      "defaultValue": 7,
+      "minValue": 7,
+      "maxValue": 90,
+      "metadata": {
+        "description": "Key Vault soft-delete retention in days."
+      }
+    },
+    "logAnalyticsSku": {
+      "type": "string",
+      "defaultValue": "PerGB2018",
+      "metadata": {
+        "description": "Log Analytics workspace SKU."
+      }
+    },
+    "logAnalyticsRetentionDays": {
+      "type": "int",
+      "defaultValue": 30,
+      "minValue": 30,
+      "maxValue": 730,
+      "metadata": {
+        "description": "Log Analytics retention in days."
+      }
+    },
+    "logAnalyticsDailyCapGB": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 0,
+      "metadata": {
+        "description": "Log Analytics daily data cap in GB. 0 = unlimited (not recommended for non-prod). Recommended: dev=1, stage=5, prod=-1 (unlimited + alert)."
+      }
+    },
+    "apiAppCpu": {
+      "type": "string",
+      "defaultValue": "0.5",
+      "metadata": {
+        "description": "API container app CPU (cores)."
+      }
+    },
+    "apiAppMemory": {
+      "type": "string",
+      "defaultValue": "1Gi",
+      "metadata": {
+        "description": "API container app memory."
+      }
+    },
+    "apiAppMinReplicas": {
+      "type": "int",
+      "defaultValue": 0,
+      "minValue": 0,
+      "metadata": {
+        "description": "API container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod."
+      }
+    },
+    "apiAppMaxReplicas": {
+      "type": "int",
+      "defaultValue": 3,
+      "minValue": 1,
+      "metadata": {
+        "description": "API container app maximum replica count."
+      }
+    },
+    "apiAppTargetPort": {
+      "type": "int",
+      "defaultValue": 8080,
+      "metadata": {
+        "description": "API container app external ingress target port."
+      }
+    },
+    "apiAppScaleThreshold": {
+      "type": "int",
+      "defaultValue": 100,
+      "metadata": {
+        "description": "API ACA HTTP scale-out threshold (concurrent requests per replica)."
+      }
+    },
+    "apiAppRevisionsMode": {
+      "type": "string",
+      "defaultValue": "Single",
+      "allowedValues": [
+        "Single",
+        "Multiple"
+      ],
+      "metadata": {
+        "description": "ACA active revisions mode for API. Multiple enables weighted traffic split for zero-downtime deploys."
+      }
+    },
+    "portalAppCpu": {
+      "type": "string",
+      "defaultValue": "0.25",
+      "metadata": {
+        "description": "Portal container app CPU (cores)."
+      }
+    },
+    "portalAppMemory": {
+      "type": "string",
+      "defaultValue": "0.5Gi",
+      "metadata": {
+        "description": "Portal container app memory."
+      }
+    },
+    "portalAppMinReplicas": {
+      "type": "int",
+      "defaultValue": 0,
+      "minValue": 0,
+      "metadata": {
+        "description": "Portal container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod."
+      }
+    },
+    "portalAppMaxReplicas": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "metadata": {
+        "description": "Portal container app maximum replica count."
+      }
+    },
+    "portalAppTargetPort": {
+      "type": "int",
+      "defaultValue": 80,
+      "metadata": {
+        "description": "Portal container app external ingress target port."
+      }
+    },
+    "portalAppScaleThreshold": {
+      "type": "int",
+      "defaultValue": 50,
+      "metadata": {
+        "description": "Portal ACA HTTP scale-out threshold (concurrent requests per replica)."
+      }
+    },
+    "entraTenantId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Entra tenant ID for OIDC pre-seed. Empty = ADR-047 first-run wizard."
+      }
+    },
+    "entraClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Entra client ID for OIDC pre-seed."
+      }
+    },
+    "entraClientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Entra client secret. Empty when first-run wizard is used."
+      }
+    },
+    "entraAuthorityBase": {
+      "type": "string",
+      "defaultValue": "https://login.microsoftonline.com",
+      "metadata": {
+        "description": "Entra authority base URL. Override for sovereign clouds. Default = https://login.microsoftonline.com."
+      }
+    },
+    "ghcrUsername": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "GHCR username for private image pull. Empty when images are public (ADR-046)."
+      }
+    },
+    "ghcrToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "GHCR token for private image pull. Empty when images are public."
+      }
+    },
+    "masterKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "256-bit AES master key (base64-encoded). Must be supplied at deploy time via environment variable CLOUDSMITH_MASTER_KEY or azd env set. Written to Key Vault; ACA reads it via KV secret reference."
+      }
+    },
+    "enablePgBouncer": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable PgBouncer connection pooling sidecar on the API container app."
+      }
+    },
+    "enableDefenderForCloud": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Defender for Cloud Standard tier for Containers and OpenSource Relational Databases."
+      }
+    },
+    "enablePolicyAssignments": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Azure Policy assignments for required tags and PG/KV audit policies."
+      }
+    },
+    "enableAlertRules": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Azure Monitor metric alert rules for ACA availability, PG CPU/storage, KV throttling."
+      }
+    },
+    "monthlyBudgetUSD": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Monthly budget alert threshold in USD. 0 = no alert."
+      }
+    },
+    "logAnalyticsName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override Log Analytics workspace name. Empty = CAF pattern."
+      }
+    },
+    "logAnalyticsTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the Log Analytics workspace."
+      }
+    },
+    "applicationInsightsName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override Application Insights name. Empty = CAF pattern."
+      }
+    },
+    "applicationInsightsTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for Application Insights."
+      }
+    },
+    "azureMonitorWorkspaceName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override Azure Monitor Workspace name. Empty = CAF pattern."
+      }
+    },
+    "azureMonitorWorkspaceTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the Azure Monitor Workspace."
+      }
+    },
+    "managedIdentityName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override managed identity name. Empty = CAF pattern."
+      }
+    },
+    "managedIdentityTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the managed identity."
+      }
+    },
+    "keyVaultName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override Key Vault name. Empty = CAF pattern."
+      }
+    },
+    "keyVaultTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the Key Vault."
+      }
+    },
+    "postgresServerName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override PostgreSQL flexible server name. Empty = CAF pattern."
+      }
+    },
+    "postgresServerTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the PostgreSQL server."
+      }
+    },
+    "postgresDatabaseName": {
+      "type": "string",
+      "defaultValue": "cloudsmith",
+      "metadata": {
+        "description": "Override PostgreSQL database name."
+      }
+    },
+    "containerAppsEnvironmentName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override Container Apps Environment name. Empty = CAF pattern."
+      }
+    },
+    "containerAppsEnvironmentTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the Container Apps Environment."
+      }
+    },
+    "apiAppName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override API container app name. Empty = CAF pattern."
+      }
+    },
+    "apiAppTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the API container app."
+      }
+    },
+    "portalAppName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override portal container app name. Empty = CAF pattern."
+      }
+    },
+    "portalAppTags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Additional tags for the portal container app."
+      }
+    },
+    "portalCustomDomain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional custom domain for the portal (e.g. app.contoso.com). Empty = use default *.azurecontainerapps.io HTTPS endpoint."
+      }
+    },
+    "apiCustomDomain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional custom domain for the API (e.g. api.contoso.com). Empty = use default *.azurecontainerapps.io HTTPS endpoint."
+      }
+    },
+    "deploymentManagedIdentityId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional resource ID of a pre-existing User-Assigned Managed Identity used to authenticate this deployment (Method B). Empty = interactive az login (Method A). This identity must hold Contributor + Role Based Access Control Administrator on the target subscription. It is not used at runtime — runtime identity is the workload UAMI created by the resources module."
+      }
+    },
+    "bringYourOwn": {
+      "type": "object",
+      "defaultValue": {
+        "logAnalyticsWorkspaceId": "",
+        "applicationInsightsId": "",
+        "managedIdentityId": "",
+        "keyVaultId": "",
+        "containerAppsEnvironmentId": ""
+      },
+      "metadata": {
+        "description": "Existing resource IDs to reuse instead of creating new resources. Empty string = create new."
+      }
+    }
+  },
+  "variables": {
+    "regionCodes": {
+      "eastus": "eus",
+      "eastus2": "eus2",
+      "westus": "wus",
+      "westus2": "wus2",
+      "westus3": "wus3",
+      "centralus": "cus",
+      "northcentralus": "ncus",
+      "southcentralus": "scus",
+      "westcentralus": "wcus",
+      "northeurope": "neu",
+      "westeurope": "weu",
+      "uksouth": "uks",
+      "ukwest": "ukw",
+      "francecentral": "frc",
+      "germanywestcentral": "gwc",
+      "switzerlandnorth": "chn",
+      "swedencentral": "sec",
+      "australiaeast": "aue",
+      "australiasoutheast": "ause",
+      "southeastasia": "sea",
+      "eastasia": "ea",
+      "japaneast": "jpe",
+      "japanwest": "jpw",
+      "koreacentral": "krc",
+      "centralindia": "cin",
+      "southindia": "sin",
+      "canadacentral": "cac",
+      "canadaeast": "cae",
+      "brazilsouth": "brs",
+      "uaenorth": "uaen",
+      "southafricanorth": "san"
+    },
+    "regionCode": "[if(contains(variables('regionCodes'), parameters('location')), variables('regionCodes')[parameters('location')], substring(replace(parameters('location'), ' ', ''), 0, 4))]",
+    "rgNameDefault": "[format('rg-{0}-{1}-{2}-{3}', parameters('workload'), parameters('environment'), variables('regionCode'), parameters('instance'))]",
+    "rgNameEffective": "[if(empty(parameters('resourceGroupName')), variables('rgNameDefault'), parameters('resourceGroupName'))]",
+    "autoTags": {
+      "ManagedBy": "bicep",
+      "DeployedAt": "[parameters('deploymentTime')]"
+    },
+    "rgTagsEffective": "[union(parameters('commonTags'), variables('autoTags'), parameters('resourceGroupTags'))]",
+    "ownerLooksLikeEmail": "[and(contains(parameters('commonTags'), 'Owner'), contains(string(parameters('commonTags').Owner), '@'))]",
+    "budgetContactEmail": "[if(variables('ownerLooksLikeEmail'), string(parameters('commonTags').Owner), 'cloudsmith-alerts@example.com')]",
+    "_budgetStartDate": "[format('{0}-01', substring(parameters('deploymentTime'), 0, 7))]"
+  },
+  "resources": {
+    "rg": {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('rgNameEffective')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('rgTagsEffective')]"
+    },
+    "defenderContainers": {
+      "condition": "[parameters('enableDefenderForCloud')]",
+      "type": "Microsoft.Security/pricings",
+      "apiVersion": "2024-01-01",
+      "name": "Containers",
+      "properties": {
+        "pricingTier": "Standard"
+      }
+    },
+    "defenderDatabases": {
+      "condition": "[parameters('enableDefenderForCloud')]",
+      "type": "Microsoft.Security/pricings",
+      "apiVersion": "2024-01-01",
+      "name": "OpenSourceRelationalDatabases",
+      "properties": {
+        "pricingTier": "Standard"
+      }
+    },
+    "budget": {
+      "condition": "[greater(parameters('monthlyBudgetUSD'), 0)]",
+      "type": "Microsoft.Consumption/budgets",
+      "apiVersion": "2021-10-01",
+      "name": "[format('budget-{0}-{1}', parameters('workload'), parameters('environment'))]",
+      "properties": {
+        "timePeriod": {
+          "startDate": "[variables('_budgetStartDate')]"
+        },
+        "timeGrain": "Monthly",
+        "amount": "[parameters('monthlyBudgetUSD')]",
+        "category": "Cost",
+        "filter": {
+          "dimensions": {
+            "name": "ResourceGroupName",
+            "operator": "In",
+            "values": [
+              "[variables('rgNameEffective')]"
+            ]
+          }
+        },
+        "notifications": {
+          "actual80": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 80,
+            "contactEmails": [
+              "[variables('budgetContactEmail')]"
+            ]
+          },
+          "actual100": {
+            "enabled": true,
+            "operator": "GreaterThan",
+            "threshold": 100,
+            "contactEmails": [
+              "[variables('budgetContactEmail')]"
+            ]
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "cloudsmith-resources",
+      "resourceGroup": "[variables('rgNameEffective')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "workload": {
+            "value": "[parameters('workload')]"
+          },
+          "environment": {
+            "value": "[parameters('environment')]"
+          },
+          "instance": {
+            "value": "[parameters('instance')]"
+          },
+          "regionCode": {
+            "value": "[variables('regionCode')]"
+          },
+          "commonTags": {
+            "value": "[parameters('commonTags')]"
+          },
+          "autoTags": {
+            "value": "[variables('autoTags')]"
+          },
+          "imageTag": {
+            "value": "[parameters('imageTag')]"
+          },
+          "apiImageTag": {
+            "value": "[parameters('apiImageTag')]"
+          },
+          "portalImageTag": {
+            "value": "[parameters('portalImageTag')]"
+          },
+          "postgresAdminUser": {
+            "value": "[parameters('postgresAdminUser')]"
+          },
+          "postgresAdminPassword": {
+            "value": "[parameters('postgresAdminPassword')]"
+          },
+          "postgresSkuName": {
+            "value": "[parameters('postgresSkuName')]"
+          },
+          "postgresSkuTier": {
+            "value": "[parameters('postgresSkuTier')]"
+          },
+          "postgresStorageGB": {
+            "value": "[parameters('postgresStorageGB')]"
+          },
+          "postgresVersion": {
+            "value": "[parameters('postgresVersion')]"
+          },
+          "postgresBackupRetentionDays": {
+            "value": "[parameters('postgresBackupRetentionDays')]"
+          },
+          "postgresHighAvailabilityMode": {
+            "value": "[parameters('postgresHighAvailabilityMode')]"
+          },
+          "postgresGeoRedundantBackup": {
+            "value": "[parameters('postgresGeoRedundantBackup')]"
+          },
+          "postgresPublicNetworkAccess": {
+            "value": "[parameters('postgresPublicNetworkAccess')]"
+          },
+          "keyVaultSku": {
+            "value": "[parameters('keyVaultSku')]"
+          },
+          "keyVaultSoftDeleteRetentionDays": {
+            "value": "[parameters('keyVaultSoftDeleteRetentionDays')]"
+          },
+          "logAnalyticsSku": {
+            "value": "[parameters('logAnalyticsSku')]"
+          },
+          "logAnalyticsRetentionDays": {
+            "value": "[parameters('logAnalyticsRetentionDays')]"
+          },
+          "logAnalyticsDailyCapGB": {
+            "value": "[parameters('logAnalyticsDailyCapGB')]"
+          },
+          "apiAppCpu": {
+            "value": "[parameters('apiAppCpu')]"
+          },
+          "apiAppMemory": {
+            "value": "[parameters('apiAppMemory')]"
+          },
+          "apiAppMinReplicas": {
+            "value": "[parameters('apiAppMinReplicas')]"
+          },
+          "apiAppMaxReplicas": {
+            "value": "[parameters('apiAppMaxReplicas')]"
+          },
+          "apiAppTargetPort": {
+            "value": "[parameters('apiAppTargetPort')]"
+          },
+          "apiAppScaleThreshold": {
+            "value": "[parameters('apiAppScaleThreshold')]"
+          },
+          "apiAppRevisionsMode": {
+            "value": "[parameters('apiAppRevisionsMode')]"
+          },
+          "portalAppCpu": {
+            "value": "[parameters('portalAppCpu')]"
+          },
+          "portalAppMemory": {
+            "value": "[parameters('portalAppMemory')]"
+          },
+          "portalAppMinReplicas": {
+            "value": "[parameters('portalAppMinReplicas')]"
+          },
+          "portalAppMaxReplicas": {
+            "value": "[parameters('portalAppMaxReplicas')]"
+          },
+          "portalAppTargetPort": {
+            "value": "[parameters('portalAppTargetPort')]"
+          },
+          "portalAppScaleThreshold": {
+            "value": "[parameters('portalAppScaleThreshold')]"
+          },
+          "entraTenantId": {
+            "value": "[parameters('entraTenantId')]"
+          },
+          "entraClientId": {
+            "value": "[parameters('entraClientId')]"
+          },
+          "entraClientSecret": {
+            "value": "[parameters('entraClientSecret')]"
+          },
+          "entraAuthorityBase": {
+            "value": "[parameters('entraAuthorityBase')]"
+          },
+          "ghcrUsername": {
+            "value": "[parameters('ghcrUsername')]"
+          },
+          "ghcrToken": {
+            "value": "[parameters('ghcrToken')]"
+          },
+          "masterKey": {
+            "value": "[parameters('masterKey')]"
+          },
+          "enablePgBouncer": {
+            "value": "[parameters('enablePgBouncer')]"
+          },
+          "enableAlertRules": {
+            "value": "[parameters('enableAlertRules')]"
+          },
+          "logAnalyticsName": {
+            "value": "[parameters('logAnalyticsName')]"
+          },
+          "logAnalyticsTags": {
+            "value": "[parameters('logAnalyticsTags')]"
+          },
+          "applicationInsightsName": {
+            "value": "[parameters('applicationInsightsName')]"
+          },
+          "applicationInsightsTags": {
+            "value": "[parameters('applicationInsightsTags')]"
+          },
+          "azureMonitorWorkspaceName": {
+            "value": "[parameters('azureMonitorWorkspaceName')]"
+          },
+          "azureMonitorWorkspaceTags": {
+            "value": "[parameters('azureMonitorWorkspaceTags')]"
+          },
+          "managedIdentityName": {
+            "value": "[parameters('managedIdentityName')]"
+          },
+          "managedIdentityTags": {
+            "value": "[parameters('managedIdentityTags')]"
+          },
+          "keyVaultName": {
+            "value": "[parameters('keyVaultName')]"
+          },
+          "keyVaultTags": {
+            "value": "[parameters('keyVaultTags')]"
+          },
+          "postgresServerName": {
+            "value": "[parameters('postgresServerName')]"
+          },
+          "postgresServerTags": {
+            "value": "[parameters('postgresServerTags')]"
+          },
+          "postgresDatabaseName": {
+            "value": "[parameters('postgresDatabaseName')]"
+          },
+          "containerAppsEnvironmentName": {
+            "value": "[parameters('containerAppsEnvironmentName')]"
+          },
+          "containerAppsEnvironmentTags": {
+            "value": "[parameters('containerAppsEnvironmentTags')]"
+          },
+          "apiAppName": {
+            "value": "[parameters('apiAppName')]"
+          },
+          "apiAppTags": {
+            "value": "[parameters('apiAppTags')]"
+          },
+          "portalAppName": {
+            "value": "[parameters('portalAppName')]"
+          },
+          "portalAppTags": {
+            "value": "[parameters('portalAppTags')]"
+          },
+          "portalCustomDomain": {
+            "value": "[parameters('portalCustomDomain')]"
+          },
+          "apiCustomDomain": {
+            "value": "[parameters('apiCustomDomain')]"
+          },
+          "bringYourOwn": {
+            "value": "[parameters('bringYourOwn')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "14164939566307797246"
+            }
+          },
+          "functions": [
+            {
+              "namespace": "__bicep",
+              "members": {
+                "cafName": {
+                  "parameters": [
+                    {
+                      "type": "string",
+                      "name": "typeAbbrValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "workloadValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "envValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "regionValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "instanceValue"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[format('{0}-{1}-{2}-{3}-{4}', parameters('typeAbbrValue'), parameters('workloadValue'), parameters('envValue'), parameters('regionValue'), parameters('instanceValue'))]"
+                  }
+                },
+                "cafNameWithRole": {
+                  "parameters": [
+                    {
+                      "type": "string",
+                      "name": "typeAbbrValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "workloadValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "roleValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "envValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "regionValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "instanceValue"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[format('{0}-{1}-{2}-{3}-{4}-{5}', parameters('typeAbbrValue'), parameters('workloadValue'), parameters('roleValue'), parameters('envValue'), parameters('regionValue'), parameters('instanceValue'))]"
+                  }
+                },
+                "cafNameLengthConstrained": {
+                  "parameters": [
+                    {
+                      "type": "string",
+                      "name": "typeAbbrValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "workloadValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "envValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "regionValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "instanceValue"
+                    },
+                    {
+                      "type": "string",
+                      "name": "hashValue"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[format('{0}{1}{2}{3}{4}{5}', parameters('typeAbbrValue'), parameters('workloadValue'), parameters('envValue'), parameters('regionValue'), parameters('instanceValue'), parameters('hashValue'))]"
+                  }
+                }
+              }
+            }
+          ],
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Azure region."
+              }
+            },
+            "workload": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 12,
+              "metadata": {
+                "description": "Workload identifier. Used in CAF-pattern names."
+              }
+            },
+            "environment": {
+              "type": "string",
+              "allowedValues": [
+                "dev",
+                "test",
+                "stage",
+                "prod"
+              ],
+              "metadata": {
+                "description": "Environment."
+              }
+            },
+            "instance": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 3,
+              "metadata": {
+                "description": "Three-digit zero-padded instance number."
+              }
+            },
+            "regionCode": {
+              "type": "string",
+              "metadata": {
+                "description": "Three-letter Azure region code."
+              }
+            },
+            "commonTags": {
+              "type": "object",
+              "metadata": {
+                "description": "CAF mandatory tag set + operator additions. Applied to every resource."
+              }
+            },
+            "autoTags": {
+              "type": "object",
+              "metadata": {
+                "description": "Auto-injected tags (ManagedBy, DeployedAt). Applied to every resource."
+              }
+            },
+            "imageTag": {
+              "type": "string",
+              "defaultValue": "main",
+              "metadata": {
+                "description": "Default container image tag. Used for API and portal unless overridden."
+              }
+            },
+            "apiImageTag": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional override for the API image tag. Empty = use imageTag."
+              }
+            },
+            "portalImageTag": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional override for the portal image tag. Portal repo has its own commit history so this lets you pin to a real portal SHA independently. Empty = use imageTag."
+              }
+            },
+            "postgresAdminUser": {
+              "type": "string",
+              "defaultValue": "cloudsmith",
+              "metadata": {
+                "description": "PostgreSQL admin login."
+              }
+            },
+            "postgresAdminPassword": {
+              "type": "securestring"
+            },
+            "postgresSkuName": {
+              "type": "string",
+              "defaultValue": "Standard_B1ms"
+            },
+            "postgresSkuTier": {
+              "type": "string",
+              "defaultValue": "Burstable",
+              "allowedValues": [
+                "Burstable",
+                "GeneralPurpose",
+                "MemoryOptimized"
+              ]
+            },
+            "postgresStorageGB": {
+              "type": "int",
+              "defaultValue": 32,
+              "minValue": 32
+            },
+            "postgresVersion": {
+              "type": "string",
+              "defaultValue": "16"
+            },
+            "postgresBackupRetentionDays": {
+              "type": "int",
+              "defaultValue": 7,
+              "minValue": 7,
+              "maxValue": 35
+            },
+            "postgresHighAvailabilityMode": {
+              "type": "string",
+              "defaultValue": "Disabled",
+              "allowedValues": [
+                "Disabled",
+                "SameZone",
+                "ZoneRedundant"
+              ]
+            },
+            "postgresGeoRedundantBackup": {
+              "type": "string",
+              "defaultValue": "Disabled",
+              "allowedValues": [
+                "Enabled",
+                "Disabled"
+              ],
+              "metadata": {
+                "description": "PostgreSQL geo-redundant backup. Enable for prod workloads (requires paired region)."
+              }
+            },
+            "postgresPublicNetworkAccess": {
+              "type": "string",
+              "defaultValue": "Enabled",
+              "allowedValues": [
+                "Enabled",
+                "Disabled"
+              ],
+              "metadata": {
+                "description": "PostgreSQL public network access. Disabled requires private endpoint (Phase V)."
+              }
+            },
+            "keyVaultSku": {
+              "type": "string",
+              "defaultValue": "standard",
+              "allowedValues": [
+                "standard",
+                "premium"
+              ]
+            },
+            "keyVaultSoftDeleteRetentionDays": {
+              "type": "int",
+              "defaultValue": 7,
+              "minValue": 7,
+              "maxValue": 90
+            },
+            "logAnalyticsSku": {
+              "type": "string",
+              "defaultValue": "PerGB2018"
+            },
+            "logAnalyticsRetentionDays": {
+              "type": "int",
+              "defaultValue": 30,
+              "minValue": 30,
+              "maxValue": 730
+            },
+            "logAnalyticsDailyCapGB": {
+              "type": "int",
+              "defaultValue": 1,
+              "minValue": 0,
+              "metadata": {
+                "description": "Log Analytics daily data cap in GB. 0 = unlimited (not recommended for non-prod)."
+              }
+            },
+            "apiAppCpu": {
+              "type": "string",
+              "defaultValue": "0.5"
+            },
+            "apiAppMemory": {
+              "type": "string",
+              "defaultValue": "1Gi"
+            },
+            "apiAppMinReplicas": {
+              "type": "int",
+              "defaultValue": 0,
+              "minValue": 0
+            },
+            "apiAppMaxReplicas": {
+              "type": "int",
+              "defaultValue": 3,
+              "minValue": 1
+            },
+            "apiAppTargetPort": {
+              "type": "int",
+              "defaultValue": 8080
+            },
+            "apiAppScaleThreshold": {
+              "type": "int",
+              "defaultValue": 100,
+              "metadata": {
+                "description": "API ACA scale-out threshold: concurrent HTTP requests per replica before adding a replica."
+              }
+            },
+            "apiAppRevisionsMode": {
+              "type": "string",
+              "defaultValue": "Single",
+              "allowedValues": [
+                "Single",
+                "Multiple"
+              ],
+              "metadata": {
+                "description": "ACA active revisions mode. Multiple enables weighted traffic split for zero-downtime deploys."
+              }
+            },
+            "portalAppCpu": {
+              "type": "string",
+              "defaultValue": "0.25"
+            },
+            "portalAppMemory": {
+              "type": "string",
+              "defaultValue": "0.5Gi"
+            },
+            "portalAppMinReplicas": {
+              "type": "int",
+              "defaultValue": 0,
+              "minValue": 0
+            },
+            "portalAppMaxReplicas": {
+              "type": "int",
+              "defaultValue": 2,
+              "minValue": 1
+            },
+            "portalAppTargetPort": {
+              "type": "int",
+              "defaultValue": 80
+            },
+            "portalAppScaleThreshold": {
+              "type": "int",
+              "defaultValue": 50,
+              "metadata": {
+                "description": "Portal ACA scale-out threshold: concurrent HTTP requests per replica."
+              }
+            },
+            "entraTenantId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Entra tenant ID — empty = ADR-047 first-run wizard."
+              }
+            },
+            "entraClientId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Entra client ID — empty = first-run wizard."
+              }
+            },
+            "entraClientSecret": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "entraAuthorityBase": {
+              "type": "string",
+              "defaultValue": "https://login.microsoftonline.com",
+              "metadata": {
+                "description": "Entra authority base URL. Override for sovereign clouds (GovCloud, China). Default = https://login.microsoftonline.com."
+              }
+            },
+            "ghcrUsername": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "GHCR username. Empty = images public (ADR-046)."
+              }
+            },
+            "ghcrToken": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "masterKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "256-bit AES master key (base64-encoded). Written to KV at deploy time; referenced by ACA via KV secret reference. Generated externally and passed via environment or @secure() parameter."
+              }
+            },
+            "enablePgBouncer": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Enable PgBouncer connection pooling sidecar on the API container app."
+              }
+            },
+            "enableAlertRules": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Enable Azure Monitor metric alert rules for ACA availability, PG CPU/storage, KV throttling."
+              }
+            },
+            "logAnalyticsName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "logAnalyticsTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "azureMonitorWorkspaceName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "azureMonitorWorkspaceTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "applicationInsightsName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "applicationInsightsTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "managedIdentityName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "managedIdentityTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "keyVaultName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "keyVaultTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "postgresServerName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "postgresServerTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "postgresDatabaseName": {
+              "type": "string",
+              "defaultValue": "cloudsmith"
+            },
+            "containerAppsEnvironmentName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "containerAppsEnvironmentTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "apiAppName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "apiAppTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "portalAppName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "portalAppTags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "portalCustomDomain": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional custom domain for the portal. Empty = use default *.azurecontainerapps.io HTTPS."
+              }
+            },
+            "apiCustomDomain": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Optional custom domain for the API. Empty = use default *.azurecontainerapps.io HTTPS."
+              }
+            },
+            "bringYourOwn": {
+              "type": "object",
+              "defaultValue": {
+                "logAnalyticsWorkspaceId": "",
+                "applicationInsightsId": "",
+                "managedIdentityId": "",
+                "keyVaultId": "",
+                "containerAppsEnvironmentId": ""
+              }
+            }
+          },
+          "variables": {
+            "typeAbbr": {
+              "resourceGroup": "rg",
+              "logAnalyticsWorkspace": "log",
+              "applicationInsights": "appi",
+              "userAssignedManagedIdentity": "id",
+              "keyVault": "kv",
+              "postgresqlFlexibleServer": "psql",
+              "containerAppsEnvironment": "cae",
+              "containerApp": "ca",
+              "azureMonitorWorkspace": "amw",
+              "dataCollectionEndpoint": "dce",
+              "dataCollectionRule": "dcr"
+            },
+            "rgHash": "[substring(uniqueString(resourceGroup().id), 0, 6)]",
+            "workloadShort": "[if(greater(length(parameters('workload')), 4), substring(parameters('workload'), 0, 4), parameters('workload'))]",
+            "logAnalyticsNameEffective": "[if(empty(parameters('logAnalyticsName')), __bicep.cafName(variables('typeAbbr').logAnalyticsWorkspace, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')), parameters('logAnalyticsName'))]",
+            "azureMonitorWorkspaceNameEffective": "[if(empty(parameters('azureMonitorWorkspaceName')), __bicep.cafName(variables('typeAbbr').azureMonitorWorkspace, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')), parameters('azureMonitorWorkspaceName'))]",
+            "applicationInsightsNameEffective": "[if(empty(parameters('applicationInsightsName')), __bicep.cafName(variables('typeAbbr').applicationInsights, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')), parameters('applicationInsightsName'))]",
+            "managedIdentityNameEffective": "[if(empty(parameters('managedIdentityName')), __bicep.cafName(variables('typeAbbr').userAssignedManagedIdentity, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')), parameters('managedIdentityName'))]",
+            "keyVaultNameEffective": "[if(empty(parameters('keyVaultName')), __bicep.cafNameLengthConstrained(variables('typeAbbr').keyVault, variables('workloadShort'), parameters('environment'), parameters('regionCode'), parameters('instance'), variables('rgHash')), parameters('keyVaultName'))]",
+            "postgresServerNameEffective": "[if(empty(parameters('postgresServerName')), __bicep.cafName(variables('typeAbbr').postgresqlFlexibleServer, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')), parameters('postgresServerName'))]",
+            "containerAppsEnvironmentNameEffective": "[if(empty(parameters('containerAppsEnvironmentName')), __bicep.cafName(variables('typeAbbr').containerAppsEnvironment, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')), parameters('containerAppsEnvironmentName'))]",
+            "apiAppNameEffective": "[if(empty(parameters('apiAppName')), __bicep.cafNameWithRole(variables('typeAbbr').containerApp, parameters('workload'), 'api', parameters('environment'), parameters('regionCode'), parameters('instance')), parameters('apiAppName'))]",
+            "_portalAppNameRaw": "[__bicep.cafNameWithRole(variables('typeAbbr').containerApp, parameters('workload'), 'portal', parameters('environment'), parameters('regionCode'), parameters('instance'))]",
+            "portalAppNameEffective": "[if(empty(parameters('portalAppName')), if(greater(length(variables('_portalAppNameRaw')), 32), substring(variables('_portalAppNameRaw'), 0, 32), variables('_portalAppNameRaw')), parameters('portalAppName'))]",
+            "allTagsBase": "[union(parameters('commonTags'), parameters('autoTags'))]",
+            "keyVaultDisplayName": "[__bicep.cafName(variables('typeAbbr').keyVault, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance'))]",
+            "kvDisplayTag": {
+              "DisplayName": "[variables('keyVaultDisplayName')]"
+            },
+            "imagesArePrivate": "[not(empty(parameters('ghcrToken')))]",
+            "_apiImageTagEff": "[if(empty(parameters('apiImageTag')), parameters('imageTag'), parameters('apiImageTag'))]",
+            "_portalImageTagEff": "[if(empty(parameters('portalImageTag')), parameters('imageTag'), parameters('portalImageTag'))]",
+            "apiImage": "[format('ghcr.io/cloudsmith-cloud/cloudsmith-api:{0}', variables('_apiImageTagEff'))]",
+            "portalImage": "[format('ghcr.io/cloudsmith-cloud/cloudsmith-portal:{0}', variables('_portalImageTagEff'))]",
+            "pgFqdn": "[format('{0}.postgres.database.azure.com', variables('postgresServerNameEffective'))]",
+            "oidcPreseed": "[not(empty(parameters('entraClientId')))]",
+            "_entraAuthorityBase": "[if(endsWith(parameters('entraAuthorityBase'), '/'), substring(parameters('entraAuthorityBase'), 0, sub(length(parameters('entraAuthorityBase')), 1)), parameters('entraAuthorityBase'))]",
+            "entraAuthority": "[if(empty(parameters('entraTenantId')), '', format('{0}/{1}/v2.0', variables('_entraAuthorityBase'), parameters('entraTenantId')))]",
+            "oidcApiEnv": "[if(variables('oidcPreseed'), createArray(createObject('name', 'Keycloak__Authority', 'value', variables('entraAuthority')), createObject('name', 'Keycloak__ClientId', 'value', parameters('entraClientId')), createObject('name', 'Keycloak__ClientSecret', 'secretRef', 'entra-client-secret'), createObject('name', 'Keycloak__RequireHttpsMetadata', 'value', 'true')), createArray())]",
+            "dbHost": "[if(parameters('enablePgBouncer'), 'localhost', variables('pgFqdn'))]",
+            "pgPasswordSecretName": "[format('cs-{0}-core-db-password', parameters('environment'))]",
+            "masterKeySecretName": "cloudsmith-master-key",
+            "entraClientSecretName": "cloudsmith-entra-client-secret",
+            "appInsightsSecretName": "cloudsmith-appinsights-connection-string",
+            "kvDnsSuffix": "[environment().suffixes.keyvaultDns]",
+            "byoLawId": "[coalesce(tryGet(parameters('bringYourOwn'), 'logAnalyticsWorkspaceId'), '')]",
+            "byoAppiId": "[coalesce(tryGet(parameters('bringYourOwn'), 'applicationInsightsId'), '')]",
+            "byoMiId": "[coalesce(tryGet(parameters('bringYourOwn'), 'managedIdentityId'), '')]",
+            "byoKvId": "[coalesce(tryGet(parameters('bringYourOwn'), 'keyVaultId'), '')]",
+            "byoCaeId": "[coalesce(tryGet(parameters('bringYourOwn'), 'containerAppsEnvironmentId'), '')]",
+            "dummyId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/_dummy/providers/_/_/_",
+            "byoLawParts": "[split(if(empty(variables('byoLawId')), variables('dummyId'), variables('byoLawId')), '/')]",
+            "byoAppiParts": "[split(if(empty(variables('byoAppiId')), variables('dummyId'), variables('byoAppiId')), '/')]",
+            "byoMiParts": "[split(if(empty(variables('byoMiId')), variables('dummyId'), variables('byoMiId')), '/')]",
+            "byoKvParts": "[split(if(empty(variables('byoKvId')), variables('dummyId'), variables('byoKvId')), '/')]",
+            "byoCaeParts": "[split(if(empty(variables('byoCaeId')), variables('dummyId'), variables('byoCaeId')), '/')]",
+            "lawId": "[if(empty(variables('byoLawId')), resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsNameEffective')), extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('byoLawParts')[2], variables('byoLawParts')[4]), 'Microsoft.OperationalInsights/workspaces', variables('byoLawParts')[8]))]",
+            "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb",
+            "amwId": "[resourceId('Microsoft.Monitor/accounts', variables('azureMonitorWorkspaceNameEffective'))]",
+            "miId": "[if(empty(variables('byoMiId')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityNameEffective')), extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('byoMiParts')[2], variables('byoMiParts')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('byoMiParts')[8]))]",
+            "miNameForPg": "[if(empty(variables('byoMiId')), variables('managedIdentityNameEffective'), variables('byoMiParts')[8])]",
+            "kvSecretsOfficerRoleId": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
+            "kvNameEffective": "[if(empty(variables('byoKvId')), variables('keyVaultNameEffective'), variables('byoKvParts')[8])]",
+            "pgPasswordSecretUri": "[format('https://{0}{1}/secrets/{2}', variables('kvNameEffective'), variables('kvDnsSuffix'), variables('pgPasswordSecretName'))]",
+            "masterKeySecretUri": "[format('https://{0}{1}/secrets/{2}', variables('kvNameEffective'), variables('kvDnsSuffix'), variables('masterKeySecretName'))]",
+            "entraClientSecretUri": "[format('https://{0}{1}/secrets/{2}', variables('kvNameEffective'), variables('kvDnsSuffix'), variables('entraClientSecretName'))]",
+            "appInsightsSecretUri": "[format('https://{0}{1}/secrets/{2}', variables('kvNameEffective'), variables('kvDnsSuffix'), variables('appInsightsSecretName'))]",
+            "caeId": "[if(empty(variables('byoCaeId')), resourceId('Microsoft.App/managedEnvironments', variables('containerAppsEnvironmentNameEffective')), extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('byoCaeParts')[2], variables('byoCaeParts')[4]), 'Microsoft.App/managedEnvironments', variables('byoCaeParts')[8]))]",
+            "registries": "[if(variables('imagesArePrivate'), createArray(createObject('server', 'ghcr.io', 'username', parameters('ghcrUsername'), 'passwordSecretRef', 'ghcr-token')), createArray())]",
+            "pgBouncerContainer": {
+              "name": "pgbouncer",
+              "image": "edoburu/pgbouncer:v1.23.1-p3",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "DB_HOST",
+                  "value": "[variables('pgFqdn')]"
+                },
+                {
+                  "name": "DB_PORT",
+                  "value": "5432"
+                },
+                {
+                  "name": "DB_USER",
+                  "value": "[parameters('postgresAdminUser')]"
+                },
+                {
+                  "name": "DB_PASSWORD",
+                  "secretRef": "pg-password"
+                },
+                {
+                  "name": "POOL_MODE",
+                  "value": "transaction"
+                },
+                {
+                  "name": "MAX_CLIENT_CONN",
+                  "value": "200"
+                },
+                {
+                  "name": "DEFAULT_POOL_SIZE",
+                  "value": "20"
+                },
+                {
+                  "name": "AUTH_TYPE",
+                  "value": "scram-sha-256"
+                }
+              ]
+            }
+          },
+          "resources": {
+            "newLaw": {
+              "condition": "[empty(variables('byoLawId'))]",
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[variables('logAnalyticsNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('logAnalyticsTags'))]",
+              "properties": {
+                "sku": {
+                  "name": "[parameters('logAnalyticsSku')]"
+                },
+                "retentionInDays": "[parameters('logAnalyticsRetentionDays')]",
+                "workspaceCapping": {
+                  "dailyQuotaGb": "[if(equals(parameters('logAnalyticsDailyCapGB'), 0), -1, parameters('logAnalyticsDailyCapGB'))]"
+                }
+              }
+            },
+            "existingLaw": {
+              "condition": "[not(empty(variables('byoLawId')))]",
+              "existing": true,
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "subscriptionId": "[variables('byoLawParts')[2]]",
+              "resourceGroup": "[variables('byoLawParts')[4]]",
+              "name": "[variables('byoLawParts')[8]]"
+            },
+            "newAppi": {
+              "condition": "[empty(variables('byoAppiId'))]",
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[variables('applicationInsightsNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('applicationInsightsTags'))]",
+              "kind": "web",
+              "properties": {
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[variables('lawId')]"
+              },
+              "dependsOn": [
+                "newLaw"
+              ]
+            },
+            "existingAppi": {
+              "condition": "[not(empty(variables('byoAppiId')))]",
+              "existing": true,
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "subscriptionId": "[variables('byoAppiParts')[2]]",
+              "resourceGroup": "[variables('byoAppiParts')[4]]",
+              "name": "[variables('byoAppiParts')[8]]"
+            },
+            "amw": {
+              "type": "Microsoft.Monitor/accounts",
+              "apiVersion": "2023-04-03",
+              "name": "[variables('azureMonitorWorkspaceNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('azureMonitorWorkspaceTags'))]"
+            },
+            "dce": {
+              "type": "Microsoft.Insights/dataCollectionEndpoints",
+              "apiVersion": "2022-06-01",
+              "name": "[__bicep.cafName(variables('typeAbbr').dataCollectionEndpoint, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance'))]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('allTagsBase')]",
+              "properties": {
+                "networkAcls": {
+                  "publicNetworkAccess": "Enabled"
+                }
+              }
+            },
+            "dcr": {
+              "type": "Microsoft.Insights/dataCollectionRules",
+              "apiVersion": "2022-06-01",
+              "name": "[__bicep.cafName(variables('typeAbbr').dataCollectionRule, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance'))]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('allTagsBase')]",
+              "properties": {
+                "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', __bicep.cafName(variables('typeAbbr').dataCollectionEndpoint, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')))]",
+                "dataSources": {
+                  "prometheusForwarder": [
+                    {
+                      "name": "PrometheusDataSource",
+                      "streams": [
+                        "Microsoft-PrometheusMetrics"
+                      ]
+                    }
+                  ]
+                },
+                "destinations": {
+                  "monitoringAccounts": [
+                    {
+                      "name": "cloudsmithAmw",
+                      "accountResourceId": "[resourceId('Microsoft.Monitor/accounts', variables('azureMonitorWorkspaceNameEffective'))]"
+                    }
+                  ]
+                },
+                "dataFlows": [
+                  {
+                    "streams": [
+                      "Microsoft-PrometheusMetrics"
+                    ],
+                    "destinations": [
+                      "cloudsmithAmw"
+                    ]
+                  }
+                ]
+              },
+              "dependsOn": [
+                "amw",
+                "dce"
+              ]
+            },
+            "dcrPublisherRole": {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Insights/dataCollectionRules', __bicep.cafName(variables('typeAbbr').dataCollectionRule, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance')))]",
+              "name": "[guid(resourceId('Microsoft.Insights/dataCollectionRules', __bicep.cafName(variables('typeAbbr').dataCollectionRule, parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance'))), variables('miId'), variables('monitoringMetricsPublisherRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]",
+                "principalId": "[if(empty(variables('byoMiId')), reference('newMi').principalId, reference('existingMi').principalId)]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "dcr",
+                "existingMi",
+                "newMi"
+              ]
+            },
+            "newMi": {
+              "condition": "[empty(variables('byoMiId'))]",
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[variables('managedIdentityNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('managedIdentityTags'))]"
+            },
+            "existingMi": {
+              "condition": "[not(empty(variables('byoMiId')))]",
+              "existing": true,
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "subscriptionId": "[variables('byoMiParts')[2]]",
+              "resourceGroup": "[variables('byoMiParts')[4]]",
+              "name": "[variables('byoMiParts')[8]]"
+            },
+            "newKv": {
+              "condition": "[empty(variables('byoKvId'))]",
+              "type": "Microsoft.KeyVault/vaults",
+              "apiVersion": "2023-07-01",
+              "name": "[variables('keyVaultNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('keyVaultTags'), variables('kvDisplayTag'))]",
+              "properties": {
+                "sku": {
+                  "family": "A",
+                  "name": "[parameters('keyVaultSku')]"
+                },
+                "tenantId": "[subscription().tenantId]",
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionInDays": "[parameters('keyVaultSoftDeleteRetentionDays')]",
+                "enablePurgeProtection": true
+              }
+            },
+            "existingKv": {
+              "condition": "[not(empty(variables('byoKvId')))]",
+              "existing": true,
+              "type": "Microsoft.KeyVault/vaults",
+              "apiVersion": "2023-07-01",
+              "subscriptionId": "[variables('byoKvParts')[2]]",
+              "resourceGroup": "[variables('byoKvParts')[4]]",
+              "name": "[variables('byoKvParts')[8]]"
+            },
+            "kvRoleAssignNew": {
+              "condition": "[empty(variables('byoKvId'))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultNameEffective'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultNameEffective')), variables('miId'), variables('kvSecretsOfficerRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('kvSecretsOfficerRoleId'))]",
+                "principalId": "[if(empty(variables('byoMiId')), reference('newMi').principalId, reference('existingMi').principalId)]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "existingMi",
+                "newKv",
+                "newMi"
+              ]
+            },
+            "pgPasswordSecret": {
+              "condition": "[empty(variables('byoKvId'))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', variables('keyVaultNameEffective'), variables('pgPasswordSecretName'))]",
+              "properties": {
+                "value": "[parameters('postgresAdminPassword')]",
+                "attributes": {
+                  "enabled": true
+                }
+              },
+              "dependsOn": [
+                "newKv"
+              ]
+            },
+            "masterKeySecret": {
+              "condition": "[empty(variables('byoKvId'))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', variables('keyVaultNameEffective'), variables('masterKeySecretName'))]",
+              "properties": {
+                "value": "[parameters('masterKey')]",
+                "attributes": {
+                  "enabled": true
+                }
+              },
+              "dependsOn": [
+                "newKv"
+              ]
+            },
+            "entraClientSecretResource": {
+              "condition": "[and(empty(variables('byoKvId')), variables('oidcPreseed'))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', variables('keyVaultNameEffective'), variables('entraClientSecretName'))]",
+              "properties": {
+                "value": "[parameters('entraClientSecret')]",
+                "attributes": {
+                  "enabled": true
+                }
+              },
+              "dependsOn": [
+                "newKv"
+              ]
+            },
+            "appInsightsSecret": {
+              "condition": "[empty(variables('byoKvId'))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', variables('keyVaultNameEffective'), variables('appInsightsSecretName'))]",
+              "properties": {
+                "value": "[if(empty(variables('byoAppiId')), reference('newAppi').ConnectionString, reference('existingAppi').ConnectionString)]",
+                "attributes": {
+                  "enabled": true
+                }
+              },
+              "dependsOn": [
+                "existingAppi",
+                "newAppi",
+                "newKv"
+              ]
+            },
+            "kvDiagnostics": {
+              "condition": "[empty(variables('byoKvId'))]",
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultNameEffective'))]",
+              "name": "kv-diag",
+              "properties": {
+                "workspaceId": "[variables('lawId')]",
+                "logs": [
+                  {
+                    "category": "AuditEvent",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "newKv",
+                "newLaw"
+              ]
+            },
+            "pg": {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+              "apiVersion": "2023-12-01-preview",
+              "name": "[variables('postgresServerNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('postgresServerTags'))]",
+              "sku": {
+                "name": "[parameters('postgresSkuName')]",
+                "tier": "[parameters('postgresSkuTier')]"
+              },
+              "properties": {
+                "version": "[parameters('postgresVersion')]",
+                "administratorLogin": "[parameters('postgresAdminUser')]",
+                "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
+                "storage": {
+                  "storageSizeGB": "[parameters('postgresStorageGB')]"
+                },
+                "backup": {
+                  "backupRetentionDays": "[parameters('postgresBackupRetentionDays')]",
+                  "geoRedundantBackup": "[parameters('postgresGeoRedundantBackup')]"
+                },
+                "highAvailability": {
+                  "mode": "[parameters('postgresHighAvailabilityMode')]"
+                },
+                "authConfig": {
+                  "activeDirectoryAuth": "Enabled",
+                  "passwordAuth": "Enabled",
+                  "tenantId": "[subscription().tenantId]"
+                },
+                "network": {
+                  "publicNetworkAccess": "[parameters('postgresPublicNetworkAccess')]"
+                }
+              }
+            },
+            "pgDb": {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+              "apiVersion": "2023-12-01-preview",
+              "name": "[format('{0}/{1}', variables('postgresServerNameEffective'), parameters('postgresDatabaseName'))]",
+              "dependsOn": [
+                "pg"
+              ]
+            },
+            "pgFwAzure": {
+              "condition": "[equals(parameters('postgresPublicNetworkAccess'), 'Enabled')]",
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+              "apiVersion": "2023-12-01-preview",
+              "name": "[format('{0}/{1}', variables('postgresServerNameEffective'), 'AllowAllAzureServices')]",
+              "properties": {
+                "startIpAddress": "0.0.0.0",
+                "endIpAddress": "0.0.0.0"
+              },
+              "dependsOn": [
+                "pg"
+              ]
+            },
+            "newCae": {
+              "condition": "[empty(variables('byoCaeId'))]",
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-03-01",
+              "name": "[variables('containerAppsEnvironmentNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('containerAppsEnvironmentTags'))]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[if(empty(variables('byoLawId')), reference('newLaw').customerId, reference('existingLaw').customerId)]",
+                    "sharedKey": "[if(empty(variables('byoLawId')), listKeys('newLaw', '2023-09-01').primarySharedKey, listKeys('existingLaw', '2023-09-01').primarySharedKey)]"
+                  }
+                }
+              },
+              "dependsOn": [
+                "existingLaw",
+                "newLaw"
+              ]
+            },
+            "existingCae": {
+              "condition": "[not(empty(variables('byoCaeId')))]",
+              "existing": true,
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-03-01",
+              "subscriptionId": "[variables('byoCaeParts')[2]]",
+              "resourceGroup": "[variables('byoCaeParts')[4]]",
+              "name": "[variables('byoCaeParts')[8]]"
+            },
+            "apiApp": {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-03-01",
+              "name": "[variables('apiAppNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('apiAppTags'))]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', variables('miId'))]": {}
+                }
+              },
+              "properties": {
+                "managedEnvironmentId": "[variables('caeId')]",
+                "configuration": {
+                  "activeRevisionsMode": "[parameters('apiAppRevisionsMode')]",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": "[parameters('apiAppTargetPort')]",
+                    "transport": "auto",
+                    "customDomains": "[if(empty(parameters('apiCustomDomain')), createArray(), createArray(createObject('name', parameters('apiCustomDomain'), 'bindingType', 'SniEnabled', 'certificateId', null())))]",
+                    "traffic": [
+                      {
+                        "weight": 100,
+                        "latestRevision": true
+                      }
+                    ]
+                  },
+                  "registries": "[variables('registries')]",
+                  "secrets": "[concat(createArray(createObject('name', 'pg-password', 'keyVaultUrl', variables('pgPasswordSecretUri'), 'identity', variables('miId')), createObject('name', 'cloudsmith-master-key', 'keyVaultUrl', variables('masterKeySecretUri'), 'identity', variables('miId')), createObject('name', 'appinsights-connection-string', 'keyVaultUrl', variables('appInsightsSecretUri'), 'identity', variables('miId'))), if(variables('oidcPreseed'), createArray(createObject('name', 'entra-client-secret', 'keyVaultUrl', variables('entraClientSecretUri'), 'identity', variables('miId'))), createArray()), if(variables('imagesArePrivate'), createArray(createObject('name', 'ghcr-token', 'value', parameters('ghcrToken'))), createArray()))]"
+                },
+                "template": {
+                  "containers": "[concat(createArray(createObject('name', 'cloudsmith-api', 'image', variables('apiImage'), 'resources', createObject('cpu', json(parameters('apiAppCpu')), 'memory', parameters('apiAppMemory')), 'env', union(createArray(createObject('name', 'ASPNETCORE_ENVIRONMENT', 'value', 'Production'), createObject('name', 'ConnectionStrings__Default', 'secretRef', 'pg-password'), createObject('name', 'ConnectionStrings__DefaultHost', 'value', variables('dbHost')), createObject('name', 'ConnectionStrings__DefaultDatabase', 'value', parameters('postgresDatabaseName')), createObject('name', 'ConnectionStrings__DefaultUser', 'value', parameters('postgresAdminUser')), createObject('name', 'ApplicationInsights__ConnectionString', 'secretRef', 'appinsights-connection-string'), createObject('name', 'AZURE_CLIENT_ID', 'value', if(empty(variables('byoMiId')), reference('newMi').clientId, reference('existingMi').clientId)), createObject('name', 'Monitoring__Endpoints__1__HealthUrl', 'value', format('https://{0}.{1}', variables('portalAppNameEffective'), if(empty(variables('byoCaeId')), reference('newCae').defaultDomain, reference('existingCae').defaultDomain))), createObject('name', 'AZURE_MONITOR_WORKSPACE_ENDPOINT', 'value', reference('amw').metrics.prometheusQueryEndpoint), createObject('name', 'AZURE_MONITOR_DCE_ENDPOINT', 'value', reference('dce').metricsIngestion.endpoint), createObject('name', 'AZURE_MONITOR_DCR_IMMUTABLE_ID', 'value', reference('dcr').immutableId), createObject('name', 'CLOUDSMITH_MASTER_KEY', 'secretRef', 'cloudsmith-master-key'), createObject('name', 'CLOUDSMITH_DEPLOYMENT_MODE', 'value', 'paas'), createObject('name', 'CLOUDSMITH_KEY_VAULT_NAME', 'value', variables('kvNameEffective')), createObject('name', 'AZURE_SUBSCRIPTION_ID', 'value', subscription().subscriptionId), createObject('name', 'AZURE_TENANT_ID', 'value', subscription().tenantId), createObject('name', 'CLOUDSMITH_ACA_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'CLOUDSMITH_ACA_APP_NAME', 'value', variables('apiAppNameEffective')), createObject('name', 'CLOUDSMITH_AZURE_REGION', 'value', parameters('location'))), variables('oidcApiEnv')), 'probes', createArray(createObject('type', 'Startup', 'httpGet', createObject('path', '/health/startup', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'initialDelaySeconds', 5, 'periodSeconds', 5, 'failureThreshold', 12), createObject('type', 'Liveness', 'httpGet', createObject('path', '/health/live', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'periodSeconds', 30, 'failureThreshold', 3), createObject('type', 'Readiness', 'httpGet', createObject('path', '/health/ready', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'periodSeconds', 10, 'failureThreshold', 3)))), if(parameters('enablePgBouncer'), createArray(variables('pgBouncerContainer')), createArray()))]",
+                  "scale": {
+                    "minReplicas": "[parameters('apiAppMinReplicas')]",
+                    "maxReplicas": "[parameters('apiAppMaxReplicas')]",
+                    "rules": [
+                      {
+                        "name": "http-scaling",
+                        "http": {
+                          "metadata": {
+                            "concurrentRequests": "[string(parameters('apiAppScaleThreshold'))]"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "dependsOn": [
+                "amw",
+                "appInsightsSecret",
+                "dce",
+                "dcr",
+                "existingCae",
+                "existingMi",
+                "kvRoleAssignNew",
+                "masterKeySecret",
+                "newCae",
+                "newKv",
+                "newMi",
+                "pgPasswordSecret"
+              ]
+            },
+            "portalApp": {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-03-01",
+              "name": "[variables('portalAppNameEffective')]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('allTagsBase'), parameters('portalAppTags'))]",
+              "properties": {
+                "managedEnvironmentId": "[variables('caeId')]",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": "[parameters('portalAppTargetPort')]",
+                    "transport": "auto",
+                    "customDomains": "[if(empty(parameters('portalCustomDomain')), createArray(), createArray(createObject('name', parameters('portalCustomDomain'), 'bindingType', 'SniEnabled', 'certificateId', null())))]"
+                  },
+                  "registries": "[variables('registries')]",
+                  "secrets": "[if(variables('imagesArePrivate'), createArray(createObject('name', 'ghcr-token', 'value', parameters('ghcrToken'))), createArray())]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "cloudsmith-portal",
+                      "image": "[variables('portalImage')]",
+                      "resources": {
+                        "cpu": "[json(parameters('portalAppCpu'))]",
+                        "memory": "[parameters('portalAppMemory')]"
+                      },
+                      "env": [
+                        {
+                          "name": "CLOUDSMITH_API_URL",
+                          "value": ""
+                        },
+                        {
+                          "name": "CLOUDSMITH_AUTH_URL",
+                          "value": "[variables('entraAuthority')]"
+                        },
+                        {
+                          "name": "CLOUDSMITH_API_UPSTREAM",
+                          "value": "[format('https://{0}', reference('apiApp').configuration.ingress.fqdn)]"
+                        },
+                        {
+                          "name": "CLOUDSMITH_API_HOST",
+                          "value": "[reference('apiApp').configuration.ingress.fqdn]"
+                        },
+                        {
+                          "name": "CLOUDSMITH_FWD_PROTO",
+                          "value": "https"
+                        },
+                        {
+                          "name": "CLOUDSMITH_API_INTERNAL_URL",
+                          "value": "[format('https://{0}', reference('apiApp').configuration.ingress.fqdn)]"
+                        }
+                      ],
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "tcpSocket": {
+                            "port": "[parameters('portalAppTargetPort')]"
+                          },
+                          "periodSeconds": 30,
+                          "failureThreshold": 3
+                        },
+                        {
+                          "type": "Readiness",
+                          "httpGet": {
+                            "path": "/",
+                            "port": "[parameters('portalAppTargetPort')]",
+                            "scheme": "HTTP"
+                          },
+                          "initialDelaySeconds": 5,
+                          "periodSeconds": 10,
+                          "failureThreshold": 3
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": "[parameters('portalAppMinReplicas')]",
+                    "maxReplicas": "[parameters('portalAppMaxReplicas')]",
+                    "rules": [
+                      {
+                        "name": "http-scaling",
+                        "http": {
+                          "metadata": {
+                            "concurrentRequests": "[string(parameters('portalAppScaleThreshold'))]"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "dependsOn": [
+                "apiApp",
+                "newCae"
+              ]
+            },
+            "pgAadAdmin": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "pg-aad-admin",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "postgresServerName": {
+                    "value": "[variables('postgresServerNameEffective')]"
+                  },
+                  "principalId": "[if(empty(variables('byoMiId')), createObject('value', reference('newMi').principalId), createObject('value', reference('existingMi').principalId))]",
+                  "principalName": {
+                    "value": "[variables('miNameForPg')]"
+                  },
+                  "tenantId": {
+                    "value": "[subscription().tenantId]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.42.1.51946",
+                      "templateHash": "14132465443236640768"
+                    }
+                  },
+                  "parameters": {
+                    "postgresServerName": {
+                      "type": "string"
+                    },
+                    "principalId": {
+                      "type": "string"
+                    },
+                    "principalName": {
+                      "type": "string"
+                    },
+                    "tenantId": {
+                      "type": "string"
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.DBforPostgreSQL/flexibleServers/administrators",
+                      "apiVersion": "2023-12-01-preview",
+                      "name": "[format('{0}/{1}', parameters('postgresServerName'), parameters('principalId'))]",
+                      "properties": {
+                        "principalType": "ServicePrincipal",
+                        "principalName": "[parameters('principalName')]",
+                        "tenantId": "[parameters('tenantId')]"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "existingMi",
+                "newMi",
+                "pg",
+                "pgDb",
+                "pgFwAzure"
+              ]
+            },
+            "alertRules": {
+              "condition": "[parameters('enableAlertRules')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "cloudsmith-alerts",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "workload": {
+                    "value": "[parameters('workload')]"
+                  },
+                  "environment": {
+                    "value": "[parameters('environment')]"
+                  },
+                  "regionCode": {
+                    "value": "[parameters('regionCode')]"
+                  },
+                  "instance": {
+                    "value": "[parameters('instance')]"
+                  },
+                  "allTagsBase": {
+                    "value": "[variables('allTagsBase')]"
+                  },
+                  "apiAppId": {
+                    "value": "[resourceId('Microsoft.App/containerApps', variables('apiAppNameEffective'))]"
+                  },
+                  "portalAppId": {
+                    "value": "[resourceId('Microsoft.App/containerApps', variables('portalAppNameEffective'))]"
+                  },
+                  "pgServerId": {
+                    "value": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerNameEffective'))]"
+                  },
+                  "kvId": "[if(empty(variables('byoKvId')), createObject('value', resourceId('Microsoft.KeyVault/vaults', variables('keyVaultNameEffective'))), createObject('value', extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('byoKvParts')[2], variables('byoKvParts')[4]), 'Microsoft.KeyVault/vaults', variables('byoKvParts')[8])))]",
+                  "ownerEmail": "[if(contains(parameters('commonTags'), 'Owner'), createObject('value', parameters('commonTags').Owner), createObject('value', ''))]"
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.42.1.51946",
+                      "templateHash": "3294391807761074077"
+                    }
+                  },
+                  "parameters": {
+                    "workload": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Workload identifier used in CAF-pattern resource names."
+                      }
+                    },
+                    "environment": {
+                      "type": "string",
+                      "allowedValues": [
+                        "dev",
+                        "test",
+                        "stage",
+                        "prod"
+                      ],
+                      "metadata": {
+                        "description": "Environment name (dev/test/stage/prod)."
+                      }
+                    },
+                    "regionCode": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Three-letter Azure region code."
+                      }
+                    },
+                    "instance": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Three-digit zero-padded instance number."
+                      }
+                    },
+                    "allTagsBase": {
+                      "type": "object",
+                      "metadata": {
+                        "description": "Base tags (commonTags merged with autoTags) applied to all alert resources."
+                      }
+                    },
+                    "apiAppId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the API container app."
+                      }
+                    },
+                    "portalAppId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the portal container app."
+                      }
+                    },
+                    "pgServerId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the PostgreSQL Flexible Server."
+                      }
+                    },
+                    "kvId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the Key Vault."
+                      }
+                    },
+                    "ownerEmail": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Email address for alert notifications (from commonTags.Owner)."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "actionGroupName": "[format('ag-{0}-{1}-{2}-{3}', parameters('workload'), parameters('environment'), parameters('regionCode'), parameters('instance'))]",
+                    "alertPrefix": "cs-alert"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Insights/actionGroups",
+                      "apiVersion": "2023-01-01",
+                      "name": "[variables('actionGroupName')]",
+                      "location": "Global",
+                      "tags": "[parameters('allTagsBase')]",
+                      "properties": {
+                        "groupShortName": "csalerts",
+                        "enabled": true,
+                        "emailReceivers": "[if(empty(parameters('ownerEmail')), createArray(), createArray(createObject('name', 'owner-email', 'emailAddress', parameters('ownerEmail'), 'useCommonAlertSchema', true())))]"
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Insights/metricAlerts",
+                      "apiVersion": "2018-03-01",
+                      "name": "[format('{0}-api-restarts', variables('alertPrefix'))]",
+                      "location": "Global",
+                      "tags": "[parameters('allTagsBase')]",
+                      "properties": {
+                        "description": "CloudSmith API container app restarted more than 3 times in 15 minutes (crash loop).",
+                        "severity": 1,
+                        "enabled": true,
+                        "scopes": [
+                          "[parameters('apiAppId')]"
+                        ],
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "criteria": {
+                          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                          "allOf": [
+                            {
+                              "name": "api-restarts",
+                              "metricName": "RestartCount",
+                              "metricNamespace": "Microsoft.App/containerApps",
+                              "operator": "GreaterThan",
+                              "threshold": 3,
+                              "timeAggregation": "Total",
+                              "criterionType": "StaticThresholdCriterion"
+                            }
+                          ]
+                        },
+                        "actions": [
+                          {
+                            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/metricAlerts",
+                      "apiVersion": "2018-03-01",
+                      "name": "[format('{0}-portal-restarts', variables('alertPrefix'))]",
+                      "location": "Global",
+                      "tags": "[parameters('allTagsBase')]",
+                      "properties": {
+                        "description": "CloudSmith Portal container app restarted more than 3 times in 15 minutes (crash loop).",
+                        "severity": 2,
+                        "enabled": true,
+                        "scopes": [
+                          "[parameters('portalAppId')]"
+                        ],
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "criteria": {
+                          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                          "allOf": [
+                            {
+                              "name": "portal-restarts",
+                              "metricName": "RestartCount",
+                              "metricNamespace": "Microsoft.App/containerApps",
+                              "operator": "GreaterThan",
+                              "threshold": 3,
+                              "timeAggregation": "Total",
+                              "criterionType": "StaticThresholdCriterion"
+                            }
+                          ]
+                        },
+                        "actions": [
+                          {
+                            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/metricAlerts",
+                      "apiVersion": "2018-03-01",
+                      "name": "[format('{0}-pg-cpu', variables('alertPrefix'))]",
+                      "location": "Global",
+                      "tags": "[parameters('allTagsBase')]",
+                      "properties": {
+                        "description": "CloudSmith PostgreSQL CPU > 80% for 10 minutes.",
+                        "severity": 2,
+                        "enabled": true,
+                        "scopes": [
+                          "[parameters('pgServerId')]"
+                        ],
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT10M",
+                        "criteria": {
+                          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                          "allOf": [
+                            {
+                              "name": "pg-cpu",
+                              "metricName": "cpu_percent",
+                              "metricNamespace": "Microsoft.DBforPostgreSQL/flexibleServers",
+                              "operator": "GreaterThan",
+                              "threshold": 80,
+                              "timeAggregation": "Average",
+                              "criterionType": "StaticThresholdCriterion"
+                            }
+                          ]
+                        },
+                        "actions": [
+                          {
+                            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/metricAlerts",
+                      "apiVersion": "2018-03-01",
+                      "name": "[format('{0}-pg-storage', variables('alertPrefix'))]",
+                      "location": "Global",
+                      "tags": "[parameters('allTagsBase')]",
+                      "properties": {
+                        "description": "CloudSmith PostgreSQL storage > 80%.",
+                        "severity": 1,
+                        "enabled": true,
+                        "scopes": [
+                          "[parameters('pgServerId')]"
+                        ],
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT5M",
+                        "criteria": {
+                          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                          "allOf": [
+                            {
+                              "name": "pg-storage",
+                              "metricName": "storage_percent",
+                              "metricNamespace": "Microsoft.DBforPostgreSQL/flexibleServers",
+                              "operator": "GreaterThan",
+                              "threshold": 80,
+                              "timeAggregation": "Average",
+                              "criterionType": "StaticThresholdCriterion"
+                            }
+                          ]
+                        },
+                        "actions": [
+                          {
+                            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/metricAlerts",
+                      "apiVersion": "2018-03-01",
+                      "name": "[format('{0}-kv-throttle', variables('alertPrefix'))]",
+                      "location": "Global",
+                      "tags": "[parameters('allTagsBase')]",
+                      "properties": {
+                        "description": "CloudSmith Key Vault is receiving throttled requests (HTTP 429).",
+                        "severity": 2,
+                        "enabled": true,
+                        "scopes": [
+                          "[parameters('kvId')]"
+                        ],
+                        "evaluationFrequency": "PT1M",
+                        "windowSize": "PT5M",
+                        "criteria": {
+                          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                          "allOf": [
+                            {
+                              "name": "kv-throttle",
+                              "metricName": "ServiceApiResult",
+                              "metricNamespace": "Microsoft.KeyVault/vaults",
+                              "operator": "GreaterThan",
+                              "threshold": 0,
+                              "timeAggregation": "Count",
+                              "criterionType": "StaticThresholdCriterion",
+                              "dimensions": [
+                                {
+                                  "name": "StatusCode",
+                                  "operator": "Include",
+                                  "values": [
+                                    "429"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        "actions": [
+                          {
+                            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "actionGroupId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Insights/actionGroups', variables('actionGroupName'))]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "apiApp",
+                "newKv",
+                "pg",
+                "portalApp"
+              ]
+            }
+          },
+          "outputs": {
+            "portalUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference('portalApp').configuration.ingress.fqdn)]"
+            },
+            "apiUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference('apiApp').configuration.ingress.fqdn)]"
+            },
+            "apiAppName": {
+              "type": "string",
+              "value": "[variables('apiAppNameEffective')]"
+            },
+            "portalAppName": {
+              "type": "string",
+              "value": "[variables('portalAppNameEffective')]"
+            },
+            "postgresServer": {
+              "type": "string",
+              "value": "[variables('pgFqdn')]"
+            },
+            "keyVaultName": {
+              "type": "string",
+              "value": "[if(empty(variables('byoKvId')), variables('keyVaultNameEffective'), variables('byoKvParts')[8])]"
+            },
+            "appInsightsConnectionString": {
+              "type": "securestring",
+              "value": "[if(empty(variables('byoAppiId')), reference('newAppi').ConnectionString, reference('existingAppi').ConnectionString)]"
+            },
+            "managedIdentityClientId": {
+              "type": "string",
+              "value": "[if(empty(variables('byoMiId')), reference('newMi').clientId, reference('existingMi').clientId)]"
+            },
+            "azureMonitorWorkspaceId": {
+              "type": "string",
+              "value": "[variables('amwId')]"
+            },
+            "azureMonitorQueryEndpoint": {
+              "type": "string",
+              "value": "[reference('amw').metrics.prometheusQueryEndpoint]"
+            },
+            "azureMonitorMetricsIngestionEndpoint": {
+              "type": "string",
+              "value": "[reference('dce').metricsIngestion.endpoint]"
+            },
+            "azureMonitorDcrImmutableId": {
+              "type": "string",
+              "value": "[reference('dcr').immutableId]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "rg"
+      ]
+    },
+    "policyAssignments": {
+      "condition": "[parameters('enablePolicyAssignments')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "cloudsmith-policy",
+      "resourceGroup": "[variables('rgNameEffective')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "environment": {
+            "value": "[parameters('environment')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "15710916980291272465"
+            }
+          },
+          "parameters": {
+            "environment": {
+              "type": "string",
+              "allowedValues": [
+                "dev",
+                "test",
+                "stage",
+                "prod"
+              ],
+              "metadata": {
+                "description": "Environment name — used to disambiguate assignment names across envs."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region — required for policy assignment location property."
+              }
+            }
+          },
+          "variables": {
+            "requiredTags": [
+              "Environment",
+              "Workload",
+              "CostCenter",
+              "Owner",
+              "BusinessUnit",
+              "DataClassification",
+              "Criticality"
+            ]
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2022-06-01",
+              "name": "[format('cs-kv-key-expiry-{0}', parameters('environment'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "displayName": "CloudSmith — KV keys should have expiration date",
+                "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/5ff38825-c5d8-47c5-b70e-069a21955146",
+                "parameters": {
+                  "minimumDaysBeforeExpiration": {
+                    "value": 90
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2022-06-01",
+              "name": "[format('cs-kv-firewall-{0}', parameters('environment'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "displayName": "CloudSmith — KV should have firewall enabled (Audit; Deny post-Phase-V)",
+                "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/55615ac9-af46-4a59-874e-391cc3dfb490",
+                "parameters": {}
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2022-06-01",
+              "name": "[format('cs-pg-public-{0}', parameters('environment'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "displayName": "CloudSmith — PG public network access should be disabled (Audit; Deny post-Phase-V)",
+                "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/c9299215-ae47-4f50-9c54-8a392f68a052",
+                "parameters": {}
+              }
+            },
+            {
+              "copy": {
+                "name": "policyRequireTags",
+                "count": "[length(variables('requiredTags'))]"
+              },
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2022-06-01",
+              "name": "[format('cs-tag-{0}-{1}', toLower(variables('requiredTags')[copyIndex()]), parameters('environment'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "displayName": "[format('CloudSmith — require tag {0}', variables('requiredTags')[copyIndex()])]",
+                "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/871b6d14-10aa-478d-b590-94f262ecfa99",
+                "parameters": {
+                  "tagName": {
+                    "value": "[variables('requiredTags')[copyIndex()]]"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "rg"
+      ]
+    }
+  },
+  "outputs": {
+    "PORTAL_URL": {
+      "type": "string",
+      "value": "[reference('resources').outputs.portalUrl.value]"
+    },
+    "API_URL": {
+      "type": "string",
+      "value": "[reference('resources').outputs.apiUrl.value]"
+    },
+    "AZURE_MONITOR_WORKSPACE_ID": {
+      "type": "string",
+      "value": "[reference('resources').outputs.azureMonitorWorkspaceId.value]"
+    },
+    "AZURE_MONITOR_QUERY_ENDPOINT": {
+      "type": "string",
+      "value": "[reference('resources').outputs.azureMonitorQueryEndpoint.value]"
+    },
+    "AZURE_MONITOR_METRICS_INGESTION_ENDPOINT": {
+      "type": "string",
+      "value": "[reference('resources').outputs.azureMonitorMetricsIngestionEndpoint.value]"
+    },
+    "AZURE_MONITOR_DCR_IMMUTABLE_ID": {
+      "type": "string",
+      "value": "[reference('resources').outputs.azureMonitorDcrImmutableId.value]"
+    },
+    "API_APP_NAME": {
+      "type": "string",
+      "value": "[reference('resources').outputs.apiAppName.value]"
+    },
+    "PORTAL_APP_NAME": {
+      "type": "string",
+      "value": "[reference('resources').outputs.portalAppName.value]"
+    },
+    "POSTGRES_SERVER": {
+      "type": "string",
+      "value": "[reference('resources').outputs.postgresServer.value]"
+    },
+    "KEY_VAULT_NAME": {
+      "type": "string",
+      "value": "[reference('resources').outputs.keyVaultName.value]"
+    },
+    "RESOURCE_GROUP_NAME": {
+      "type": "string",
+      "value": "[variables('rgNameEffective')]"
+    },
+    "REGION_CODE": {
+      "type": "string",
+      "value": "[variables('regionCode')]"
+    }
+  }
+}
