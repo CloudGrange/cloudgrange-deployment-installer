@@ -10,9 +10,7 @@
 # Hyper-V cmdlets (Get-VMSwitch, New-VM, etc.) require Windows PowerShell (PS5.1).
 # The main installer (PS7) delegates VM provisioning here via powershell.exe.
 
-# Detect dot-source vs direct invocation before the param block takes control.
-$Script:_IsDotSourced = ($MyInvocation.InvocationName -eq '.')
-
+# Script-level param block MUST be the first statement after #Requires/comments.
 param(
     [string]$VmIp             = '192.168.100.10',
     [string]$VhdxPath         = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
@@ -315,7 +313,8 @@ ethernets:
 }
 
 # When invoked directly via powershell.exe -File (not dot-sourced), load dependencies and run.
-if (-not $Script:_IsDotSourced) {
+# $MyInvocation.InvocationName is '.' when dot-sourced; the script path when run directly.
+if ($MyInvocation.InvocationName -ne '.') {
     . "$PSScriptRoot\CloudSmith-Common.ps1"
     New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
         -SshPublicKey $SshPublicKey -BundledImagePath $BundledImagePath
