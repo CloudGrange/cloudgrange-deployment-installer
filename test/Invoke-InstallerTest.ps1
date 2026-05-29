@@ -135,8 +135,8 @@ Write-Host "Scripts downloaded."
 # Register scheduled task to run installer as $AdminUser (not SYSTEM)
 `$taskArg = "-NonInteractive -ExecutionPolicy Bypass -Command & '$installDir\Install-CloudSmith.ps1' -Mode $Mode -VmIp 192.168.100.10 -AcceptDefaults *> '$logPath'"
 `$action    = New-ScheduledTaskAction -Execute `$pwshPath -Argument `$taskArg
-`$localUser = "`$env:COMPUTERNAME\$AdminUser"
-Register-ScheduledTask -TaskName 'CloudSmithInstall' -Action `$action -User `$localUser -Password `$AdminPassword -RunLevel Highest -Force | Out-Null
+`$principal = New-ScheduledTaskPrincipal -UserId ".\$AdminUser" -LogonType Password -RunLevel Highest
+Register-ScheduledTask -TaskName 'CloudSmithInstall' -Action `$action -Principal `$principal -Password `$AdminPassword -Force | Out-Null
 Write-Host "Starting installer as $AdminUser..."
 Start-ScheduledTask -TaskName 'CloudSmithInstall'
 
