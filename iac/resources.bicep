@@ -861,8 +861,10 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'CLOUDSMITH_DEPLOYMENT_MODE', value: 'paas' }
               { name: 'CLOUDSMITH_KEY_VAULT_NAME',  value: kvNameEffective }
               // AB#2412 — env vars required by PaaSAdapter.TriggerImageUpdateAsync and host-info endpoint.
+              // AB#2403 — AZURE_TENANT_ID added so PaaSAdapter DefaultAzureCredential can resolve the tenant.
               // These are resolved from ARM built-in functions at deploy time — no hardcoded values.
               { name: 'AZURE_SUBSCRIPTION_ID',          value: subscription().subscriptionId }
+              { name: 'AZURE_TENANT_ID',                value: subscription().tenantId }
               { name: 'CLOUDSMITH_ACA_RESOURCE_GROUP',  value: resourceGroup().name }
               { name: 'CLOUDSMITH_ACA_APP_NAME',        value: apiAppNameEffective }
               { name: 'CLOUDSMITH_AZURE_REGION',        value: location }
