@@ -38,6 +38,8 @@ function New-CloudSmithVm {
         [string]$SshPublicKey = ''
     )
 
+    $ErrorActionPreference = 'Stop'
+
     $vmName     = 'cloudsmith-docker'
     $switchName = 'cloudsmith-internal'
     $hostIp     = '192.168.100.1'
@@ -56,6 +58,21 @@ function New-CloudSmithVm {
         }
     }
     Import-Module Hyper-V -ErrorAction Stop
+
+    # Remove any existing cloudsmith-docker VM before (re)provisioning.
+    # This releases VHDX and DVD-drive ISO file locks held by a running VM from a
+    # prior install attempt, preventing "file in use" errors on VHDX convert and
+    # ISO rebuild, and OOM failures from two 8 GB VMs existing simultaneously.
+    $existingVm = Get-VM -Name $vmName -ErrorAction SilentlyContinue
+    if ($existingVm) {
+        Write-Host "  Removing existing VM: $vmName"
+        if ($existingVm.State -ne 'Off') {
+            Stop-VM -Name $vmName -TurnOff -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+        }
+        Remove-VM -Name $vmName -Force
+        Write-Host "  Existing VM removed"
+    }
 
     # Hyper-V internal switch + WinNAT so the cloudsmith-docker VM has internet access.
     # An Internal switch provides a private network; WinNAT adds outbound NAT so the
