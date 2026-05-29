@@ -38,7 +38,10 @@ hooks:
       set -e
       echo "Running post-provision migration restart..."
       API_APP=$(azd env get-value API_APP_NAME 2>/dev/null || echo "")
-      RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || echo "")
+      # AB#2412 — main.bicep output is RESOURCE_GROUP_NAME (not AZURE_RESOURCE_GROUP).
+      # azd also populates the built-in AZURE_RESOURCE_GROUP env var from the resource group
+      # created during provision, so check both to stay forward-compatible.
+      RG=$(azd env get-value RESOURCE_GROUP_NAME 2>/dev/null || azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || echo "")
       if [ -z "$API_APP" ] || [ -z "$RG" ]; then
         echo "WARNING: API_APP_NAME or AZURE_RESOURCE_GROUP not set in azd env — skipping migration restart."
         exit 0
