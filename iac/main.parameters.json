@@ -28,9 +28,6 @@
     "entraClientSecret":     { "value": "${ENTRA_CLIENT_SECRET}" },
     "ghcrUsername":          { "value": "${GHCR_USERNAME=}" },
     "ghcrToken":             { "value": "${GHCR_TOKEN=}" },
-    "masterKey":             { "value": "${CLOUDSMITH_MASTER_KEY}" },
-
-    "_deploymentManagedIdentityId_comment": "Method B (enterprise/CI-CD): uncomment and set to the resource ID of your pre-created deployment UAMI. Leave absent for Method A (interactive az login). See iac/README.md — Deployment Authentication.",
-    "_deploymentManagedIdentityId_example": "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-cloudsmith-deploy"
+    "masterKey":             { "value": "${CLOUDSMITH_MASTER_KEY}" }
   }
 }

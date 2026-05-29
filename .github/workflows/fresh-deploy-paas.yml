@@ -108,9 +108,9 @@ jobs:
             --template-file iac/main.bicep \
             --parameters @/tmp/preflight.parameters.json \
             --query "properties.outputs" -o json > /tmp/outputs.json
-          API_URL=$(jq -r '.apI_URL.value'    /tmp/outputs.json)
-          PORTAL_URL=$(jq -r '.portaL_URL.value' /tmp/outputs.json)
-          KV_NAME=$(jq -r '.keY_VAULT_NAME.value' /tmp/outputs.json)
+          API_URL=$(jq -r '.API_URL.value'       /tmp/outputs.json)
+          PORTAL_URL=$(jq -r '.PORTAL_URL.value'  /tmp/outputs.json)
+          KV_NAME=$(jq -r '.KEY_VAULT_NAME.value'  /tmp/outputs.json)
           echo "api_url=$API_URL"       >> $GITHUB_OUTPUT
           echo "portal_url=$PORTAL_URL" >> $GITHUB_OUTPUT
           echo "kv_name=$KV_NAME"       >> $GITHUB_OUTPUT

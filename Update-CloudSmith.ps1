@@ -41,7 +41,7 @@ if ($UseWsl2) {
 # AB#1595 Step 3: Wait for API to become healthy, then trigger pending migrations
 Write-Progress-Step "Waiting for CloudSmith API to become healthy after restart"
 $apiBase = "http://$VmIp:8081"
-$healthOk = Wait-ForHttpOk -Url "$apiBase/api/v1/health" -TimeoutSeconds 300
+$healthOk = Wait-ForHttpOk -Url "$apiBase/health/ready" -TimeoutSeconds 300
 if (-not $healthOk) {
     Write-Error "CloudSmith API did not become healthy within 5 minutes after update. Check container logs."
 }
