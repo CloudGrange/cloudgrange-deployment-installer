@@ -105,9 +105,9 @@ param postgresHighAvailabilityMode string = 'Disabled'
 param postgresGeoRedundantBackup string = 'Disabled'
 
 // AB#1599
-@description('PostgreSQL public network access. Disabled requires private endpoint (Phase V VNet integration). Default is Disabled — set to Enabled only when a private endpoint is not yet in place.')
+@description('PostgreSQL public network access. Enabled (default) allows ACA containers via the AllowAllAzureServices firewall rule. Disabled requires private endpoint — only set when VNet integration is in place (Phase V+).')
 @allowed([ 'Enabled', 'Disabled' ])
-param postgresPublicNetworkAccess string = 'Disabled'
+param postgresPublicNetworkAccess string = 'Enabled'
 
 // ---- Key Vault SKU + retention ----
 @description('Key Vault SKU.')
