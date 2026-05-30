@@ -1,0 +1,110 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "CloudSmith full test environment — deploys CloudSmith PaaS management platform AND a 2-node Hyper-V lab cluster with domain controller and relay in a single click."
+  },
+  "parameters": {
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Password for the Hyper-V lab VM admin account (cloudadmin) and the CloudSmith database. 12+ characters, must include uppercase, lowercase, digit, and special character."
+      }
+    },
+    "masterKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "AES-256 master key for CloudSmith encryption. Base64-encoded 32 random bytes. PowerShell: [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))"
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "test",
+      "allowedValues": [ "dev", "test", "stage", "prod" ],
+      "metadata": {
+        "description": "Environment name. Used in all resource names and tags."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "centralus",
+      "metadata": {
+        "description": "Azure region for all resources."
+      }
+    }
+  },
+  "variables": {
+    "labRgName": "[concat('rg-cloudsmith-lab-', parameters('environment'), '-cus-001')]",
+    "commonTags": {
+      "Environment": "[parameters('environment')]",
+      "Workload": "cloudsmith",
+      "CostCenter": "Engineering",
+      "Owner": "platform@cloudsmith.cloud",
+      "BusinessUnit": "Engineering",
+      "DataClassification": "Internal",
+      "Criticality": "Low"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2021-04-01",
+      "name": "[variables('labRgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "cloudsmith-paas",
+      "location": "[parameters('location')]",
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/azuredeploy.json"
+        },
+        "parameters": {
+          "location":                   { "value": "[parameters('location')]" },
+          "environment":                { "value": "[parameters('environment')]" },
+          "commonTags":                 { "value": "[variables('commonTags')]" },
+          "postgresAdminPassword":      { "value": "[parameters('adminPassword')]" },
+          "masterKey":                  { "value": "[parameters('masterKey')]" },
+          "postgresPublicNetworkAccess":{ "value": "Enabled" },
+          "enableDefenderForCloud":     { "value": false },
+          "enablePolicyAssignments":    { "value": false },
+          "enableAlertRules":           { "value": false },
+          "monthlyBudgetUSD":           { "value": 0 },
+          "entraTenantId":              { "value": "" },
+          "entraClientId":              { "value": "" },
+          "entraClientSecret":          { "value": "" },
+          "ghcrUsername":               { "value": "" },
+          "ghcrToken":                  { "value": "" }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "cloudsmith-lab",
+      "resourceGroup": "[variables('labRgName')]",
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('labRgName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/azuredeploy-lab.json"
+        },
+        "parameters": {
+          "adminPassword": { "value": "[parameters('adminPassword')]" }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "labResourceGroup": {
+      "type": "string",
+      "value": "[variables('labRgName')]"
+    }
+  }
+}
