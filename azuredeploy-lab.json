@@ -1,0 +1,1432 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "9251242883129086332"
+    }
+  },
+  "parameters": {
+    "clusterCount": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "maxValue": 8,
+      "metadata": {
+        "description": "Number of Hyper-V WSFC clusters to create."
+      }
+    },
+    "nodesPerCluster": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "maxValue": 8,
+      "metadata": {
+        "description": "Number of Hyper-V nodes per cluster."
+      }
+    },
+    "hvVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D4s_v5",
+      "metadata": {
+        "description": "VM size for Hyper-V nodes. Must support nested virtualisation (D-series v3+)."
+      }
+    },
+    "dcVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v5",
+      "metadata": {
+        "description": "VM size for domain controllers."
+      }
+    },
+    "relayVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_B2s",
+      "metadata": {
+        "description": "VM size for the relay host."
+      }
+    },
+    "domainName": {
+      "type": "string",
+      "defaultValue": "cloudsmith.lab",
+      "metadata": {
+        "description": "Active Directory domain FQDN."
+      }
+    },
+    "domainNetbios": {
+      "type": "string",
+      "defaultValue": "CLOUDSMITH",
+      "maxLength": 15,
+      "metadata": {
+        "description": "AD NetBIOS domain name (max 15 chars)."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "cloudadmin",
+      "metadata": {
+        "description": "Administrator username for all Windows VMs."
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Administrator password. Must meet Azure complexity requirements."
+      }
+    },
+    "deployRelay": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy a relay host (Ubuntu 22.04 + Docker)."
+      }
+    },
+    "deployDomain": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy domain controllers and configure Active Directory."
+      }
+    },
+    "deployJumpBox": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy a jump box as the sole public-IP entry point into the lab."
+      }
+    },
+    "jumpBoxVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_B2s",
+      "metadata": {
+        "description": "VM size for the jump box."
+      }
+    },
+    "windowsImageRef": {
+      "type": "object",
+      "defaultValue": {
+        "publisher": "MicrosoftWindowsServer",
+        "offer": "WindowsServer",
+        "sku": "2025-datacenter-azure-edition",
+        "version": "latest"
+      },
+      "metadata": {
+        "description": "OS image for Windows VMs."
+      }
+    },
+    "vnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.10.0.0/16",
+      "metadata": {
+        "description": "VNet address space."
+      }
+    },
+    "mgmtSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.10.0.0/24",
+      "metadata": {
+        "description": "Management subnet prefix (DCs)."
+      }
+    },
+    "clusterSubnetBaseOctet": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Base IP for cluster subnets. Cluster i uses 10.10.(baseOctet+i).0/24."
+      }
+    },
+    "servicesSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.10.100.0/24",
+      "metadata": {
+        "description": "Services subnet prefix (relay)."
+      }
+    }
+  },
+  "variables": {
+    "location": "[resourceGroup().location]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "network",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[variables('location')]"
+          },
+          "vnetPrefix": {
+            "value": "[parameters('vnetPrefix')]"
+          },
+          "mgmtSubnetPrefix": {
+            "value": "[parameters('mgmtSubnetPrefix')]"
+          },
+          "clusterCount": {
+            "value": "[parameters('clusterCount')]"
+          },
+          "clusterSubnetBaseOctet": {
+            "value": "[parameters('clusterSubnetBaseOctet')]"
+          },
+          "servicesSubnetPrefix": {
+            "value": "[parameters('servicesSubnetPrefix')]"
+          },
+          "dc1DnsIp": "[if(parameters('deployDomain'), createObject('value', format('{0}.10', take(parameters('mgmtSubnetPrefix'), lastIndexOf(parameters('mgmtSubnetPrefix'), '.')))), createObject('value', ''))]"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "15317081480792094285"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "vnetPrefix": {
+              "type": "string"
+            },
+            "mgmtSubnetPrefix": {
+              "type": "string"
+            },
+            "clusterCount": {
+              "type": "int"
+            },
+            "clusterSubnetBaseOctet": {
+              "type": "int"
+            },
+            "servicesSubnetPrefix": {
+              "type": "string"
+            },
+            "dc1DnsIp": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "DC1 private IP — sets VNet-level DNS so ALL VMs resolve via the domain controller. Leave empty for Azure-provided DNS."
+              }
+            }
+          },
+          "variables": {
+            "copy": [
+              {
+                "name": "clusterSubnets",
+                "count": "[length(range(0, parameters('clusterCount')))]",
+                "input": {
+                  "name": "[format('snet-cluster-{0}-001', padLeft(range(0, parameters('clusterCount'))[copyIndex('clusterSubnets')], 2, '0'))]",
+                  "prefix": "[format('10.10.{0}.0/24', add(parameters('clusterSubnetBaseOctet'), range(0, parameters('clusterCount'))[copyIndex('clusterSubnets')]))]"
+                }
+              },
+              {
+                "name": "clusterSubnetObjects",
+                "count": "[length(variables('clusterSubnets'))]",
+                "input": {
+                  "name": "[variables('clusterSubnets')[copyIndex('clusterSubnetObjects')].name]",
+                  "properties": {
+                    "addressPrefix": "[variables('clusterSubnets')[copyIndex('clusterSubnetObjects')].prefix]",
+                    "networkSecurityGroup": {
+                      "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'nsg-lab-001')]"
+                    },
+                    "natGateway": {
+                      "id": "[resourceId('Microsoft.Network/natGateways', 'natgw-lab-001')]"
+                    }
+                  }
+                }
+              }
+            ],
+            "mgmtSubnetObject": [
+              {
+                "name": "snet-mgmt-001",
+                "properties": {
+                  "addressPrefix": "[parameters('mgmtSubnetPrefix')]",
+                  "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'nsg-lab-001')]"
+                  },
+                  "natGateway": {
+                    "id": "[resourceId('Microsoft.Network/natGateways', 'natgw-lab-001')]"
+                  }
+                }
+              }
+            ],
+            "servicesSubnetObject": [
+              {
+                "name": "snet-services-001",
+                "properties": {
+                  "addressPrefix": "[parameters('servicesSubnetPrefix')]",
+                  "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'nsg-lab-001')]"
+                  },
+                  "natGateway": {
+                    "id": "[resourceId('Microsoft.Network/natGateways', 'natgw-lab-001')]"
+                  }
+                }
+              }
+            ]
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkSecurityGroups",
+              "apiVersion": "2023-09-01",
+              "name": "nsg-lab-001",
+              "location": "[parameters('location')]",
+              "properties": {
+                "securityRules": [
+                  {
+                    "name": "AllowVNetInbound",
+                    "properties": {
+                      "priority": 100,
+                      "direction": "Inbound",
+                      "access": "Allow",
+                      "protocol": "*",
+                      "sourceAddressPrefix": "VirtualNetwork",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "VirtualNetwork",
+                      "destinationPortRange": "*"
+                    }
+                  },
+                  {
+                    "name": "AllowRDPSSHFromInternet",
+                    "properties": {
+                      "priority": 200,
+                      "direction": "Inbound",
+                      "access": "Allow",
+                      "protocol": "Tcp",
+                      "sourceAddressPrefix": "*",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "*",
+                      "destinationPortRanges": [
+                        "3389",
+                        "22"
+                      ]
+                    }
+                  },
+                  {
+                    "name": "DenyInternetInbound",
+                    "properties": {
+                      "priority": 4000,
+                      "direction": "Inbound",
+                      "access": "Deny",
+                      "protocol": "*",
+                      "sourceAddressPrefix": "Internet",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "*",
+                      "destinationPortRange": "*"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2023-09-01",
+              "name": "pip-nat-001",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
+              "type": "Microsoft.Network/natGateways",
+              "apiVersion": "2023-09-01",
+              "name": "natgw-lab-001",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "publicIpAddresses": [
+                  {
+                    "id": "[resourceId('Microsoft.Network/publicIPAddresses', 'pip-nat-001')]"
+                  }
+                ],
+                "idleTimeoutInMinutes": 10
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', 'pip-nat-001')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2023-09-01",
+              "name": "vnet-lab-001",
+              "location": "[parameters('location')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "[parameters('vnetPrefix')]"
+                  ]
+                },
+                "dhcpOptions": "[if(empty(parameters('dc1DnsIp')), null(), createObject('dnsServers', createArray(parameters('dc1DnsIp'), '168.63.129.16')))]",
+                "subnets": "[concat(variables('mgmtSubnetObject'), variables('clusterSubnetObjects'), variables('servicesSubnetObject'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/natGateways', 'natgw-lab-001')]",
+                "[resourceId('Microsoft.Network/networkSecurityGroups', 'nsg-lab-001')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks', 'vnet-lab-001')]"
+            },
+            "mgmtSubnetId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', 'vnet-lab-001'), '2023-09-01').subnets[0].id]"
+            },
+            "clusterSubnetIds": {
+              "type": "array",
+              "copy": {
+                "count": "[length(range(0, parameters('clusterCount')))]",
+                "input": "[reference(resourceId('Microsoft.Network/virtualNetworks', 'vnet-lab-001'), '2023-09-01').subnets[add(1, range(0, parameters('clusterCount'))[copyIndex()])].id]"
+              }
+            },
+            "servicesSubnetId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', 'vnet-lab-001'), '2023-09-01').subnets[add(1, parameters('clusterCount'))].id]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('deployDomain')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "domainControllers",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[variables('location')]"
+          },
+          "subnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.mgmtSubnetId.value]"
+          },
+          "vmSize": {
+            "value": "[parameters('dcVmSize')]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "domainName": {
+            "value": "[parameters('domainName')]"
+          },
+          "domainNetbios": {
+            "value": "[parameters('domainNetbios')]"
+          },
+          "dc1PrivateIp": {
+            "value": "[format('{0}.10', take(parameters('mgmtSubnetPrefix'), lastIndexOf(parameters('mgmtSubnetPrefix'), '.')))]"
+          },
+          "dc2PrivateIp": {
+            "value": "[format('{0}.11', take(parameters('mgmtSubnetPrefix'), lastIndexOf(parameters('mgmtSubnetPrefix'), '.')))]"
+          },
+          "imageRef": {
+            "value": "[parameters('windowsImageRef')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "12125189360677280359"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "subnetId": {
+              "type": "string"
+            },
+            "vmSize": {
+              "type": "string"
+            },
+            "adminUsername": {
+              "type": "string"
+            },
+            "adminPassword": {
+              "type": "securestring"
+            },
+            "domainName": {
+              "type": "string"
+            },
+            "domainNetbios": {
+              "type": "string"
+            },
+            "dc1PrivateIp": {
+              "type": "string"
+            },
+            "dc2PrivateIp": {
+              "type": "string"
+            },
+            "imageRef": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-09-01",
+              "name": "nic-dc01",
+              "location": "[parameters('location')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "privateIPAllocationMethod": "Static",
+                      "privateIPAddress": "[parameters('dc1PrivateIp')]"
+                    }
+                  }
+                ],
+                "dnsSettings": {
+                  "dnsServers": [
+                    "[parameters('dc1PrivateIp')]"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-09-01",
+              "name": "nic-dc02",
+              "location": "[parameters('location')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "privateIPAllocationMethod": "Static",
+                      "privateIPAddress": "[parameters('dc2PrivateIp')]"
+                    }
+                  }
+                ],
+                "dnsSettings": {
+                  "dnsServers": [
+                    "[parameters('dc1PrivateIp')]"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2023-09-01",
+              "name": "vm-dc01",
+              "location": "[parameters('location')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "dc01",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "windowsConfiguration": {
+                    "enableAutomaticUpdates": false
+                  }
+                },
+                "storageProfile": {
+                  "imageReference": "[parameters('imageRef')]",
+                  "osDisk": {
+                    "createOption": "FromImage",
+                    "diskSizeGB": 128,
+                    "managedDisk": {
+                      "storageAccountType": "Premium_LRS"
+                    }
+                  }
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', 'nic-dc01')]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', 'nic-dc01')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2023-09-01",
+              "name": "vm-dc02",
+              "location": "[parameters('location')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "dc02",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "windowsConfiguration": {
+                    "enableAutomaticUpdates": false
+                  }
+                },
+                "storageProfile": {
+                  "imageReference": "[parameters('imageRef')]",
+                  "osDisk": {
+                    "createOption": "FromImage",
+                    "diskSizeGB": 128,
+                    "managedDisk": {
+                      "storageAccountType": "Premium_LRS"
+                    }
+                  }
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', 'nic-dc02')]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', 'nic-dc02')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', 'vm-dc01', 'InstallADDS')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.10",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -Command \"Add-WindowsFeature AD-Domain-Services -IncludeManagementTools; Import-Module ADDSDeployment; Install-ADDSForest -DomainName ''{0}'' -DomainNetbiosName ''{1}'' -SafeModeAdministratorPassword (ConvertTo-SecureString ''{2}'' -AsPlainText -Force) -InstallDns -NoRebootOnCompletion:$false -Force\"', parameters('domainName'), parameters('domainNetbios'), parameters('adminPassword'))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', 'vm-dc01')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', 'vm-dc02', 'DomainJoin')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "JsonADDomainExtension",
+                "typeHandlerVersion": "1.3",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "Name": "[parameters('domainName')]",
+                  "User": "[format('{0}\\{1}', parameters('domainNetbios'), parameters('adminUsername'))]",
+                  "Restart": "true",
+                  "Options": "3"
+                },
+                "protectedSettings": {
+                  "Password": "[parameters('adminPassword')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', 'vm-dc01', 'InstallADDS')]",
+                "[resourceId('Microsoft.Compute/virtualMachines', 'vm-dc02')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', 'vm-dc02', 'PromoteADDS')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.10",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -Command \"Start-Sleep -Seconds 120; Add-WindowsFeature AD-Domain-Services -IncludeManagementTools; Import-Module ADDSDeployment; Install-ADDSDomainController -DomainName ''{0}'' -Credential (New-Object PSCredential(''{1}\\{2}'',(ConvertTo-SecureString ''{3}'' -AsPlainText -Force))) -SafeModeAdministratorPassword (ConvertTo-SecureString ''{4}'' -AsPlainText -Force) -InstallDns -NoRebootOnCompletion:$false -Force\"', parameters('domainName'), parameters('domainNetbios'), parameters('adminUsername'), parameters('adminPassword'), parameters('adminPassword'))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', 'vm-dc02', 'DomainJoin')]",
+                "[resourceId('Microsoft.Compute/virtualMachines', 'vm-dc02')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "dc1PrivateIpOut": {
+              "type": "string",
+              "value": "[parameters('dc1PrivateIp')]"
+            },
+            "dc2PrivateIpOut": {
+              "type": "string",
+              "value": "[parameters('dc2PrivateIp')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'network')]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "clusters",
+        "count": "[length(range(0, parameters('clusterCount')))]",
+        "mode": "serial",
+        "batchSize": 1
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('cluster-{0}', range(0, parameters('clusterCount'))[copyIndex()])]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[variables('location')]"
+          },
+          "clusterIndex": {
+            "value": "[range(0, parameters('clusterCount'))[copyIndex()]]"
+          },
+          "nodeCount": {
+            "value": "[parameters('nodesPerCluster')]"
+          },
+          "subnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.clusterSubnetIds.value[range(0, parameters('clusterCount'))[copyIndex()]]]"
+          },
+          "subnetPrefix": {
+            "value": "[format('10.10.{0}.0/24', add(parameters('clusterSubnetBaseOctet'), range(0, parameters('clusterCount'))[copyIndex()]))]"
+          },
+          "vmSize": {
+            "value": "[parameters('hvVmSize')]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "domainName": {
+            "value": "[parameters('domainName')]"
+          },
+          "domainNetbios": {
+            "value": "[parameters('domainNetbios')]"
+          },
+          "dc1Ip": "[if(parameters('deployDomain'), createObject('value', format('{0}.10', take(parameters('mgmtSubnetPrefix'), lastIndexOf(parameters('mgmtSubnetPrefix'), '.')))), createObject('value', ''))]",
+          "imageRef": {
+            "value": "[parameters('windowsImageRef')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "1130040252075590004"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "clusterIndex": {
+              "type": "int"
+            },
+            "nodeCount": {
+              "type": "int"
+            },
+            "subnetId": {
+              "type": "string"
+            },
+            "subnetPrefix": {
+              "type": "string"
+            },
+            "vmSize": {
+              "type": "string"
+            },
+            "adminUsername": {
+              "type": "string"
+            },
+            "adminPassword": {
+              "type": "securestring"
+            },
+            "domainName": {
+              "type": "string"
+            },
+            "domainNetbios": {
+              "type": "string"
+            },
+            "dc1Ip": {
+              "type": "string"
+            },
+            "imageRef": {
+              "type": "object"
+            }
+          },
+          "variables": {
+            "copy": [
+              {
+                "name": "nodeHostnames",
+                "count": "[length(range(0, parameters('nodeCount')))]",
+                "input": "[format('hv-c{0}-n{1}', parameters('clusterIndex'), padLeft(range(0, parameters('nodeCount'))[copyIndex('nodeHostnames')], 2, '0'))]"
+              },
+              {
+                "name": "nodeHostnamesQuoted",
+                "count": "[length(variables('nodeHostnames'))]",
+                "input": "[format('''{0}''', variables('nodeHostnames')[copyIndex('nodeHostnamesQuoted')])]"
+              }
+            ],
+            "clusterName": "[format('cluster-{0}', padLeft(parameters('clusterIndex'), 2, '0'))]",
+            "clusterIp": "[format('{0}.5', take(parameters('subnetPrefix'), lastIndexOf(parameters('subnetPrefix'), '.')))]",
+            "nodeBaseIp": "[take(parameters('subnetPrefix'), lastIndexOf(parameters('subnetPrefix'), '.'))]",
+            "nodeListPs": "[format('@({0})', join(variables('nodeHostnamesQuoted'), ','))]"
+          },
+          "resources": [
+            {
+              "copy": {
+                "name": "nics",
+                "count": "[length(range(0, parameters('nodeCount')))]"
+              },
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-09-01",
+              "name": "[format('nic-{0}-node{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[copyIndex()], 2, '0'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "privateIPAllocationMethod": "Static",
+                      "privateIPAddress": "[format('{0}.{1}', variables('nodeBaseIp'), add(10, range(0, parameters('nodeCount'))[copyIndex()]))]"
+                    }
+                  }
+                ],
+                "dnsSettings": {
+                  "dnsServers": [
+                    "[parameters('dc1Ip')]"
+                  ]
+                }
+              }
+            },
+            {
+              "copy": {
+                "name": "vms",
+                "count": "[length(range(0, parameters('nodeCount')))]"
+              },
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2023-09-01",
+              "name": "[format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[copyIndex()], 2, '0'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "[format('hv-c{0}-n{1}', parameters('clusterIndex'), padLeft(range(0, parameters('nodeCount'))[copyIndex()], 2, '0'))]",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "windowsConfiguration": {
+                    "enableAutomaticUpdates": false
+                  }
+                },
+                "storageProfile": {
+                  "imageReference": "[parameters('imageRef')]",
+                  "osDisk": {
+                    "createOption": "FromImage",
+                    "diskSizeGB": 256,
+                    "managedDisk": {
+                      "storageAccountType": "Premium_LRS"
+                    }
+                  }
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', format('nic-{0}-node{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')))]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', format('nic-{0}-node{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "hvInstall",
+                "count": "[length(range(0, parameters('nodeCount')))]"
+              },
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')), 'InstallHyperV')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.10",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "commandToExecute": "powershell -ExecutionPolicy Unrestricted -Command \"reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard /v EnableVirtualizationBasedSecurity /t REG_DWORD /d 0 /f; reg add HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard /v RequirePlatformSecurityFeatures /t REG_DWORD /d 0 /f; DISM /Online /Enable-Feature /FeatureName:Microsoft-Hyper-V-All /All /NoRestart; DISM /Online /Enable-Feature /FeatureName:FailoverCluster-Core /All /NoRestart; shutdown /r /t 30\""
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "preDomainJoin",
+                "count": "[length(range(0, parameters('nodeCount')))]"
+              },
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')), 'PreDomainJoin')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.10",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -Command \"Start-Sleep 90; Stop-Service dnscache -Force -ErrorAction SilentlyContinue; Start-Service dnscache -ErrorAction SilentlyContinue; Start-Sleep 10; ipconfig /flushdns | Out-Null; $dc = ''{0}''; $attempts = 0; while ($attempts -lt 30) {{ if (Test-NetConnection -ComputerName $dc -Port 389 -InformationLevel Quiet -WarningAction SilentlyContinue) {{ break }}; Start-Sleep 15; $attempts++ }}; Write-Output ''DC reachable — proceeding to domain join''\"', parameters('dc1Ip'))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]]], 2, '0')), 'InstallHyperV')]",
+                "[resourceId('Microsoft.Compute/virtualMachines', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "domainJoin",
+                "count": "[length(range(0, parameters('nodeCount')))]"
+              },
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')), 'DomainJoin')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "JsonADDomainExtension",
+                "typeHandlerVersion": "1.3",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "Name": "[parameters('domainName')]",
+                  "User": "[format('{0}\\{1}', parameters('domainNetbios'), parameters('adminUsername'))]",
+                  "Restart": "true",
+                  "Options": "3"
+                },
+                "protectedSettings": {
+                  "Password": "[parameters('adminPassword')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]]], 2, '0')), 'PreDomainJoin')]",
+                "[resourceId('Microsoft.Compute/virtualMachines', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[range(0, parameters('nodeCount'))[copyIndex()]], 2, '0')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[0], 2, '0')), 'CreateCluster')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.10",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -Command \"Install-WindowsFeature RSAT-Clustering -IncludeManagementTools; $nodes = {0}; New-Cluster -Name {1} -Node $nodes -StaticAddress {2} -NoStorage -Force\"', variables('nodeListPs'), variables('clusterName'), variables('clusterIp'))]"
+                }
+              },
+              "dependsOn": [
+                "domainJoin",
+                "[resourceId('Microsoft.Compute/virtualMachines', format('vm-hv-{0}-{1}', variables('clusterName'), padLeft(range(0, parameters('nodeCount'))[0], 2, '0')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "clusterName": {
+              "type": "string",
+              "value": "[variables('clusterName')]"
+            },
+            "clusterIp": {
+              "type": "string",
+              "value": "[variables('clusterIp')]"
+            },
+            "nodeIps": {
+              "type": "array",
+              "copy": {
+                "count": "[length(range(0, parameters('nodeCount')))]",
+                "input": "[format('{0}.{1}', variables('nodeBaseIp'), add(10, range(0, parameters('nodeCount'))[copyIndex()]))]"
+              }
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'domainControllers')]",
+        "[resourceId('Microsoft.Resources/deployments', 'network')]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployRelay')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "relay",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[variables('location')]"
+          },
+          "subnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.servicesSubnetId.value]"
+          },
+          "privateIp": {
+            "value": "[format('{0}.10', take(parameters('servicesSubnetPrefix'), lastIndexOf(parameters('servicesSubnetPrefix'), '.')))]"
+          },
+          "vmSize": {
+            "value": "[parameters('relayVmSize')]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "13081439683963099450"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "subnetId": {
+              "type": "string"
+            },
+            "privateIp": {
+              "type": "string"
+            },
+            "vmSize": {
+              "type": "string"
+            },
+            "adminUsername": {
+              "type": "string"
+            },
+            "adminPassword": {
+              "type": "securestring"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-09-01",
+              "name": "nic-relay-01",
+              "location": "[parameters('location')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "privateIPAllocationMethod": "Static",
+                      "privateIPAddress": "[parameters('privateIp')]"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2023-09-01",
+              "name": "vm-relay-01",
+              "location": "[parameters('location')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "relay-01",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "linuxConfiguration": {
+                    "disablePasswordAuthentication": false
+                  }
+                },
+                "storageProfile": {
+                  "imageReference": {
+                    "publisher": "Canonical",
+                    "offer": "0001-com-ubuntu-server-jammy",
+                    "sku": "22_04-lts-gen2",
+                    "version": "latest"
+                  },
+                  "osDisk": {
+                    "createOption": "FromImage",
+                    "diskSizeGB": 64,
+                    "managedDisk": {
+                      "storageAccountType": "Standard_LRS"
+                    }
+                  }
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', 'nic-relay-01')]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', 'nic-relay-01')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', 'vm-relay-01', 'InstallDocker')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Azure.Extensions",
+                "type": "CustomScript",
+                "typeHandlerVersion": "2.1",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "script": "[base64(format('#!/bin/bash\nset -e\napt-get update -y || apt-get update -y\napt-get install -y ca-certificates curl gnupg\ninstall -m 0755 -d /etc/apt/keyrings\ncurl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg\nchmod a+r /etc/apt/keyrings/docker.gpg\necho \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | tee /etc/apt/sources.list.d/docker.list > /dev/null\napt-get update -y\napt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin\nsystemctl enable docker\nsystemctl start docker\nusermod -aG docker {0}\necho \"DOCKER_READY\" >> /var/log/cloudsmith-lab.log\n', parameters('adminUsername')))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', 'vm-relay-01')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "privateIp": {
+              "type": "string",
+              "value": "[parameters('privateIp')]"
+            },
+            "vmName": {
+              "type": "string",
+              "value": "vm-relay-01"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'network')]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployJumpBox')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "jumpBox",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[variables('location')]"
+          },
+          "subnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.mgmtSubnetId.value]"
+          },
+          "privateIp": {
+            "value": "[format('{0}.4', take(parameters('mgmtSubnetPrefix'), lastIndexOf(parameters('mgmtSubnetPrefix'), '.')))]"
+          },
+          "vmSize": {
+            "value": "[parameters('jumpBoxVmSize')]"
+          },
+          "adminUsername": {
+            "value": "[parameters('adminUsername')]"
+          },
+          "adminPassword": {
+            "value": "[parameters('adminPassword')]"
+          },
+          "imageRef": {
+            "value": "[parameters('windowsImageRef')]"
+          },
+          "domainName": "[if(parameters('deployDomain'), createObject('value', parameters('domainName')), createObject('value', ''))]",
+          "domainNetbios": "[if(parameters('deployDomain'), createObject('value', parameters('domainNetbios')), createObject('value', ''))]",
+          "dc1Ip": "[if(parameters('deployDomain'), createObject('value', format('{0}.10', take(parameters('mgmtSubnetPrefix'), lastIndexOf(parameters('mgmtSubnetPrefix'), '.')))), createObject('value', ''))]",
+          "relayIp": "[if(parameters('deployRelay'), createObject('value', format('{0}.10', take(parameters('servicesSubnetPrefix'), lastIndexOf(parameters('servicesSubnetPrefix'), '.')))), createObject('value', ''))]"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "5347305884700340167"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "subnetId": {
+              "type": "string"
+            },
+            "privateIp": {
+              "type": "string"
+            },
+            "vmSize": {
+              "type": "string"
+            },
+            "adminUsername": {
+              "type": "string"
+            },
+            "adminPassword": {
+              "type": "securestring"
+            },
+            "imageRef": {
+              "type": "object"
+            },
+            "domainName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD domain FQDN — leave empty to skip domain join."
+              }
+            },
+            "domainNetbios": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "AD NetBIOS name — leave empty to skip domain join."
+              }
+            },
+            "dc1Ip": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Primary DC private IP for DNS — leave empty to skip."
+              }
+            },
+            "relayIp": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Relay host private IP — shown in the desktop cheat sheet."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2023-09-01",
+              "name": "pip-jumpbox",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
+              "type": "Microsoft.Network/networkInterfaces",
+              "apiVersion": "2023-09-01",
+              "name": "nic-jumpbox",
+              "location": "[parameters('location')]",
+              "properties": {
+                "ipConfigurations": [
+                  {
+                    "name": "ipconfig1",
+                    "properties": {
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "privateIPAllocationMethod": "Static",
+                      "privateIPAddress": "[parameters('privateIp')]",
+                      "publicIPAddress": {
+                        "id": "[resourceId('Microsoft.Network/publicIPAddresses', 'pip-jumpbox')]"
+                      }
+                    }
+                  }
+                ],
+                "dnsSettings": "[if(empty(parameters('dc1Ip')), null(), createObject('dnsServers', createArray(parameters('dc1Ip'))))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', 'pip-jumpbox')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines",
+              "apiVersion": "2023-09-01",
+              "name": "vm-jumpbox",
+              "location": "[parameters('location')]",
+              "properties": {
+                "hardwareProfile": {
+                  "vmSize": "[parameters('vmSize')]"
+                },
+                "osProfile": {
+                  "computerName": "jumpbox",
+                  "adminUsername": "[parameters('adminUsername')]",
+                  "adminPassword": "[parameters('adminPassword')]",
+                  "windowsConfiguration": {
+                    "enableAutomaticUpdates": false
+                  }
+                },
+                "storageProfile": {
+                  "imageReference": "[parameters('imageRef')]",
+                  "osDisk": {
+                    "createOption": "FromImage",
+                    "diskSizeGB": 128,
+                    "managedDisk": {
+                      "storageAccountType": "Standard_LRS"
+                    }
+                  }
+                },
+                "networkProfile": {
+                  "networkInterfaces": [
+                    {
+                      "id": "[resourceId('Microsoft.Network/networkInterfaces', 'nic-jumpbox')]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', 'nic-jumpbox')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', 'vm-jumpbox', 'CreateLabConfig')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.10",
+                "autoUpgradeMinorVersion": true,
+                "protectedSettings": {
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -Command \"$na = Get-NetAdapter | Where-Object {{$_.Status -eq ''Up''}} | Select-Object -First 1; if ($na -and ''{0}'' -ne '''') {{ Set-DnsClientServerAddress -InterfaceAlias $na.Name -ServerAddresses (''{1}'',''168.63.129.16'') -ErrorAction SilentlyContinue }}; Stop-Service dnscache -Force -ErrorAction SilentlyContinue; Start-Service dnscache -ErrorAction SilentlyContinue; Start-Sleep 10; ipconfig /flushdns | Out-Null; Set-ItemProperty -Path ''HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server'' -Name fDenyTSConnections -Value 0 -Force; Enable-NetFirewallRule -DisplayGroup ''Remote Desktop''; New-Item -ItemType Directory -Force -Path ''C:\\Users\\{2}\\Desktop'' | Out-Null; Set-Content -Path ''C:\\Users\\{3}\\Desktop\\CloudSmith-Lab.txt'' -Value (''CloudSmith Lab Environment'',''=========================='',''Domain   : cloudsmith.lab'',''NetBIOS  : CLOUDSMITH'',''Username : {4}'',''Password : {5}'','''',''SERVERS'',''-------'',''vm-jumpbox   10.10.0.4    Jump box (public IP: use RDP from internet)'',''vm-dc01      10.10.0.10   Primary Domain Controller - AD DS forest'',''vm-dc02      10.10.0.11   Secondary Domain Controller'',''vm-hv-c0-n00 10.10.1.10   Hyper-V Cluster 0 Node 0'',''vm-hv-c0-n01 10.10.1.11   Hyper-V Cluster 0 Node 1'',''vm-hv-c1-n00 10.10.2.10   Hyper-V Cluster 1 Node 0'',''vm-hv-c1-n01 10.10.2.11   Hyper-V Cluster 1 Node 1'',''vm-relay-01  {6}  CloudSmith Relay (Ubuntu 22.04 Docker CE)'','''',''ACCESS'',''------'',''From this jump box RDP/SSH to any server by private IP.'',''All Windows VMs: mstsc /v:<ip>  ->  {7} / {8}'',''Relay (SSH): ssh {9}@{10}'','''',''CLUSTER INFO'',''------------'',''Cluster 0 IP  : 10.10.1.5  (Windows Server Failover Cluster)'',''Cluster 1 IP  : 10.10.2.5  (Windows Server Failover Cluster)'')\"', parameters('dc1Ip'), parameters('dc1Ip'), parameters('adminUsername'), parameters('adminUsername'), parameters('adminUsername'), parameters('adminPassword'), parameters('relayIp'), parameters('adminUsername'), parameters('adminPassword'), parameters('adminUsername'), parameters('relayIp'))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', 'vm-jumpbox')]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('domainName')))]",
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}/{1}', 'vm-jumpbox', 'DomainJoin')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "JsonADDomainExtension",
+                "typeHandlerVersion": "1.3",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                  "Name": "[parameters('domainName')]",
+                  "User": "[format('{0}\\{1}', parameters('domainNetbios'), parameters('adminUsername'))]",
+                  "Restart": "true",
+                  "Options": "3"
+                },
+                "protectedSettings": {
+                  "Password": "[parameters('adminPassword')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', 'vm-jumpbox', 'CreateLabConfig')]",
+                "[resourceId('Microsoft.Compute/virtualMachines', 'vm-jumpbox')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "publicIp": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', 'pip-jumpbox'), '2023-09-01').ipAddress]"
+            },
+            "privateIp": {
+              "type": "string",
+              "value": "[parameters('privateIp')]"
+            },
+            "rdpCommand": {
+              "type": "string",
+              "value": "[format('mstsc /v:{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', 'pip-jumpbox'), '2023-09-01').ipAddress)]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'domainControllers')]",
+        "[resourceId('Microsoft.Resources/deployments', 'network')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "jumpBoxPublicIp": {
+      "type": "string",
+      "value": "[if(parameters('deployJumpBox'), reference(resourceId('Microsoft.Resources/deployments', 'jumpBox'), '2025-04-01').outputs.publicIp.value, 'not deployed')]"
+    },
+    "relayPrivateIp": {
+      "type": "string",
+      "value": "[if(parameters('deployRelay'), reference(resourceId('Microsoft.Resources/deployments', 'relay'), '2025-04-01').outputs.privateIp.value, 'not deployed')]"
+    },
+    "rdpInstruction": {
+      "type": "string",
+      "value": "[if(parameters('deployJumpBox'), reference(resourceId('Microsoft.Resources/deployments', 'jumpBox'), '2025-04-01').outputs.rdpCommand.value, 'mstsc /v:<deploy jump box to get public IP>')]"
+    },
+    "labSummary": {
+      "type": "object",
+      "value": {
+        "domain": "[parameters('domainName')]",
+        "clusters": "[parameters('clusterCount')]",
+        "nodesPerCluster": "[parameters('nodesPerCluster')]",
+        "adminUser": "[parameters('adminUsername')]",
+        "jumpBox": "[if(parameters('deployJumpBox'), reference(resourceId('Microsoft.Resources/deployments', 'jumpBox'), '2025-04-01').outputs.privateIp.value, 'not deployed')]"
+      }
+    }
+  }
+}
