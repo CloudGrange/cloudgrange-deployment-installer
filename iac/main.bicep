@@ -57,11 +57,11 @@ param deploymentTime string = utcNow('yyyy-MM-ddTHH:mm:ssZ')
 // Application parameters (Phase IV)
 // =============================================================================
 
-// AB#1669 — imageTag default changed from 'latest' to 'main'.
+// AB#1669 — imageTag default changed from 'latest' to 'v1.0.0'.
 // Never use 'latest' in stage or prod. CI must always pass an explicit SHA or semver tag.
-// For first-time dev deploys, 'main' resolves to the most recent main-branch image.
+// GHCR tags: v1.0.0, 1.0.0-preview1, 1.0.0-preview2, SHA digests. 'main' tag does NOT exist.
 @description('Default container image tag. Used for both API and portal unless overridden.')
-param imageTag string = 'main'
+param imageTag string = 'v1.0.0'
 
 @description('Optional override for the API image tag. Empty = use imageTag. Use when the API repo has shipped a fix that the portal repo has not.')
 param apiImageTag string = ''
