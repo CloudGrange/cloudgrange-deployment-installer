@@ -6,7 +6,7 @@ CloudSmith installer — Hyper-V Ubuntu VM + Docker Compose stack provisioning (
 
 Click the button below to deploy CloudSmith to Azure Container Apps in your subscription. A friendly wizard guides you through the required settings — no ARM template knowledge needed.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudsmith-cloud%2Fcloudsmith-installer%2Fmain%2Fiac%2Fazuredeploy.json/uiFormDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudsmith-cloud%2Fcloudsmith-installer%2Fmain%2Fiac%2FcreateUiDefinition.json)
+[![Deploy to Azure](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazure.svg?sanitize=true)](https://portal.azure.com/#blade/Microsoft_Azure_CreateUIDef/CustomDeploymentBlade/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudsmith-cloud%2Fcloudsmith-installer%2Fmain%2Fiac%2Fazuredeploy.json/uiFormDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudsmith-cloud%2Fcloudsmith-installer%2Fmain%2Fiac%2FcreateUiDefinition.json)
 
 ### What the wizard asks for
 
