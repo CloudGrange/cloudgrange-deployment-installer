@@ -172,7 +172,7 @@
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "name": "[guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer')]",
-      "scope": "[concat('Microsoft.KeyVault/vaults/', variables('kvName'))]",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]"
@@ -189,7 +189,7 @@
       "name": "[concat(variables('kvName'), '/cloudsmith-master-key')]",
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
-        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer'))]"
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), 'Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer'))]"
       ],
       "properties": {
         "value": "[parameters('masterKey')]"
@@ -201,7 +201,7 @@
       "name": "[concat(variables('kvName'), '/postgres-admin-password')]",
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
-        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer'))]"
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), 'Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer'))]"
       ],
       "properties": {
         "value": "[parameters('postgresAdminPassword')]"
@@ -302,7 +302,7 @@
           "secrets": [
             {
               "name": "cloudsmith-master-key",
-              "keyVaultUrl": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2023-07-01').vaultUri]",
+              "keyVaultUrl": "[concat(reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2023-07-01').vaultUri, 'secrets/cloudsmith-master-key')]",
               "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]"
             },
             {
