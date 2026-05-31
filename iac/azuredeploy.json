@@ -42,8 +42,9 @@
     },
     "masterKey": {
       "type": "securestring",
+      "defaultValue": "[newGuid()]",
       "metadata": {
-        "description": "256-bit AES master key (base64-encoded) for envelope encryption. Supply a random value — it is stored in Key Vault and never exposed in logs."
+        "description": "256-bit AES master key for envelope encryption. Auto-generated on first deployment. Retrieve the value from Key Vault if you need to redeploy with the same key."
       }
     },
     "adminUsername": {
