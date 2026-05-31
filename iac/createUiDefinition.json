@@ -1,0 +1,146 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "basics": [
+      {
+        "name": "adminPassword",
+        "type": "Microsoft.Common.PasswordBox",
+        "label": {
+          "password": "Administrator Password",
+          "confirmPassword": "Confirm Password"
+        },
+        "toolTip": "Password for the CloudSmith administrator account. Must be at least 12 characters and contain uppercase, lowercase, digit, and special character.",
+        "constraints": {
+          "required": true,
+          "regex": "^(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{12,128}$",
+          "validationMessage": "Password must be at least 12 characters and contain uppercase, lowercase, a digit, and a special character."
+        },
+        "options": {
+          "hideConfirmation": false
+        },
+        "visible": true
+      }
+    ],
+    "steps": [
+      {
+        "name": "cloudsmithSettings",
+        "label": "CloudSmith Settings",
+        "elements": [
+          {
+            "name": "environmentName",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Environment",
+            "defaultValue": "dev",
+            "toolTip": "The environment tier. Used as a prefix for Azure resource names (e.g. rg-cloudsmith-dev-eus-001).",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Development", "value": "dev" },
+                { "label": "Test",        "value": "test" },
+                { "label": "Staging",     "value": "stage" },
+                { "label": "Production",  "value": "prod" }
+              ]
+            },
+            "visible": true
+          },
+          {
+            "name": "imageTag",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Container Image Tag",
+            "defaultValue": "v1.0.0",
+            "toolTip": "The CloudSmith container image version to deploy. Use 'v1.0.0' for the latest stable release. Do not use 'latest' in production.",
+            "constraints": {
+              "required": true,
+              "regex": "^[A-Za-z0-9._/-]{1,128}$",
+              "validationMessage": "Must be a valid container tag (e.g. v1.0.0, main, or a SHA digest)."
+            },
+            "visible": true
+          },
+          {
+            "name": "postgresAdminUser",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Database Administrator Username",
+            "defaultValue": "cloudsmith",
+            "toolTip": "Username for the PostgreSQL administrator account.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-zA-Z][a-zA-Z0-9_]{1,62}$",
+              "validationMessage": "Must start with a letter and contain only letters, numbers, or underscores (2–63 characters)."
+            },
+            "visible": true
+          },
+          {
+            "name": "costCenter",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Cost Center",
+            "defaultValue": "Engineering",
+            "toolTip": "Cost center tag applied to all deployed resources. Used for billing allocation.",
+            "constraints": {
+              "required": true,
+              "regex": "^.{1,64}$",
+              "validationMessage": "Cost center is required."
+            },
+            "visible": true
+          },
+          {
+            "name": "ownerEmail",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Owner Email",
+            "toolTip": "Email address of the team or individual responsible for this deployment. Used for budget and alert notifications.",
+            "constraints": {
+              "required": true,
+              "regex": "^[^@]+@[^@]+\\.[^@]+$",
+              "validationMessage": "Enter a valid email address."
+            },
+            "visible": true
+          }
+        ]
+      },
+      {
+        "name": "summary",
+        "label": "Review + Create",
+        "elements": [
+          {
+            "name": "summaryText",
+            "type": "Microsoft.Common.TextBlock",
+            "visible": true,
+            "options": {
+              "text": "CloudSmith will be deployed to Azure Container Apps in the selected resource group. Deployment takes approximately 15–20 minutes. After deployment completes, the Portal URL and API URL will be shown in the Outputs tab of the deployment.",
+              "link": {
+                "label": "CloudSmith documentation",
+                "uri": "https://github.com/cloudsmith-cloud/cloudsmith-installer"
+              }
+            }
+          },
+          {
+            "name": "resourceSummary",
+            "type": "Microsoft.Common.TextBlock",
+            "visible": true,
+            "options": {
+              "text": "Resources that will be created: Log Analytics Workspace, Application Insights, Azure Monitor Workspace, User-Assigned Managed Identity, Key Vault, PostgreSQL Flexible Server, Container Apps Environment, CloudSmith API Container App, CloudSmith Portal Container App."
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "location":            "[location()]",
+      "environment":         "[steps('cloudsmithSettings').environmentName]",
+      "imageTag":            "[steps('cloudsmithSettings').imageTag]",
+      "postgresAdminUser":   "[steps('cloudsmithSettings').postgresAdminUser]",
+      "postgresAdminPassword": "[basics('adminPassword')]",
+      "masterKey":           "[concat(newGuid(), newGuid())]",
+      "commonTags": {
+        "Environment":        "[steps('cloudsmithSettings').environmentName]",
+        "Workload":           "cloudsmith",
+        "CostCenter":         "[steps('cloudsmithSettings').costCenter]",
+        "Owner":              "[steps('cloudsmithSettings').ownerEmail]",
+        "BusinessUnit":       "[steps('cloudsmithSettings').costCenter]",
+        "DataClassification": "Internal",
+        "Criticality":        "Low"
+      }
+    }
+  }
+}

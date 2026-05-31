@@ -1,0 +1,462 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Deploys CloudSmith to Azure Container Apps. See https://github.com/cloudsmith-cloud/cloudsmith-installer for full documentation."
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for all deployed resources. Defaults to the resource group location."
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "dev",
+      "allowedValues": ["dev", "test", "stage", "prod"],
+      "metadata": {
+        "description": "Environment tier. Used as a label in resource names and tags."
+      }
+    },
+    "imageTag": {
+      "type": "string",
+      "defaultValue": "v1.0.0",
+      "metadata": {
+        "description": "CloudSmith container image tag. Use v1.0.0 for the latest stable release."
+      }
+    },
+    "postgresAdminUser": {
+      "type": "string",
+      "defaultValue": "cloudsmith",
+      "metadata": {
+        "description": "PostgreSQL administrator username."
+      }
+    },
+    "postgresAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "PostgreSQL administrator password. Must be at least 12 characters."
+      }
+    },
+    "masterKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "256-bit AES master key (base64-encoded) for envelope encryption. Supply a random value — it is stored in Key Vault and never exposed in logs."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "admin",
+      "metadata": {
+        "description": "CloudSmith portal administrator username."
+      }
+    },
+    "commonTags": {
+      "type": "object",
+      "defaultValue": {
+        "Environment": "[parameters('environment')]",
+        "Workload": "cloudsmith",
+        "CostCenter": "Engineering",
+        "Owner": "cloudsmith-alerts@example.com",
+        "BusinessUnit": "Engineering",
+        "DataClassification": "Internal",
+        "Criticality": "Low"
+      },
+      "metadata": {
+        "description": "Tags applied to all deployed resources."
+      }
+    }
+  },
+  "variables": {
+    "workload": "cloudsmith",
+    "instance": "001",
+    "regionCodes": {
+      "eastus":            "eus",
+      "eastus2":           "eus2",
+      "westus":            "wus",
+      "westus2":           "wus2",
+      "westus3":           "wus3",
+      "centralus":         "cus",
+      "northcentralus":    "ncus",
+      "southcentralus":    "scus",
+      "westcentralus":     "wcus",
+      "northeurope":       "neu",
+      "westeurope":        "weu",
+      "uksouth":           "uks",
+      "ukwest":            "ukw",
+      "francecentral":     "frc",
+      "germanywestcentral":"gwc",
+      "switzerlandnorth":  "chn",
+      "swedencentral":     "sec",
+      "australiaeast":     "aue",
+      "southeastasia":     "sea",
+      "eastasia":          "ea",
+      "japaneast":         "jpe",
+      "canadacentral":     "cac",
+      "canadaeast":        "cae",
+      "brazilsouth":       "brs"
+    },
+    "regionCode": "[if(contains(variables('regionCodes'), parameters('location')), variables('regionCodes')[parameters('location')], substring(parameters('location'), 0, 4))]",
+    "suffix": "[concat(variables('workload'), '-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
+    "lawName":      "[concat('log-', variables('suffix'))]",
+    "appiName":     "[concat('appi-', variables('suffix'))]",
+    "amwName":      "[concat('amw-', variables('suffix'))]",
+    "miName":       "[concat('id-', variables('suffix'))]",
+    "kvRawName":    "[concat('kv', replace(variables('suffix'), '-', ''))]",
+    "kvName":       "[if(greater(length(variables('kvRawName')), 24), concat(substring(variables('kvRawName'), 0, 20), uniqueString(resourceGroup().id)), variables('kvRawName'))]",
+    "pgName":       "[concat('psql-', variables('suffix'))]",
+    "aceEnvName":   "[concat('cae-', variables('suffix'))]",
+    "apiAppName":   "[concat('ca-', variables('workload'), '-api-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
+    "portalAppName":"[concat('ca-', variables('workload'), '-portal-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
+    "apiImage":     "[concat('ghcr.io/cloudsmith-cloud/cloudsmith-api:', parameters('imageTag'))]",
+    "portalImage":  "[concat('ghcr.io/cloudsmith-cloud/cloudsmith-portal:', parameters('imageTag'))]",
+    "allTags": "[union(parameters('commonTags'), createObject('ManagedBy', 'arm', 'DeployedAt', utcNow('yyyy-MM-ddTHH:mm:ssZ')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2022-10-01",
+      "name": "[variables('lawName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('allTags')]",
+      "properties": {
+        "sku": { "name": "PerGB2018" },
+        "retentionInDays": 30,
+        "workspaceCapping": { "dailyQuotaGb": 1 }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[variables('appiName')]",
+      "location": "[parameters('location')]",
+      "kind": "web",
+      "tags": "[variables('allTags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+      ],
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]",
+        "IngestionMode": "LogAnalytics"
+      }
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('miName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('allTags')]"
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('kvName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('allTags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]"
+      ],
+      "properties": {
+        "sku": { "family": "A", "name": "standard" },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 7,
+        "enablePurgeProtection": true
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer')]",
+      "scope": "[concat('Microsoft.KeyVault/vaults/', variables('kvName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[concat(variables('kvName'), '/cloudsmith-master-key')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer'))]"
+      ],
+      "properties": {
+        "value": "[parameters('masterKey')]"
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[concat(variables('kvName'), '/postgres-admin-password')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer'))]"
+      ],
+      "properties": {
+        "value": "[parameters('postgresAdminPassword')]"
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2023-06-01-preview",
+      "name": "[variables('pgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('allTags')]",
+      "sku": {
+        "name": "Standard_B1ms",
+        "tier": "Burstable"
+      },
+      "properties": {
+        "version": "16",
+        "administratorLogin": "[parameters('postgresAdminUser')]",
+        "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
+        "storage": { "storageSizeGB": 32 },
+        "backup": {
+          "backupRetentionDays": 7,
+          "geoRedundantBackup": "Disabled"
+        },
+        "highAvailability": { "mode": "Disabled" },
+        "authConfig": {
+          "activeDirectoryAuth": "Disabled",
+          "passwordAuth": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2023-06-01-preview",
+      "name": "[concat(variables('pgName'), '/cloudsmith')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('pgName'))]"
+      ],
+      "properties": {
+        "charset": "UTF8",
+        "collation": "en_US.utf8"
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+      "apiVersion": "2023-06-01-preview",
+      "name": "[concat(variables('pgName'), '/AllowAllAzureServices')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('pgName'))]"
+      ],
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('aceEnvName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('allTags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+      ],
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName')), '2022-10-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName')), '2022-10-01').primarySharedKey]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('apiAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('allTags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('aceEnvName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('pgName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'cloudsmith-master-key')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'postgres-admin-password')]"
+      ],
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('aceEnvName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "secrets": [
+            {
+              "name": "cloudsmith-master-key",
+              "keyVaultUrl": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2023-07-01').vaultUri]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]"
+            },
+            {
+              "name": "postgres-password",
+              "keyVaultUrl": "[concat(reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2023-07-01').vaultUri, 'secrets/postgres-admin-password')]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "http"
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "api",
+              "image": "[variables('apiImage')]",
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              },
+              "env": [
+                { "name": "CLOUDSMITH_ENV",           "value": "[parameters('environment')]" },
+                { "name": "CLOUDSMITH_MASTER_KEY",    "secretRef": "cloudsmith-master-key" },
+                { "name": "POSTGRES_HOST",            "value": "[concat(variables('pgName'), '.postgres.database.azure.com')]" },
+                { "name": "POSTGRES_PORT",            "value": "5432" },
+                { "name": "POSTGRES_DB",              "value": "cloudsmith" },
+                { "name": "POSTGRES_USER",            "value": "[parameters('postgresAdminUser')]" },
+                { "name": "POSTGRES_PASSWORD",        "secretRef": "postgres-password" },
+                { "name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "value": "[reference(resourceId('Microsoft.Insights/components', variables('appiName')), '2020-02-02').ConnectionString]" },
+                { "name": "AZURE_CLIENT_ID",          "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName')), '2023-01-31').clientId]" }
+              ],
+              "probes": [
+                {
+                  "type": "Readiness",
+                  "httpGet": { "path": "/health/ready", "port": 8080 },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 10
+                },
+                {
+                  "type": "Liveness",
+                  "httpGet": { "path": "/health/live", "port": 8080 },
+                  "initialDelaySeconds": 30,
+                  "periodSeconds": 30
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 0,
+            "maxReplicas": 3,
+            "rules": [
+              {
+                "name": "http-scale",
+                "http": { "metadata": { "concurrentRequests": "100" } }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('portalAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('allTags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('aceEnvName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]",
+        "[resourceId('Microsoft.App/containerApps', variables('apiAppName'))]"
+      ],
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('aceEnvName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "ingress": {
+            "external": true,
+            "targetPort": 80,
+            "transport": "http"
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "portal",
+              "image": "[variables('portalImage')]",
+              "resources": {
+                "cpu": 0.25,
+                "memory": "0.5Gi"
+              },
+              "env": [
+                { "name": "CLOUDSMITH_API_URL", "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').properties.configuration.ingress.fqdn)]" },
+                { "name": "CLOUDSMITH_ENV",     "value": "[parameters('environment')]" }
+              ],
+              "probes": [
+                {
+                  "type": "Readiness",
+                  "httpGet": { "path": "/", "port": 80 },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 10
+                },
+                {
+                  "type": "Liveness",
+                  "httpGet": { "path": "/", "port": 80 },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 30
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 0,
+            "maxReplicas": 2,
+            "rules": [
+              {
+                "name": "http-scale",
+                "http": { "metadata": { "concurrentRequests": "50" } }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "portalUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('portalAppName')), '2024-03-01').properties.configuration.ingress.fqdn)]",
+      "metadata": {
+        "description": "URL of the CloudSmith portal. Open this in your browser to complete the first-run setup wizard."
+      }
+    },
+    "apiUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').properties.configuration.ingress.fqdn)]",
+      "metadata": {
+        "description": "Base URL of the CloudSmith API."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "value": "[parameters('adminUsername')]",
+      "metadata": {
+        "description": "CloudSmith administrator username. Use this with the password you supplied to sign in after the first-run wizard completes."
+      }
+    }
+  }
+}
