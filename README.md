@@ -81,6 +81,47 @@ Three modes — choose based on your environment:
 
 ---
 
+## Relay agent
+
+The CloudSmith relay agent runs as a Docker container on any Linux or Windows host and connects your on-premises infrastructure to the CloudSmith portal.
+
+### Linux (one-liner)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/install-relay.sh \
+  | bash -s -- --api-url <URL> --api-key <KEY> --site-id <SITE-ID>
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/install-relay.ps1 `
+  | iex  # then supply parameters interactively, or:
+
+.\scripts\install-relay.ps1 -ApiUrl <URL> -ApiKey <KEY> -SiteId <SITE-ID>
+```
+
+### Parameters
+
+| Parameter | Description |
+|---|---|
+| `--api-url` / `-ApiUrl` | CloudSmith API base URL (from the portal Settings page) |
+| `--api-key` / `-ApiKey` | Site API key (from the portal Settings page) |
+| `--site-id` / `-SiteId` | Site identifier shown in the portal |
+| `--version` / `-Version` | Container image tag (optional — defaults to latest release) |
+
+### Uninstall
+
+```bash
+# Linux
+curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/uninstall-relay.sh | bash
+
+# Windows
+.\scripts\uninstall-relay.ps1
+```
+
+---
+
 ## PaaS deployment — advanced (azd CLI)
 
 For CI/CD pipelines or operators who prefer the Azure Developer CLI:

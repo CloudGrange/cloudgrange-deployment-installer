@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# Copyright 2026 CloudSmith Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# install-relay.sh — Install the CloudSmith relay agent on a Linux Docker host.
+#
+# Usage:
+#   bash install-relay.sh --api-url <URL> --api-key <KEY> --site-id <SITE-ID> [--version <TAG>]
+#
+# One-liner:
+#   curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/install-relay.sh \
+#     | bash -s -- --api-url <URL> --api-key <KEY> --site-id <SITE-ID>
+
+set -euo pipefail
+
+CONTAINER_NAME="cloudsmith-relay"
+IMAGE_BASE="ghcr.io/cloudsmith-cloud/cloudsmith-relay"
+RELEASES_URL="https://api.github.com/repos/cloudsmith-cloud/cloudsmith-relay/releases"
+HEALTH_TIMEOUT=30
+
+# ----------------------------------------------------------------------------
+# Argument parsing
+# ----------------------------------------------------------------------------
+API_URL=""
+API_KEY=""
+SITE_ID=""
+VERSION=""
+
+usage() {
+    echo "Usage: $0 --api-url <URL> --api-key <KEY> --site-id <SITE-ID> [--version <TAG>]"
+    exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --api-url)   API_URL="$2";  shift 2 ;;
+        --api-key)   API_KEY="$2";  shift 2 ;;
+        --site-id)   SITE_ID="$2";  shift 2 ;;
+        --version)   VERSION="$2";  shift 2 ;;
+        -h|--help)   usage ;;
+        *) echo "Unknown argument: $1"; usage ;;
+    esac
+done
+
+if [[ -z "$API_URL" || -z "$API_KEY" || -z "$SITE_ID" ]]; then
+    echo "Error: --api-url, --api-key, and --site-id are all required."
+    usage
+fi
+
+# ----------------------------------------------------------------------------
+# Docker check
+# ----------------------------------------------------------------------------
+if ! command -v docker &>/dev/null; then
+    echo ""
+    echo "Error: Docker is not installed or not on PATH."
+    echo ""
+    echo "Install Docker Engine on Debian/Ubuntu:"
+    echo "  curl -fsSL https://get.docker.com | sh"
+    echo ""
+    echo "Or follow the official guide:"
+    echo "  https://docs.docker.com/engine/install/"
+    echo ""
+    exit 1
+fi
+
+if ! docker info &>/dev/null; then
+    echo ""
+    echo "Error: Docker daemon is not running, or you do not have permission to access it."
+    echo ""
+    echo "Start the daemon:  sudo systemctl start docker"
+    echo "Add your user:     sudo usermod -aG docker \$USER  (then log out and back in)"
+    echo ""
+    exit 1
+fi
+
+# ----------------------------------------------------------------------------
+# Resolve version
+# ----------------------------------------------------------------------------
+if [[ -z "$VERSION" ]]; then
+    echo "Resolving latest relay version..."
+    VERSION=$(curl -sSL "${RELEASES_URL}/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    if [[ -z "$VERSION" ]]; then
+        echo "Warning: Could not resolve latest version from GitHub releases. Falling back to 'latest' tag."
+        VERSION="latest"
+    else
+        echo "Latest version: ${VERSION}"
+    fi
+fi
+
+IMAGE="${IMAGE_BASE}:${VERSION}"
+
+# ----------------------------------------------------------------------------
+# Pull image
+# ----------------------------------------------------------------------------
+echo "Pulling ${IMAGE} ..."
+docker pull "${IMAGE}"
+
+# ----------------------------------------------------------------------------
+# Verify image digest against GitHub releases manifest (best-effort)
+# ----------------------------------------------------------------------------
+EXPECTED_DIGEST=""
+if [[ "$VERSION" != "latest" ]]; then
+    MANIFEST_URL="https://github.com/cloudsmith-cloud/cloudsmith-relay/releases/download/${VERSION}/cloudsmith-relay.sha256"
+    echo "Verifying image digest from ${MANIFEST_URL} ..."
+    MANIFEST=$(curl -sSL --fail "${MANIFEST_URL}" 2>/dev/null || true)
+    if [[ -n "$MANIFEST" ]]; then
+        EXPECTED_DIGEST=$(echo "$MANIFEST" | grep "cloudsmith-relay" | awk '{print $1}' | head -1)
+    fi
+fi
+
+if [[ -n "$EXPECTED_DIGEST" ]]; then
+    ACTUAL_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" 2>/dev/null | cut -d'@' -f2 || true)
+    if [[ -z "$ACTUAL_DIGEST" ]]; then
+        echo "Warning: Could not retrieve local image digest — skipping verification."
+    elif [[ "$ACTUAL_DIGEST" == *"$EXPECTED_DIGEST"* ]]; then
+        echo "Digest verified: ${ACTUAL_DIGEST}"
+    else
+        echo "Error: Image digest mismatch."
+        echo "  Expected (from manifest): ${EXPECTED_DIGEST}"
+        echo "  Actual:                   ${ACTUAL_DIGEST}"
+        echo "Do not run untrusted images. Aborting."
+        exit 1
+    fi
+else
+    echo "Digest manifest not available for this version — skipping verification."
+fi
+
+# ----------------------------------------------------------------------------
+# Remove existing container if present
+# ----------------------------------------------------------------------------
+if docker inspect "${CONTAINER_NAME}" &>/dev/null; then
+    echo "Stopping and removing existing container '${CONTAINER_NAME}' ..."
+    docker rm -f "${CONTAINER_NAME}"
+fi
+
+# ----------------------------------------------------------------------------
+# Run the relay container
+# ----------------------------------------------------------------------------
+echo "Starting relay container ..."
+docker run -d \
+    --name "${CONTAINER_NAME}" \
+    --restart unless-stopped \
+    -e RELAY_API_URL="${API_URL}" \
+    -e RELAY_API_KEY="${API_KEY}" \
+    -e RELAY_SITE_ID="${SITE_ID}" \
+    "${IMAGE}"
+
+# ----------------------------------------------------------------------------
+# Wait for healthy
+# ----------------------------------------------------------------------------
+echo "Waiting up to ${HEALTH_TIMEOUT}s for container to become healthy ..."
+ELAPSED=0
+HEALTHY=false
+while [[ $ELAPSED -lt $HEALTH_TIMEOUT ]]; do
+    STATUS=$(docker inspect --format='{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || echo "unknown")
+    HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${CONTAINER_NAME}" 2>/dev/null || echo "unknown")
+
+    if [[ "$STATUS" == "running" && ("$HEALTH" == "healthy" || "$HEALTH" == "none") ]]; then
+        HEALTHY=true
+        break
+    fi
+
+    if [[ "$STATUS" == "exited" || "$STATUS" == "dead" ]]; then
+        echo ""
+        echo "Error: Container exited unexpectedly. Logs:"
+        docker logs "${CONTAINER_NAME}" 2>&1 | tail -20
+        exit 1
+    fi
+
+    sleep 2
+    ELAPSED=$((ELAPSED + 2))
+done
+
+if [[ "$HEALTHY" != "true" ]]; then
+    echo ""
+    echo "Warning: Container did not report healthy within ${HEALTH_TIMEOUT}s."
+    echo "Container status: $(docker inspect --format='{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null)"
+    echo ""
+    echo "Check logs with:  docker logs ${CONTAINER_NAME}"
+    exit 1
+fi
+
+# ----------------------------------------------------------------------------
+# Done
+# ----------------------------------------------------------------------------
+echo ""
+echo "Relay agent connected. Check the CloudSmith portal to confirm Active status."
+echo ""
+echo "Useful commands:"
+echo "  View logs:   docker logs -f ${CONTAINER_NAME}"
+echo "  Stop relay:  docker stop ${CONTAINER_NAME}"
+echo "  Uninstall:   curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/uninstall-relay.sh | bash"
