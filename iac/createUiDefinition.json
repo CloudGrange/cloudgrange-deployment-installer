@@ -107,11 +107,7 @@
             "type": "Microsoft.Common.TextBlock",
             "visible": true,
             "options": {
-              "text": "CloudSmith will be deployed to Azure Container Apps in the selected resource group. Deployment takes approximately 15–20 minutes. After deployment completes, the Portal URL and API URL will be shown in the Outputs tab of the deployment.",
-              "link": {
-                "label": "CloudSmith documentation",
-                "uri": "https://github.com/cloudsmith-cloud/cloudsmith-installer"
-              }
+              "text": "CloudSmith will be deployed to Azure Container Apps in the selected resource group. Deployment takes approximately 15–20 minutes. After deployment completes, the Portal URL and API URL will be shown in the Outputs tab of the deployment. See https://docs.cloudsmith.cloud for full documentation."
             }
           },
           {
@@ -126,21 +122,14 @@
       }
     ],
     "outputs": {
-      "location":            "[location()]",
-      "environment":         "[steps('cloudsmithSettings').environmentName]",
-      "imageTag":            "[steps('cloudsmithSettings').imageTag]",
-      "postgresAdminUser":   "[steps('cloudsmithSettings').postgresAdminUser]",
+      "location":              "[location()]",
+      "environment":           "[steps('cloudsmithSettings').environmentName]",
+      "imageTag":              "[steps('cloudsmithSettings').imageTag]",
+      "postgresAdminUser":     "[steps('cloudsmithSettings').postgresAdminUser]",
       "postgresAdminPassword": "[basics('adminPassword')]",
-      "masterKey":           "[concat(newGuid(), newGuid())]",
-      "commonTags": {
-        "Environment":        "[steps('cloudsmithSettings').environmentName]",
-        "Workload":           "cloudsmith",
-        "CostCenter":         "[steps('cloudsmithSettings').costCenter]",
-        "Owner":              "[steps('cloudsmithSettings').ownerEmail]",
-        "BusinessUnit":       "[steps('cloudsmithSettings').costCenter]",
-        "DataClassification": "Internal",
-        "Criticality":        "Low"
-      }
+      "masterKey":             "[concat(newGuid(), newGuid())]",
+      "costCenter":            "[steps('cloudsmithSettings').costCenter]",
+      "ownerEmail":            "[steps('cloudsmithSettings').ownerEmail]"
     }
   }
 }

@@ -53,19 +53,18 @@
         "description": "CloudSmith portal administrator username."
       }
     },
-    "commonTags": {
-      "type": "object",
-      "defaultValue": {
-        "Environment": "[parameters('environment')]",
-        "Workload": "cloudsmith",
-        "CostCenter": "Engineering",
-        "Owner": "cloudsmith-alerts@example.com",
-        "BusinessUnit": "Engineering",
-        "DataClassification": "Internal",
-        "Criticality": "Low"
-      },
+    "costCenter": {
+      "type": "string",
+      "defaultValue": "Engineering",
       "metadata": {
-        "description": "Tags applied to all deployed resources."
+        "description": "Cost center tag applied to all deployed resources. Used for billing allocation."
+      }
+    },
+    "ownerEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Owner email tag applied to all deployed resources. Used for alert notifications."
       }
     }
   },
@@ -112,7 +111,7 @@
     "portalAppName":"[concat('ca-', variables('workload'), '-portal-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
     "apiImage":     "[concat('ghcr.io/cloudsmith-cloud/cloudsmith-api:', parameters('imageTag'))]",
     "portalImage":  "[concat('ghcr.io/cloudsmith-cloud/cloudsmith-portal:', parameters('imageTag'))]",
-    "allTags": "[union(parameters('commonTags'), createObject('ManagedBy', 'arm', 'DeployedAt', utcNow('yyyy-MM-ddTHH:mm:ssZ')))]"
+    "allTags": "[createObject('Environment', parameters('environment'), 'Workload', 'cloudsmith', 'CostCenter', parameters('costCenter'), 'Owner', parameters('ownerEmail'), 'BusinessUnit', parameters('costCenter'), 'DataClassification', 'Internal', 'Criticality', 'Low', 'ManagedBy', 'arm')]"
   },
   "resources": [
     {
