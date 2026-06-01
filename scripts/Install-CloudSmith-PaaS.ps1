@@ -8,10 +8,6 @@
     Apps in your subscription. Auto-generates the master encryption key and
     database password — you never need to know about them.
 
-.PARAMETER AdminPassword
-    Password for the CloudSmith administrator account.
-    Min 12 chars, requires uppercase + lowercase + digit + special char.
-
 .PARAMETER OwnerEmail
     Email address of the team responsible for this deployment.
     Applied as Azure Policy required tag.
@@ -33,20 +29,18 @@
     Default: cloudsmith-deploy.json in the current directory.
 
 .EXAMPLE
+    # Minimum required — auto-generates master key and database password
     .\Install-CloudSmith-PaaS.ps1 `
-        -AdminPassword "YourPass1!" `
         -OwnerEmail "ops@contoso.com"
 
 .EXAMPLE
     .\Install-CloudSmith-PaaS.ps1 `
-        -AdminPassword "YourPass1!" `
         -OwnerEmail "ops@contoso.com" `
         -Environment dev `
         -Location eastus
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$AdminPassword,
     [Parameter(Mandatory)][string]$OwnerEmail,
     [string]$Location      = "centralus",
     [ValidateSet("dev","test","stage","prod")]

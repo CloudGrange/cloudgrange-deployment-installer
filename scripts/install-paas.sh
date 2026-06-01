@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # install-paas.sh — Deploy CloudSmith to Azure PaaS.
-# Generates all secrets automatically. Requires: az CLI, jq.
+# Generates all secrets automatically. Requires: az CLI, jq, openssl.
 #
 # Usage:
 #   ./install-paas.sh \
-#     --admin-password "YourPass1!" \
-#     --owner-email   "ops@contoso.com"
+#     --owner-email "ops@contoso.com"
 #
 # Optional:
 #   --location      centralus (default)
@@ -44,11 +43,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Validate required inputs ──────────────────────────────────────────────────
-if [[ -z "$ADMIN_PASSWORD" ]]; then
-  echo "Error: --admin-password is required." >&2
-  echo "Run with --help for usage." >&2
-  exit 1
-fi
 if [[ -z "$OWNER_EMAIL" ]]; then
   echo "Error: --owner-email is required." >&2
   echo "Run with --help for usage." >&2
