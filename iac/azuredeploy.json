@@ -403,7 +403,7 @@
                 "memory": "0.5Gi"
               },
               "env": [
-                { "name": "CLOUDSMITH_API_URL", "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').properties.configuration.ingress.fqdn)]" },
+                { "name": "CLOUDSMITH_API_URL", "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').configuration.ingress.fqdn)]" },
                 { "name": "CLOUDSMITH_ENV",     "value": "[parameters('environment')]" }
               ],
               "probes": [
@@ -439,14 +439,14 @@
   "outputs": {
     "portalUrl": {
       "type": "string",
-      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('portalAppName')), '2024-03-01').properties.configuration.ingress.fqdn)]",
+      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('portalAppName')), '2024-03-01').configuration.ingress.fqdn)]",
       "metadata": {
         "description": "URL of the CloudSmith portal. Open this in your browser to complete the first-run setup wizard."
       }
     },
     "apiUrl": {
       "type": "string",
-      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').properties.configuration.ingress.fqdn)]",
+      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').configuration.ingress.fqdn)]",
       "metadata": {
         "description": "Base URL of the CloudSmith API."
       }
