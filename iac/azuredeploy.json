@@ -105,7 +105,7 @@
     "amwName":      "[concat('amw-', variables('suffix'))]",
     "miName":       "[concat('id-', variables('suffix'))]",
     "kvRawName":    "[concat('kv', replace(variables('suffix'), '-', ''))]",
-    "kvName":       "[if(greater(length(variables('kvRawName')), 24), concat(substring(variables('kvRawName'), 0, 20), uniqueString(resourceGroup().id)), variables('kvRawName'))]",
+    "kvName":       "[concat(if(greater(length(variables('kvRawName')), 20), substring(variables('kvRawName'), 0, 20), variables('kvRawName')), substring(uniqueString(resourceGroup().id), 0, 4))]",
     "pgName":       "[concat('psql-', variables('suffix'))]",
     "aceEnvName":   "[concat('cae-', variables('suffix'))]",
     "apiAppName":   "[concat('ca-', variables('workload'), '-api-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
