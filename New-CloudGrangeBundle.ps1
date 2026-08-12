@@ -1,13 +1,13 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
-# AB#1852 — Generate CloudSmith offline bundle for air-gapped / bundled installs.
+# AB#1852 — Generate CloudGrange offline bundle for air-gapped / bundled installs.
 # Pulls all required container images and the Ubuntu cloud image, packages them
 # into a self-contained zip that can be transferred to a machine without internet access.
 #
 # Usage:
-#   .\New-CloudSmithBundle.ps1
-#   .\New-CloudSmithBundle.ps1 -Version v1.0.0-preview1 -OutputPath C:\CloudSmithBundle.zip
+#   .\New-CloudGrangeBundle.ps1
+#   .\New-CloudGrangeBundle.ps1 -Version v1.0.0-preview1 -OutputPath C:\CloudGrangeBundle.zip
 
 [CmdletBinding()]
 param(
@@ -20,24 +20,24 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrEmpty($OutputPath)) {
-    $OutputPath = Join-Path $PSScriptRoot "cloudsmith-bundle-$Version.zip"
+    $OutputPath = Join-Path $PSScriptRoot "cloudgrange-bundle-$Version.zip"
 }
 
-Write-Host "`n  CloudSmith Bundle Creator — Version: $Version" -ForegroundColor Cyan
+Write-Host "`n  CloudGrange Bundle Creator — Version: $Version" -ForegroundColor Cyan
 Write-Host "  ─────────────────────────────────────────────" -ForegroundColor DarkGray
 Write-Host "  Output: $OutputPath" -ForegroundColor Gray
 
-$bundleDir = Join-Path $env:TEMP "cloudsmith-bundle-$([System.IO.Path]::GetRandomFileName())"
+$bundleDir = Join-Path $env:TEMP "cloudgrange-bundle-$([System.IO.Path]::GetRandomFileName())"
 New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 
 try {
     # Step 1: Copy installer scripts
     Write-Host "`n  [1/4] Copying installer files..." -ForegroundColor Cyan
     $installerFiles = @(
-        'Install-CloudSmith.ps1',
-        'cloudsmith-installer.sha256',
-        'Update-CloudSmith.ps1',
-        'Uninstall-CloudSmith.ps1',
+        'Install-CloudGrange.ps1',
+        'cloudgrange-installer.sha256',
+        'Update-CloudGrange.ps1',
+        'Uninstall-CloudGrange.ps1',
         'New-SelfSignedCert.ps1',
         'verify-bundle.ps1'
     )
@@ -76,9 +76,9 @@ try {
     # Step 3: Pull and save container images
     Write-Host "`n  [3/4] Pulling and saving container images..." -ForegroundColor Cyan
     $images = @(
-        "ghcr.io/cloudsmith-cloud/cloudsmith-api:$Version",
-        "ghcr.io/cloudsmith-cloud/cloudsmith-portal:$Version",
-        "ghcr.io/cloudsmith-cloud/cloudsmith-relay:$Version",
+        "ghcr.io/cloudgrange-cloud/cloudgrange-api:$Version",
+        "ghcr.io/cloudgrange-cloud/cloudgrange-portal:$Version",
+        "ghcr.io/cloudgrange-cloud/cloudgrange-relay:$Version",
         'nginx:alpine',
         'postgres:16-alpine',
         'prom/prometheus:latest',
@@ -89,7 +89,7 @@ try {
         Write-Host "  Pulling: $img" -ForegroundColor Gray
         docker pull $img
     }
-    $imageTar = Join-Path $bundleDir 'cloudsmith-images.tar'
+    $imageTar = Join-Path $bundleDir 'cloudgrange-images.tar'
     Write-Host "  Saving images to tar (~5-10GB)..." -ForegroundColor Gray
     docker save -o $imageTar @images
     Write-Host "  Images saved ($([Math]::Round((Get-Item $imageTar).Length / 1GB, 1)) GB)" -ForegroundColor Green
@@ -101,7 +101,7 @@ try {
         created      = [DateTime]::UtcNow.ToString('o')
         images       = $images
         ubuntuImage  = if ($SkipUbuntu) { '' } else { 'ubuntu-24.04-cloudimg.img' }
-        installerSha = (Get-Content (Join-Path $PSScriptRoot 'cloudsmith-installer.sha256') -Raw).Trim()
+        installerSha = (Get-Content (Join-Path $PSScriptRoot 'cloudgrange-installer.sha256') -Raw).Trim()
     } | ConvertTo-Json -Depth 5
     Set-Content -Path (Join-Path $bundleDir 'bundle-manifest.json') -Value $manifest -Encoding UTF8
 
@@ -122,8 +122,8 @@ try {
 
     Write-Host "`n  Bundle created successfully!" -ForegroundColor Green
     Write-Host "  Transfer this file to the target machine and run:" -ForegroundColor Yellow
-    Write-Host "    Expand-Archive cloudsmith-bundle-$Version.zip C:\CloudSmithInstall" -ForegroundColor White
-    Write-Host "    .\Install-CloudSmith.ps1 -Mode Bundled" -ForegroundColor White
+    Write-Host "    Expand-Archive cloudgrange-bundle-$Version.zip C:\CloudGrangeInstall" -ForegroundColor White
+    Write-Host "    .\Install-CloudGrange.ps1 -Mode Bundled" -ForegroundColor White
     Write-Host ""
 } finally {
     Remove-Item -Path $bundleDir -Recurse -Force -ErrorAction SilentlyContinue

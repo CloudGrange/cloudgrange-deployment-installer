@@ -1,8 +1,8 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# install-relay.ps1 — Install the CloudSmith relay agent on a Windows Docker Desktop host.
+# install-relay.ps1 — Install the CloudGrange relay agent on a Windows Docker Desktop host.
 #
 # Usage:
 #   .\install-relay.ps1 -ApiUrl <URL> -ApiKey <KEY> -SiteId <SITE-ID> [-Version <TAG>]
@@ -24,9 +24,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ContainerName  = 'cloudsmith-relay'
-$ImageBase      = 'ghcr.io/cloudsmith-cloud/cloudsmith-relay'
-$ReleasesUrl    = 'https://api.github.com/repos/cloudsmith-cloud/cloudsmith-relay/releases'
+$ContainerName  = 'cloudgrange-relay'
+$ImageBase      = 'ghcr.io/cloudgrange-cloud/cloudgrange-relay'
+$ReleasesUrl    = 'https://api.github.com/repos/cloudgrange-cloud/cloudgrange-relay/releases'
 $HealthTimeout  = 30
 
 # ----------------------------------------------------------------------------
@@ -64,7 +64,7 @@ Start Docker Desktop from the Start Menu, then re-run this script.
 if ([string]::IsNullOrWhiteSpace($Version)) {
     Write-Host "Resolving latest relay version..."
     try {
-        $release = Invoke-RestMethod -Uri "$ReleasesUrl/latest" -Headers @{ 'User-Agent' = 'cloudsmith-installer' }
+        $release = Invoke-RestMethod -Uri "$ReleasesUrl/latest" -Headers @{ 'User-Agent' = 'cloudgrange-installer' }
         $Version = $release.tag_name
         Write-Host "Latest version: $Version"
     } catch {
@@ -89,11 +89,11 @@ if ($LASTEXITCODE -ne 0) {
 # Verify image digest against GitHub releases manifest (best-effort)
 # ----------------------------------------------------------------------------
 if ($Version -ne 'latest') {
-    $ManifestUrl = "https://github.com/cloudsmith-cloud/cloudsmith-relay/releases/download/$Version/cloudsmith-relay.sha256"
+    $ManifestUrl = "https://github.com/cloudgrange-cloud/cloudgrange-relay/releases/download/$Version/cloudgrange-relay.sha256"
     Write-Host "Verifying image digest from $ManifestUrl ..."
     try {
         $Manifest = Invoke-WebRequest -Uri $ManifestUrl -UseBasicParsing -ErrorAction Stop
-        $ExpectedDigest = ($Manifest.Content -split "`n" | Where-Object { $_ -match 'cloudsmith-relay' } | Select-Object -First 1) -split '\s+' | Select-Object -First 1
+        $ExpectedDigest = ($Manifest.Content -split "`n" | Where-Object { $_ -match 'cloudgrange-relay' } | Select-Object -First 1) -split '\s+' | Select-Object -First 1
         if ($ExpectedDigest) {
             $ActualDigest = (docker inspect --format='{{index .RepoDigests 0}}' $Image 2>$null) -replace '^.*@', ''
             if (-not $ActualDigest) {
@@ -182,7 +182,7 @@ if (-not $Healthy) {
 # Done
 # ----------------------------------------------------------------------------
 Write-Host ""
-Write-Host "Relay agent connected. Check the CloudSmith portal to confirm Active status."
+Write-Host "Relay agent connected. Check the CloudGrange portal to confirm Active status."
 Write-Host ""
 Write-Host "Useful commands:"
 Write-Host "  View logs:   docker logs -f $ContainerName"

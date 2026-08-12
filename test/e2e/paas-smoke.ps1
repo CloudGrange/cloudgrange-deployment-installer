@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    CloudSmith PaaS end-to-end smoke test. Validates the golden path for a freshly
+    CloudGrange PaaS end-to-end smoke test. Validates the golden path for a freshly
     deployed or upgraded PaaS environment (AB#1607, AB#2353).
 
 .DESCRIPTION
@@ -20,10 +20,10 @@
     all checks pass, or code 1 if any check fails.
 
 .PARAMETER ApiBaseUrl
-    Base URL for the cloudsmith-api ACA app (e.g. https://ca-cloudsmith-api-dev-eus-001.azurecontainerapps.io)
+    Base URL for the cloudgrange-api ACA app (e.g. https://ca-cloudgrange-api-dev-eus-001.azurecontainerapps.io)
 
 .PARAMETER PortalBaseUrl
-    Base URL for the cloudsmith-portal ACA app. Defaults to ApiBaseUrl if not provided.
+    Base URL for the cloudgrange-portal ACA app. Defaults to ApiBaseUrl if not provided.
 
 .PARAMETER AdminUser
     Local break-glass admin username. Default: admin
@@ -32,20 +32,20 @@
     Local break-glass admin password. Required for step 5.
 
 .PARAMETER InitialAdminToken
-    One-time bootstrap token from KV secret 'cloudsmith-initial-admin-token'.
+    One-time bootstrap token from KV secret 'cloudgrange-initial-admin-token'.
     Required only when setup has not been completed (setupComplete = false).
 
 .PARAMETER SetupPlatformName
-    Platform name to use when completing first-run setup. Default: CloudSmith
+    Platform name to use when completing first-run setup. Default: CloudGrange
 
 .PARAMETER TimeoutSeconds
     HTTP request timeout in seconds. Default: 30
 
 .EXAMPLE
     .\paas-smoke.ps1 `
-        -ApiBaseUrl https://ca-cloudsmith-api-test-cus-002.azurecontainerapps.io `
-        -PortalBaseUrl https://ca-cloudsmith-portal-test-cus-002.azurecontainerapps.io `
-        -InitialAdminToken (az keyvault secret show --vault-name kvXXX --name cloudsmith-initial-admin-token --query value -o tsv) `
+        -ApiBaseUrl https://ca-cloudgrange-api-test-cus-002.azurecontainerapps.io `
+        -PortalBaseUrl https://ca-cloudgrange-portal-test-cus-002.azurecontainerapps.io `
+        -InitialAdminToken (az keyvault secret show --vault-name kvXXX --name cloudgrange-initial-admin-token --query value -o tsv) `
         -AdminPassword (ConvertTo-SecureString 'MyPassword' -AsPlainText -Force)
 #>
 [CmdletBinding()]
@@ -62,7 +62,7 @@ param(
 
     [string] $InitialAdminToken = '',
 
-    [string] $SetupPlatformName = 'CloudSmith',
+    [string] $SetupPlatformName = 'CloudGrange',
 
     [int] $TimeoutSeconds = 30
 )
@@ -138,7 +138,7 @@ Invoke-Check -Step 3 -Name 'GET /api/v1/setup/status -> 200' -Body {
 if (-not $setupComplete) {
     if ([string]::IsNullOrWhiteSpace($InitialAdminToken)) {
         Write-Host "[SKIP] Step 4 — setup required but -InitialAdminToken not provided. Retrieve from KV:" -ForegroundColor Yellow
-        Write-Host "         az keyvault secret show --vault-name <kv-name> --name cloudsmith-initial-admin-token --query value -o tsv" -ForegroundColor Gray
+        Write-Host "         az keyvault secret show --vault-name <kv-name> --name cloudgrange-initial-admin-token --query value -o tsv" -ForegroundColor Gray
         $results.Add([pscustomobject]@{ Step = 4; Name = 'POST /api/v1/setup (first-run wizard)'; Status = 'SKIP'; Detail = 'no InitialAdminToken'; Ms = 0 })
     } else {
         Invoke-Check -Step 4 -Name 'POST /api/v1/setup (first-run wizard)' -Body {
@@ -209,7 +209,7 @@ Invoke-Check -Step 8 -Name 'GET /health/ready -> 200 (post-setup)' -Body {
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host "CloudSmith PaaS Smoke Test — Summary" -ForegroundColor Cyan
+Write-Host "CloudGrange PaaS Smoke Test — Summary" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 $results | Format-Table -Property Step, Status, Name, Detail, Ms -AutoSize
 Write-Host ""

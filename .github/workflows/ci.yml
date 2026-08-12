@@ -11,7 +11,7 @@ permissions:
 jobs:
   dco:
     if: github.event_name == 'pull_request'
-    uses: cloudsmith-cloud/cloudsmith-workflows/.github/workflows/dco-check.yml@v1.0.0
+    uses: cloudgrange-cloud/cloudgrange-workflows/.github/workflows/dco-check.yml@v1.0.0
   validate:
     runs-on: windows-latest
     steps:
@@ -35,16 +35,16 @@ jobs:
   docker:
     if: github.ref == 'refs/heads/main'
     needs: [validate]
-    uses: cloudsmith-cloud/cloudsmith-workflows/.github/workflows/docker-build-push.yml@v1.0.0
+    uses: cloudgrange-cloud/cloudgrange-workflows/.github/workflows/docker-build-push.yml@v1.0.0
     with:
-      image-name: cloudsmith-installer
+      image-name: cloudgrange-installer
     secrets: inherit
   trivy:
     if: github.ref == 'refs/heads/main'
     needs: [docker]
-    uses: cloudsmith-cloud/cloudsmith-workflows/.github/workflows/trivy-scan.yml@v1.0.0
+    uses: cloudgrange-cloud/cloudgrange-workflows/.github/workflows/trivy-scan.yml@v1.0.0
     with:
-      image-ref: ghcr.io/cloudsmith-cloud/cloudsmith-installer:latest
+      image-ref: ghcr.io/cloudgrange-cloud/cloudgrange-installer:latest
       # Report-only in CI — do not block the pipeline on CVEs during MVP.
       # CVEs are visible in the GitHub Security tab via the SARIF upload.
       fail-on-critical: false

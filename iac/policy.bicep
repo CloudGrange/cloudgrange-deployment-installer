@@ -1,4 +1,4 @@
-// Copyright 2026 CloudSmith Contributors
+// Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Azure Policy assignment module (AB#1668 — governance finding).
@@ -31,7 +31,7 @@ resource policyKvKeyExpiry 'Microsoft.Authorization/policyAssignments@2022-06-01
   name: 'cs-kv-key-expiry-${environment}'
   location: location
   properties: {
-    displayName: 'CloudSmith — KV keys should have expiration date'
+    displayName: 'CloudGrange — KV keys should have expiration date'
     policyDefinitionId: '/providers/Microsoft.Authorization/policyDefinitions/5ff38825-c5d8-47c5-b70e-069a21955146'
     parameters: {
       // Required by the built-in policy (Phase IV fresh-deploy fix 2026-05-27).
@@ -45,7 +45,7 @@ resource policyKvFirewall 'Microsoft.Authorization/policyAssignments@2022-06-01'
   name: 'cs-kv-firewall-${environment}'
   location: location
   properties: {
-    displayName: 'CloudSmith — KV should have firewall enabled (Audit; Deny post-Phase-V)'
+    displayName: 'CloudGrange — KV should have firewall enabled (Audit; Deny post-Phase-V)'
     policyDefinitionId: '/providers/Microsoft.Authorization/policyDefinitions/55615ac9-af46-4a59-874e-391cc3dfb490'
     parameters: {}
   }
@@ -59,7 +59,7 @@ resource policyPgPublicAccess 'Microsoft.Authorization/policyAssignments@2022-06
   name: 'cs-pg-public-${environment}'
   location: location
   properties: {
-    displayName: 'CloudSmith — PG public network access should be disabled (Audit; Deny post-Phase-V)'
+    displayName: 'CloudGrange — PG public network access should be disabled (Audit; Deny post-Phase-V)'
     policyDefinitionId: '/providers/Microsoft.Authorization/policyDefinitions/c9299215-ae47-4f50-9c54-8a392f68a052'
     parameters: {}
   }
@@ -90,7 +90,7 @@ resource policyRequireTags 'Microsoft.Authorization/policyAssignments@2022-06-01
   name: 'cs-tag-${toLower(tagKey)}-${environment}'
   location: location
   properties: {
-    displayName: 'CloudSmith — require tag ${tagKey}'
+    displayName: 'CloudGrange — require tag ${tagKey}'
     policyDefinitionId: '/providers/Microsoft.Authorization/policyDefinitions/871b6d14-10aa-478d-b590-94f262ecfa99'
     parameters: {
       tagName: { value: tagKey }

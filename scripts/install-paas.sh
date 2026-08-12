@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-paas.sh — Deploy CloudSmith to Azure PaaS.
+# install-paas.sh — Deploy CloudGrange to Azure PaaS.
 # Generates all secrets automatically. Requires: az CLI, jq, openssl.
 #
 # Usage:
@@ -22,7 +22,7 @@ COST_CENTER="Engineering"
 BUSINESS_UNIT="Engineering"
 ADMIN_PASSWORD=""
 OWNER_EMAIL=""
-PARAMS_FILE="cloudsmith-deploy.json"
+PARAMS_FILE="cloudgrange-deploy.json"
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -73,7 +73,7 @@ PG_PASSWORD=$(openssl rand -base64 16 | tr -d '/+=' | head -c 16)
 PG_PASSWORD="${PG_PASSWORD}Aa1!"   # ensure complexity requirements
 
 IMAGE_TAG="v1.0.0"
-DEPLOY_NAME="cloudsmith-$(date +%Y%m%d%H%M)"
+DEPLOY_NAME="cloudgrange-$(date +%Y%m%d%H%M)"
 
 # ── Write parameters file ─────────────────────────────────────────────────────
 echo "Writing parameters to: $PARAMS_FILE"
@@ -85,7 +85,7 @@ cat > "$PARAMS_FILE" <<EOF
     "environment":           { "value": "$ENVIRONMENT" },
     "instance":              { "value": "$INSTANCE" },
     "imageTag":              { "value": "$IMAGE_TAG" },
-    "postgresAdminUser":     { "value": "cloudsmith" },
+    "postgresAdminUser":     { "value": "cloudgrange" },
     "postgresAdminPassword": { "value": "$PG_PASSWORD" },
     "masterKey":             { "value": "$MASTER_KEY" },
     "Owner":                 { "value": "$OWNER_EMAIL" },
@@ -105,13 +105,13 @@ echo ""
 TEMPLATE_DIR="$(mktemp -d)"
 trap "rm -rf $TEMPLATE_DIR" EXIT
 
-echo "Downloading CloudSmith installer templates..."
+echo "Downloading CloudGrange installer templates..."
 curl -fsSL -o "$TEMPLATE_DIR/main.bicep" \
-  "https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/iac/main.bicep"
+  "https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/iac/main.bicep"
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 echo ""
-echo "Deploying CloudSmith to Azure..."
+echo "Deploying CloudGrange to Azure..."
 echo "  Environment : $ENVIRONMENT"
 echo "  Location    : $LOCATION"
 echo "  Image tag   : $IMAGE_TAG"
@@ -136,7 +136,7 @@ API_URL=$(az deployment sub show \
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║  CloudSmith deployed successfully                    ║"
+echo "║  CloudGrange deployed successfully                    ║"
 echo "╠══════════════════════════════════════════════════════╣"
 if [[ -n "$PORTAL_URL" ]]; then
 echo "║  Portal : $PORTAL_URL"

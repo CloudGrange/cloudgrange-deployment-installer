@@ -1,4 +1,4 @@
-# Codex project config for cloudsmith-installer
+# Codex project config for cloudgrange-installer
 # Codex reads repo-level config from .codex/config.toml in trusted projects.
 # Codex has no agent-definition files and no hook system — do not add either.
 # Repo instructions live in AGENTS.md, which Codex reads natively.

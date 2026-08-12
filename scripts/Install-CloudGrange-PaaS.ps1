@@ -1,10 +1,10 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Deploy CloudSmith to Azure PaaS. Generates all secrets automatically.
+    Deploy CloudGrange to Azure PaaS. Generates all secrets automatically.
 
 .DESCRIPTION
-    Deploys CloudSmith (API + Portal + PostgreSQL + Key Vault) to Azure Container
+    Deploys CloudGrange (API + Portal + PostgreSQL + Key Vault) to Azure Container
     Apps in your subscription. Auto-generates the master encryption key and
     database password — you never need to know about them.
 
@@ -26,15 +26,15 @@
 
 .PARAMETER ParamsFile
     Path to write the generated parameters JSON before deploying.
-    Default: cloudsmith-deploy.json in the current directory.
+    Default: cloudgrange-deploy.json in the current directory.
 
 .EXAMPLE
     # Minimum required — auto-generates master key and database password
-    .\Install-CloudSmith-PaaS.ps1 `
+    .\Install-CloudGrange-PaaS.ps1 `
         -OwnerEmail "ops@contoso.com"
 
 .EXAMPLE
-    .\Install-CloudSmith-PaaS.ps1 `
+    .\Install-CloudGrange-PaaS.ps1 `
         -OwnerEmail "ops@contoso.com" `
         -Environment dev `
         -Location eastus
@@ -48,7 +48,7 @@ param(
     [string]$Instance      = "001",
     [string]$CostCenter    = "Engineering",
     [string]$BusinessUnit  = "Engineering",
-    [string]$ParamsFile    = "cloudsmith-deploy.json"
+    [string]$ParamsFile    = "cloudgrange-deploy.json"
 )
 
 Set-StrictMode -Version Latest
@@ -86,7 +86,7 @@ $pgPassword = [Convert]::ToBase64String($pgBytes).Replace("=","").Replace("/","x
 $pgPassword = "${pgPassword}Aa1!"   # ensure password complexity
 
 $imageTag   = "v1.0.0"
-$deployName = "cloudsmith-$(Get-Date -Format 'yyyyMMddHHmm')"
+$deployName = "cloudgrange-$(Get-Date -Format 'yyyyMMddHHmm')"
 
 # ── Write parameters file ──────────────────────────────────────────────────────
 Write-Host "Writing parameters to: $ParamsFile" -ForegroundColor Cyan
@@ -98,7 +98,7 @@ $params = [ordered]@{
         environment           = @{ value = $Environment }
         instance              = @{ value = $Instance }
         imageTag              = @{ value = $imageTag }
-        postgresAdminUser     = @{ value = "cloudsmith" }
+        postgresAdminUser     = @{ value = "cloudgrange" }
         postgresAdminPassword = @{ value = $pgPassword }
         masterKey             = @{ value = $masterKey }
         Owner                 = @{ value = $OwnerEmail }
@@ -116,18 +116,18 @@ Write-Host "  Edit this file before deploying if you need custom values." -Foreg
 Write-Host ""
 
 # ── Download template ──────────────────────────────────────────────────────────
-Write-Host "Downloading CloudSmith installer template..." -ForegroundColor Cyan
+Write-Host "Downloading CloudGrange installer template..." -ForegroundColor Cyan
 $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmpDir | Out-Null
 
 try {
-    $bicepUrl = "https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/iac/main.bicep"
+    $bicepUrl = "https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/iac/main.bicep"
     $bicepFile = Join-Path $tmpDir "main.bicep"
     Invoke-WebRequest -Uri $bicepUrl -OutFile $bicepFile -UseBasicParsing
 
     # ── Deploy ─────────────────────────────────────────────────────────────────
     Write-Host ""
-    Write-Host "Deploying CloudSmith to Azure..." -ForegroundColor Cyan
+    Write-Host "Deploying CloudGrange to Azure..." -ForegroundColor Cyan
     Write-Host "  Environment : $Environment"
     Write-Host "  Location    : $Location"
     Write-Host "  Image tag   : $imageTag"
@@ -152,7 +152,7 @@ try {
 
     Write-Host ""
     Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Green
-    Write-Host "║  CloudSmith deployed successfully                    ║" -ForegroundColor Green
+    Write-Host "║  CloudGrange deployed successfully                    ║" -ForegroundColor Green
     Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Green
     if ($portalUrl) {
     Write-Host "║  Portal : $portalUrl" -ForegroundColor Green

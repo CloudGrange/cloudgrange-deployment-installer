@@ -1,7 +1,7 @@
-// Copyright 2026 CloudSmith Contributors
+// Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// CloudSmith PaaS (Model B) resource module — ADR-043 / ADR-044 / ADR-046 / ADR-047 / ADR-048.
+// CloudGrange PaaS (Model B) resource module — ADR-043 / ADR-044 / ADR-046 / ADR-047 / ADR-048.
 //
 // Wave 3 (AB#1599, AB#1600, AB#1667, AB#1668, AB#1669):
 //   - KV purge protection enabled (HIGH security finding)
@@ -20,7 +20,7 @@
 //   - appInsightsConnectionString marked @secure() (HIGH security finding)
 //
 // Security remediation (H1):
-//   - CLOUDSMITH_MASTER_KEY stored in KV (secret name: cloudsmith-master-key); ACA
+//   - CLOUDGRANGE_MASTER_KEY stored in KV (secret name: cloudgrange-master-key); ACA
 //     references it via keyVaultUrl — never exposed as a plaintext ACA env var.
 //
 // Naming + tagging (ADR-048):
@@ -70,7 +70,7 @@ param apiImageTag string = ''
 param portalImageTag string = ''
 
 @description('PostgreSQL admin login.')
-param postgresAdminUser string = 'cloudsmith'
+param postgresAdminUser string = 'cloudgrange'
 
 @secure()
 param postgresAdminPassword string
@@ -173,7 +173,7 @@ param ghcrToken string = ''
 
 // H1 security remediation — master key for AES-256 envelope encryption.
 // Passed as @secure() so the value is never written to ARM deployment logs.
-// Stored in Key Vault (secret name: cloudsmith-master-key) and referenced
+// Stored in Key Vault (secret name: cloudgrange-master-key) and referenced
 // by ACA via keyVaultUrl — never exposed as a plaintext environment variable.
 @secure()
 @description('256-bit AES master key (base64-encoded). Written to KV at deploy time; referenced by ACA via KV secret reference. Generated externally and passed via environment or @secure() parameter.')
@@ -200,7 +200,7 @@ param keyVaultName string = ''
 param keyVaultTags object = {}
 param postgresServerName string = ''
 param postgresServerTags object = {}
-param postgresDatabaseName string = 'cloudsmith'
+param postgresDatabaseName string = 'cloudgrange'
 param containerAppsEnvironmentName string = ''
 param containerAppsEnvironmentTags object = {}
 param apiAppName string = ''
@@ -251,7 +251,7 @@ var rgHash = substring(uniqueString(resourceGroup().id), 0, 6)
 
 // Length-constrained types (Key Vault = 24 chars max) need a shorter workload token.
 // Budget for KV: 24 - typeAbbr(2) - env(max 5='stage') - regionCode(max 4='wus2') - instance(3) - hash(6) = 4
-// Truncate workload to 6 chars to leave headroom; examples with workload='cloudsmith':
+// Truncate workload to 6 chars to leave headroom; examples with workload='cloudgrange':
 //   env=dev region=cus instance=001 hash=abc123 → kvcloudsdevcus001abc123 (23 chars)
 //   env=stage region=eus2 instance=001 hash=abc123 → kvcloudsstageeus2001abc123 → would still overflow with the full 6+5+4+3+6=24, so use 4-char truncate to be safe
 var workloadShort = length(workload) > 4 ? substring(workload, 0, 4) : workload
@@ -279,7 +279,7 @@ var postgresServerNameEffective = empty(postgresServerName) ? cafName(typeAbbr.p
 var containerAppsEnvironmentNameEffective = empty(containerAppsEnvironmentName) ? cafName(typeAbbr.containerAppsEnvironment, workload, environment, regionCode, instance) : containerAppsEnvironmentName
 var apiAppNameEffective = empty(apiAppName) ? cafNameWithRole(typeAbbr.containerApp, workload, 'api', environment, regionCode, instance) : apiAppName
 // AB#1669 — ACA name limit is 32 chars. 'portal' role makes the name 33 chars for common
-// workload='cloudsmith' deployments. Clamp to 32 by substring. API uses 'api' (3 chars) and
+// workload='cloudgrange' deployments. Clamp to 32 by substring. API uses 'api' (3 chars) and
 // fits in 30; portal uses 'portal' (6 chars) and would be 33 — trim to 32.
 var _portalAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'portal', environment, regionCode, instance)
 var portalAppNameEffective = empty(portalAppName) ? (length(_portalAppNameRaw) > 32 ? substring(_portalAppNameRaw, 0, 32) : _portalAppNameRaw) : portalAppName
@@ -296,8 +296,8 @@ var kvDisplayTag = { DisplayName: keyVaultDisplayName }
 var imagesArePrivate = !empty(ghcrToken)
 var _apiImageTagEff    = empty(apiImageTag)    ? imageTag : apiImageTag
 var _portalImageTagEff = empty(portalImageTag) ? imageTag : portalImageTag
-var apiImage    = 'ghcr.io/cloudsmith-cloud/cloudsmith-api:${_apiImageTagEff}'
-var portalImage = 'ghcr.io/cloudsmith-cloud/cloudsmith-portal:${_portalImageTagEff}'
+var apiImage    = 'ghcr.io/cloudgrange-cloud/cloudgrange-api:${_apiImageTagEff}'
+var portalImage = 'ghcr.io/cloudgrange-cloud/cloudgrange-portal:${_portalImageTagEff}'
 var pgFqdn = '${postgresServerNameEffective}.postgres.database.azure.com'
 var oidcPreseed = !empty(entraClientId)
 // AB#2379 — use entraAuthorityBase parameter instead of hardcoded public cloud URL.
@@ -320,16 +320,16 @@ var dbHost = enablePgBouncer ? 'localhost' : pgFqdn
 var pgPasswordSecretName = 'cs-${environment}-core-db-password'
 
 // H1 security remediation — KV secret name for the AES-256 master key.
-var masterKeySecretName = 'cloudsmith-master-key'
+var masterKeySecretName = 'cloudgrange-master-key'
 
 // AB#2374 — KV secret name for the Entra/AAD OIDC client secret.
 // Stored in KV at deploy time; ACA references via keyVaultUrl — never as plaintext env var.
-var entraClientSecretName = 'cloudsmith-entra-client-secret'
+var entraClientSecretName = 'cloudgrange-entra-client-secret'
 
 // AB#2375 — KV secret name for the Application Insights connection string.
 // Connection strings contain the instrumentation key and are treated as sensitive.
 // Stored in KV at deploy time; ACA references via keyVaultUrl — never as plaintext env var.
-var appInsightsSecretName = 'cloudsmith-appinsights-connection-string'
+var appInsightsSecretName = 'cloudgrange-appinsights-connection-string'
 
 // KV DNS suffix — use az.environment() to ensure compatibility across sovereign clouds (no-hardcoded-env-urls)
 var kvDnsSuffix = az.environment().suffixes.keyvaultDns
@@ -445,7 +445,7 @@ resource dcr 'Microsoft.Insights/dataCollectionRules@2022-06-01' = {
     destinations: {
       monitoringAccounts: [
         {
-          name: 'cloudsmithAmw'
+          name: 'cloudgrangeAmw'
           accountResourceId: amw.id
         }
       ]
@@ -453,7 +453,7 @@ resource dcr 'Microsoft.Insights/dataCollectionRules@2022-06-01' = {
     dataFlows: [
       {
         streams: [ 'Microsoft-PrometheusMetrics' ]
-        destinations: [ 'cloudsmithAmw' ]
+        destinations: [ 'cloudgrangeAmw' ]
       }
     ]
   }
@@ -517,7 +517,7 @@ resource newKv 'Microsoft.KeyVault/vaults@2023-07-01' = if (empty(byoKvId)) {
     enableSoftDelete: true
     softDeleteRetentionInDays: keyVaultSoftDeleteRetentionDays
     // AB#1599 — purge protection: once set cannot be unset; required by secrets-handling design.
-    // Note: the dev KV (rg-cloudsmith-dev-cus-001) must be re-created or purge protection applied
+    // Note: the dev KV (rg-cloudgrange-dev-cus-001) must be re-created or purge protection applied
     // manually before the next deploy if upgrading from a pre-Wave-3 state.
     enablePurgeProtection: true
   }
@@ -809,7 +809,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
           // H1 security remediation — master key KV secret reference.
           // Never set as a direct env var value; always resolved via Key Vault.
           {
-            name: 'cloudsmith-master-key'
+            name: 'cloudgrange-master-key'
             keyVaultUrl: masterKeySecretUri
             identity: miId
           }
@@ -830,7 +830,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: concat(
         [
           {
-            name: 'cloudsmith-api'
+            name: 'cloudgrange-api'
             image: apiImage
             resources: { cpu: json(apiAppCpu), memory: apiAppMemory }
             env: union([
@@ -853,21 +853,21 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'AZURE_MONITOR_DCR_IMMUTABLE_ID', value: dcrImmutableId }
               // H1 security remediation — master key injected via KV secret reference.
               // The raw base64 key is NEVER stored as a plaintext env var value.
-              { name: 'CLOUDSMITH_MASTER_KEY', secretRef: 'cloudsmith-master-key' }
+              { name: 'CLOUDGRANGE_MASTER_KEY', secretRef: 'cloudgrange-master-key' }
               // AB#2349 / ADR-047 amendment — substrate flag + KV name so the bootstrap
               // can write the initial admin token to KV instead of an unreachable file.
               // Operator retrieves with:
-              //   az keyvault secret show --vault-name <kv> --name cloudsmith-initial-admin-token --query value -o tsv
-              { name: 'CLOUDSMITH_DEPLOYMENT_MODE', value: 'paas' }
-              { name: 'CLOUDSMITH_KEY_VAULT_NAME',  value: kvNameEffective }
+              //   az keyvault secret show --vault-name <kv> --name cloudgrange-initial-admin-token --query value -o tsv
+              { name: 'CLOUDGRANGE_DEPLOYMENT_MODE', value: 'paas' }
+              { name: 'CLOUDGRANGE_KEY_VAULT_NAME',  value: kvNameEffective }
               // AB#2412 — env vars required by PaaSAdapter.TriggerImageUpdateAsync and host-info endpoint.
               // AB#2403 — AZURE_TENANT_ID added so PaaSAdapter DefaultAzureCredential can resolve the tenant.
               // These are resolved from ARM built-in functions at deploy time — no hardcoded values.
               { name: 'AZURE_SUBSCRIPTION_ID',          value: subscription().subscriptionId }
               { name: 'AZURE_TENANT_ID',                value: subscription().tenantId }
-              { name: 'CLOUDSMITH_ACA_RESOURCE_GROUP',  value: resourceGroup().name }
-              { name: 'CLOUDSMITH_ACA_APP_NAME',        value: apiAppNameEffective }
-              { name: 'CLOUDSMITH_AZURE_REGION',        value: location }
+              { name: 'CLOUDGRANGE_ACA_RESOURCE_GROUP',  value: resourceGroup().name }
+              { name: 'CLOUDGRANGE_ACA_APP_NAME',        value: apiAppNameEffective }
+              { name: 'CLOUDGRANGE_AZURE_REGION',        value: location }
             ], oidcApiEnv)
             // AB#1667 — health probes (HIGH security/reliability finding)
             // Probe endpoints defined in design/observability/health-check-contract.md
@@ -952,17 +952,17 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
     template: {
       containers: [
         {
-          name: 'cloudsmith-portal'
+          name: 'cloudgrange-portal'
           image: portalImage
           resources: { cpu: json(portalAppCpu), memory: portalAppMemory }
           env: [
             // Browser-facing API base — EMPTY = relative paths via portal nginx proxy (same-origin).
-            { name: 'CLOUDSMITH_API_URL', value: '' }
-            { name: 'CLOUDSMITH_AUTH_URL', value: entraAuthority }
-            { name: 'CLOUDSMITH_API_UPSTREAM', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
-            { name: 'CLOUDSMITH_API_HOST', value: apiApp.properties.configuration.ingress.fqdn }
-            { name: 'CLOUDSMITH_FWD_PROTO', value: 'https' }
-            { name: 'CLOUDSMITH_API_INTERNAL_URL', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
+            { name: 'CLOUDGRANGE_API_URL', value: '' }
+            { name: 'CLOUDGRANGE_AUTH_URL', value: entraAuthority }
+            { name: 'CLOUDGRANGE_API_UPSTREAM', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
+            { name: 'CLOUDGRANGE_API_HOST', value: apiApp.properties.configuration.ingress.fqdn }
+            { name: 'CLOUDGRANGE_FWD_PROTO', value: 'https' }
+            { name: 'CLOUDGRANGE_API_INTERNAL_URL', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
           ]
           // AB#1667 — portal health probe: TCP liveness on port 80.
           // Portal is nginx serving static files; TCP probe avoids API dependency.
@@ -1009,7 +1009,7 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
 // =============================================================================
 
 module alertRules 'monitoring.bicep' = if (enableAlertRules) {
-  name: 'cloudsmith-alerts'
+  name: 'cloudgrange-alerts'
   params: {
     workload: workload
     environment: environment

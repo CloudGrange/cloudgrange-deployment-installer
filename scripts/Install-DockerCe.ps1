@@ -1,12 +1,12 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
-# ADR-029: Installs Docker CE inside the cloudsmith-docker VM via Hyper-V Direct connection
+# ADR-029: Installs Docker CE inside the cloudgrange-docker VM via Hyper-V Direct connection
 
 function Install-DockerCe {
     [CmdletBinding()]
     param(
-        [string]$VmName  = 'cloudsmith-docker',
+        [string]$VmName  = 'cloudgrange-docker',
         [bool]$UseWsl2   = $false,
         [string]$Proxy   = '',
         # Pre-built PSCredential for Hyper-V Direct (VMBus) connections.
@@ -98,7 +98,7 @@ exit 0
             '-o', 'StrictHostKeyChecking=no',
             '-o', 'UserKnownHostsFile=/dev/null',
             '-o', 'LogLevel=ERROR',
-            "cloudsmith@$VmIp",
+            "cloudgrange@$VmIp",
             'sudo', 'bash', '-s'
         )
         # Write raw bytes directly to SSH stdin — PowerShell's string pipeline appends
@@ -119,7 +119,7 @@ exit 0
         }
     } else {
         if ($null -eq $Credential) {
-            $Credential = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+            $Credential = Get-Credential -UserName 'cloudgrange' -Message 'VM credential'
         }
         # Hyper-V PowerShell Direct — only works if PowerShell is installed in the guest.
         # For Linux guests (Ubuntu), use the -SshKeyPath path instead.

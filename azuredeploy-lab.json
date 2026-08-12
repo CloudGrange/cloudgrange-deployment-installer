@@ -50,14 +50,14 @@
     },
     "domainName": {
       "type": "string",
-      "defaultValue": "cloudsmith.lab",
+      "defaultValue": "cloudgrange.lab",
       "metadata": {
         "description": "Active Directory domain FQDN."
       }
     },
     "domainNetbios": {
       "type": "string",
-      "defaultValue": "CLOUDSMITH",
+      "defaultValue": "CLOUDGRANGE",
       "maxLength": 15,
       "metadata": {
         "description": "AD NetBIOS domain name (max 15 chars)."
@@ -1137,7 +1137,7 @@
                 "typeHandlerVersion": "2.1",
                 "autoUpgradeMinorVersion": true,
                 "settings": {
-                  "script": "[base64(format('#!/bin/bash\nset -e\napt-get update -y || apt-get update -y\napt-get install -y ca-certificates curl gnupg\ninstall -m 0755 -d /etc/apt/keyrings\ncurl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg\nchmod a+r /etc/apt/keyrings/docker.gpg\necho \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | tee /etc/apt/sources.list.d/docker.list > /dev/null\napt-get update -y\napt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin\nsystemctl enable docker\nsystemctl start docker\nusermod -aG docker {0}\necho \"DOCKER_READY\" >> /var/log/cloudsmith-lab.log\n', parameters('adminUsername')))]"
+                  "script": "[base64(format('#!/bin/bash\nset -e\napt-get update -y || apt-get update -y\napt-get install -y ca-certificates curl gnupg\ninstall -m 0755 -d /etc/apt/keyrings\ncurl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg\nchmod a+r /etc/apt/keyrings/docker.gpg\necho \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | tee /etc/apt/sources.list.d/docker.list > /dev/null\napt-get update -y\napt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin\nsystemctl enable docker\nsystemctl start docker\nusermod -aG docker {0}\necho \"DOCKER_READY\" >> /var/log/cloudgrange-lab.log\n', parameters('adminUsername')))]"
                 }
               },
               "dependsOn": [
@@ -1349,7 +1349,7 @@
                 "typeHandlerVersion": "1.10",
                 "autoUpgradeMinorVersion": true,
                 "protectedSettings": {
-                  "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -Command \"$na = Get-NetAdapter | Where-Object {{$_.Status -eq ''Up''}} | Select-Object -First 1; if ($na -and ''{0}'' -ne '''') {{ Set-DnsClientServerAddress -InterfaceAlias $na.Name -ServerAddresses (''{1}'',''168.63.129.16'') -ErrorAction SilentlyContinue }}; Stop-Service dnscache -Force -ErrorAction SilentlyContinue; Start-Service dnscache -ErrorAction SilentlyContinue; Start-Sleep 10; ipconfig /flushdns | Out-Null; Set-ItemProperty -Path ''HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server'' -Name fDenyTSConnections -Value 0 -Force; Enable-NetFirewallRule -DisplayGroup ''Remote Desktop''; New-Item -ItemType Directory -Force -Path ''C:\\Users\\{2}\\Desktop'' | Out-Null; Set-Content -Path ''C:\\Users\\{3}\\Desktop\\CloudSmith-Lab.txt'' -Value (''CloudSmith Lab Environment'',''=========================='',''Domain   : cloudsmith.lab'',''NetBIOS  : CLOUDSMITH'',''Username : {4}'',''Password : {5}'','''',''SERVERS'',''-------'',''vm-jumpbox   10.10.0.4    Jump box (public IP: use RDP from internet)'',''vm-dc01      10.10.0.10   Primary Domain Controller - AD DS forest'',''vm-dc02      10.10.0.11   Secondary Domain Controller'',''vm-hv-c0-n00 10.10.1.10   Hyper-V Cluster 0 Node 0'',''vm-hv-c0-n01 10.10.1.11   Hyper-V Cluster 0 Node 1'',''vm-hv-c1-n00 10.10.2.10   Hyper-V Cluster 1 Node 0'',''vm-hv-c1-n01 10.10.2.11   Hyper-V Cluster 1 Node 1'',''vm-relay-01  {6}  CloudSmith Relay (Ubuntu 22.04 Docker CE)'','''',''ACCESS'',''------'',''From this jump box RDP/SSH to any server by private IP.'',''All Windows VMs: mstsc /v:<ip>  ->  {7} / {8}'',''Relay (SSH): ssh {9}@{10}'','''',''CLUSTER INFO'',''------------'',''Cluster 0 IP  : 10.10.1.5  (Windows Server Failover Cluster)'',''Cluster 1 IP  : 10.10.2.5  (Windows Server Failover Cluster)'')\"', parameters('dc1Ip'), parameters('dc1Ip'), parameters('adminUsername'), parameters('adminUsername'), parameters('adminUsername'), parameters('adminPassword'), parameters('relayIp'), parameters('adminUsername'), parameters('adminPassword'), parameters('adminUsername'), parameters('relayIp'))]"
+                  "commandToExecute": "[format('powershell -ExecutionPolicy Unrestricted -Command \"$na = Get-NetAdapter | Where-Object {{$_.Status -eq ''Up''}} | Select-Object -First 1; if ($na -and ''{0}'' -ne '''') {{ Set-DnsClientServerAddress -InterfaceAlias $na.Name -ServerAddresses (''{1}'',''168.63.129.16'') -ErrorAction SilentlyContinue }}; Stop-Service dnscache -Force -ErrorAction SilentlyContinue; Start-Service dnscache -ErrorAction SilentlyContinue; Start-Sleep 10; ipconfig /flushdns | Out-Null; Set-ItemProperty -Path ''HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server'' -Name fDenyTSConnections -Value 0 -Force; Enable-NetFirewallRule -DisplayGroup ''Remote Desktop''; New-Item -ItemType Directory -Force -Path ''C:\\Users\\{2}\\Desktop'' | Out-Null; Set-Content -Path ''C:\\Users\\{3}\\Desktop\\CloudGrange-Lab.txt'' -Value (''CloudGrange Lab Environment'',''=========================='',''Domain   : cloudgrange.lab'',''NetBIOS  : CLOUDGRANGE'',''Username : {4}'',''Password : {5}'','''',''SERVERS'',''-------'',''vm-jumpbox   10.10.0.4    Jump box (public IP: use RDP from internet)'',''vm-dc01      10.10.0.10   Primary Domain Controller - AD DS forest'',''vm-dc02      10.10.0.11   Secondary Domain Controller'',''vm-hv-c0-n00 10.10.1.10   Hyper-V Cluster 0 Node 0'',''vm-hv-c0-n01 10.10.1.11   Hyper-V Cluster 0 Node 1'',''vm-hv-c1-n00 10.10.2.10   Hyper-V Cluster 1 Node 0'',''vm-hv-c1-n01 10.10.2.11   Hyper-V Cluster 1 Node 1'',''vm-relay-01  {6}  CloudGrange Relay (Ubuntu 22.04 Docker CE)'','''',''ACCESS'',''------'',''From this jump box RDP/SSH to any server by private IP.'',''All Windows VMs: mstsc /v:<ip>  ->  {7} / {8}'',''Relay (SSH): ssh {9}@{10}'','''',''CLUSTER INFO'',''------------'',''Cluster 0 IP  : 10.10.1.5  (Windows Server Failover Cluster)'',''Cluster 1 IP  : 10.10.2.5  (Windows Server Failover Cluster)'')\"', parameters('dc1Ip'), parameters('dc1Ip'), parameters('adminUsername'), parameters('adminUsername'), parameters('adminUsername'), parameters('adminPassword'), parameters('relayIp'), parameters('adminUsername'), parameters('adminPassword'), parameters('adminUsername'), parameters('relayIp'))]"
                 }
               },
               "dependsOn": [

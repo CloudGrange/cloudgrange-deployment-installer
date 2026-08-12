@@ -1,6 +1,6 @@
-# Contributing to cloudsmith-installer
+# Contributing to cloudgrange-installer
 
-Thank you for your interest in contributing to CloudSmith. This project is licensed under [Apache 2.0](LICENSE) and uses the [Developer Certificate of Origin (DCO)](https://developercertificate.org/) instead of a CLA.
+Thank you for your interest in contributing to CloudGrange. This project is licensed under [Apache 2.0](LICENSE) and uses the [Developer Certificate of Origin (DCO)](https://developercertificate.org/) instead of a CLA.
 
 ## Developer Certificate of Origin
 
@@ -14,7 +14,7 @@ This adds `Signed-off-by: Your Name <email>` to your commit. The DCO check in CI
 
 ## Code of Conduct
 
-This project follows the [CloudSmith Code of Conduct](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1). Violations: conduct@cloudsmith.cloud.
+This project follows the [CloudGrange Code of Conduct](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1). Violations: conduct@cloudgrange.cloud.
 
 ## Getting started
 

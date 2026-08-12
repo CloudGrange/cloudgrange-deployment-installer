@@ -3,14 +3,14 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "location": { "value": "centralus" },
-    "workload": { "value": "cloudsmith" },
+    "workload": { "value": "cloudgrange" },
     "environment": { "value": "prod" },
     "instance": { "value": "001" },
 
     "commonTags": {
       "value": {
         "Environment": "prod",
-        "Workload": "cloudsmith",
+        "Workload": "cloudgrange",
         "CostCenter": "REPLACE-ME",
         "Owner": "REPLACE-ME@example.com",
         "BusinessUnit": "REPLACE-ME",
@@ -19,7 +19,7 @@
       }
     },
 
-    "postgresAdminUser": { "value": "cloudsmith" },
+    "postgresAdminUser": { "value": "cloudgrange" },
     "postgresAdminPassword": { "value": "REPLACE-ME-USE-KEY-VAULT-REFERENCE" },
 
     "postgresSkuName": {
@@ -95,11 +95,11 @@
 
     "masterKey": {
       "value": "REPLACE-ME-USE-KEY-VAULT-REFERENCE",
-      "_comment": "H1 security remediation. Generate with: [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) | ForEach-Object { [byte]$_ }). Supply via azd env set CLOUDSMITH_MASTER_KEY or environment variable — never commit a real value here."
+      "_comment": "H1 security remediation. Generate with: [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) | ForEach-Object { [byte]$_ }). Supply via azd env set CLOUDGRANGE_MASTER_KEY or environment variable — never commit a real value here."
     },
 
     "imageTag": {
-      "value": "${CLOUDSMITH_IMAGE_TAG}",
+      "value": "${CLOUDGRANGE_IMAGE_TAG}",
       "_comment": "Required. Never use 'latest' in stage or prod. CI must always pass an explicit semver tag or SHA digest. For dev first-time deploys use 'main'."
     },
 
@@ -137,7 +137,7 @@
     "keyVaultTags": { "value": {} },
     "postgresServerName": { "value": "" },
     "postgresServerTags": { "value": {} },
-    "postgresDatabaseName": { "value": "cloudsmith" },
+    "postgresDatabaseName": { "value": "cloudgrange" },
     "containerAppsEnvironmentName": { "value": "" },
     "containerAppsEnvironmentTags": { "value": {} },
     "apiAppName": { "value": "" },
@@ -156,6 +156,6 @@
     },
 
     "_deploymentManagedIdentityId_comment": "Method B (enterprise/CI-CD): uncomment deploymentManagedIdentityId and set to your pre-created deployment UAMI resource ID. Leave absent for Method A (interactive az login). See iac/README.md — Deployment Authentication.",
-    "_deploymentManagedIdentityId_example": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-your-platform/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-cloudsmith-deploy"
+    "_deploymentManagedIdentityId_example": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-your-platform/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-cloudgrange-deploy"
   }
 }

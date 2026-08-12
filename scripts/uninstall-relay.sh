@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# uninstall-relay.sh — Stop and remove the CloudSmith relay agent container.
+# uninstall-relay.sh — Stop and remove the CloudGrange relay agent container.
 #
 # Usage:
 #   bash uninstall-relay.sh
 #
 # One-liner:
-#   curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/uninstall-relay.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/uninstall-relay.sh | bash
 
 set -euo pipefail
 
-CONTAINER_NAME="cloudsmith-relay"
+CONTAINER_NAME="cloudgrange-relay"
 
 if ! command -v docker &>/dev/null; then
     echo "Error: Docker is not installed or not on PATH."
@@ -32,4 +32,4 @@ docker rm "${CONTAINER_NAME}"
 
 echo ""
 echo "Relay agent removed. The container image is still cached locally."
-echo "To also remove the image, run:  docker rmi ghcr.io/cloudsmith-cloud/cloudsmith-relay"
+echo "To also remove the image, run:  docker rmi ghcr.io/cloudgrange-cloud/cloudgrange-relay"

@@ -1,8 +1,8 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# uninstall-relay.ps1 — Stop and remove the CloudSmith relay agent container.
+# uninstall-relay.ps1 — Stop and remove the CloudGrange relay agent container.
 #
 # Usage:
 #   .\uninstall-relay.ps1
@@ -13,7 +13,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ContainerName = 'cloudsmith-relay'
+$ContainerName = 'cloudgrange-relay'
 
 $dockerExe = Get-Command docker -ErrorAction SilentlyContinue
 if (-not $dockerExe) {
@@ -35,4 +35,4 @@ docker rm $ContainerName
 
 Write-Host ""
 Write-Host "Relay agent removed. The container image is still cached locally."
-Write-Host "To also remove the image, run:  docker rmi ghcr.io/cloudsmith-cloud/cloudsmith-relay"
+Write-Host "To also remove the image, run:  docker rmi ghcr.io/cloudgrange-cloud/cloudgrange-relay"

@@ -1,7 +1,7 @@
-// Copyright 2026 CloudSmith Contributors
+// Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// CloudSmith PaaS (Model B) entry point — subscription-scoped.
+// CloudGrange PaaS (Model B) entry point — subscription-scoped.
 // Follows ADR-048 (Azure resource naming and tagging standard):
 //   - Default names: <type-abbr>-<workload>-<env>-<region>-<instance>
 //   - CAF mandatory tag set, applied via commonTags
@@ -30,7 +30,7 @@ param location string = 'eastus'
 @description('Workload identifier. Used in CAF-pattern names. Lowercase alphanumeric.')
 @minLength(2)
 @maxLength(12)
-param workload string = 'cloudsmith'
+param workload string = 'cloudgrange'
 
 @description('Environment. One of dev, test, stage, prod.')
 @allowed([ 'dev', 'test', 'stage', 'prod' ])
@@ -71,7 +71,7 @@ param portalImageTag string = ''
 
 // ---- PostgreSQL Flexible Server SKU + sizing (ADR-048 parameter surface) ----
 @description('PostgreSQL administrator login.')
-param postgresAdminUser string = 'cloudsmith'
+param postgresAdminUser string = 'cloudgrange'
 
 @secure()
 param postgresAdminPassword string
@@ -211,10 +211,10 @@ param ghcrToken string = ''
 
 // H1 security remediation — AES-256 master key for envelope encryption.
 // Passed @secure() so the value is never written to ARM deployment logs.
-// Stored in Key Vault (secret name: cloudsmith-master-key) at deploy time;
+// Stored in Key Vault (secret name: cloudgrange-master-key) at deploy time;
 // injected into ACA via KV secret reference — never a plaintext env var.
 @secure()
-@description('256-bit AES master key (base64-encoded). Must be supplied at deploy time via environment variable CLOUDSMITH_MASTER_KEY or azd env set. Written to Key Vault; ACA reads it via KV secret reference.')
+@description('256-bit AES master key (base64-encoded). Must be supplied at deploy time via environment variable CLOUDGRANGE_MASTER_KEY or azd env set. Written to Key Vault; ACA reads it via KV secret reference.')
 param masterKey string
 
 // AB#1600
@@ -275,7 +275,7 @@ param postgresServerName string = ''
 param postgresServerTags object = {}
 
 @description('Override PostgreSQL database name.')
-param postgresDatabaseName string = 'cloudsmith'
+param postgresDatabaseName string = 'cloudgrange'
 
 @description('Override Container Apps Environment name. Empty = CAF pattern.')
 param containerAppsEnvironmentName string = ''
@@ -422,7 +422,7 @@ resource defenderDatabases 'Microsoft.Security/pricings@2024-01-01' = if (enable
 // =============================================================================
 
 module resources 'resources.bicep' = {
-  name: 'cloudsmith-resources'
+  name: 'cloudgrange-resources'
   scope: rg
   params: {
     location: location
@@ -507,7 +507,7 @@ module resources 'resources.bicep' = {
 // =============================================================================
 
 module policyAssignments 'policy.bicep' = if (enablePolicyAssignments) {
-  name: 'cloudsmith-policy'
+  name: 'cloudgrange-policy'
   scope: rg
   params: {
     environment: environment
@@ -526,7 +526,7 @@ module policyAssignments 'policy.bicep' = if (enablePolicyAssignments) {
 // 2026-05-27 — operators frequently put a person name in Owner; Azure rejects
 // the budget create with "Notification cannot have invalid email addresses".
 var ownerLooksLikeEmail = contains(commonTags, 'Owner') && contains(string(commonTags.Owner), '@')
-var budgetContactEmail  = ownerLooksLikeEmail ? string(commonTags.Owner) : 'cloudsmith-alerts@example.com'
+var budgetContactEmail  = ownerLooksLikeEmail ? string(commonTags.Owner) : 'cloudgrange-alerts@example.com'
 
 // Budget startDate must be the first day of the current month for monthly time
 // grain — Azure rejects past start dates. Derive from deploymentTime.

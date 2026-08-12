@@ -1,11 +1,11 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 
 function Deploy-DockerCompose {
     [CmdletBinding()]
     param(
-        [string]$VmName  = 'cloudsmith-docker',
+        [string]$VmName  = 'cloudgrange-docker',
         [string]$VmIp    = '192.168.100.10',
         [string]$Version = 'latest',
         [bool]$UseWsl2   = $false,
@@ -19,7 +19,7 @@ function Deploy-DockerCompose {
         [string]$BundledImagesPath = ''
     )
 
-    $composeDir = '/opt/cloudsmith'
+    $composeDir = '/opt/cloudgrange'
     $composeSrc = Join-Path $PSScriptRoot '..\compose'
     # Generate a random DB password; never written to disk on the host.
     $dbPassword = [Convert]::ToBase64String((1..24 | ForEach-Object { [byte](Get-Random -Maximum 256) })) -replace '[^a-zA-Z0-9]','X'
@@ -31,7 +31,7 @@ function Deploy-DockerCompose {
     #   3. Probe portal at http://<host>/health (retry up to 30s).
     # AB#1852: In bundled mode, the image tar is scp'd to the guest and loaded via docker load.
     # The remote path where the tar will land (if applicable).
-    $remoteTarPath = '/opt/cloudsmith-images.tar'
+    $remoteTarPath = '/opt/cloudgrange-images.tar'
 
     $pullOrLoad = if (-not [string]::IsNullOrEmpty($BundledImagesPath)) {
         "docker load -i $remoteTarPath && rm -f $remoteTarPath"
@@ -43,8 +43,8 @@ function Deploy-DockerCompose {
 set -euo pipefail
 mkdir -p $composeDir
 export POSTGRES_PASSWORD="$dbPassword"
-export CLOUDSMITH_VERSION="$Version"
-export CLOUDSMITH_API_URL="http://$VmIp:8081"
+export CLOUDGRANGE_VERSION="$Version"
+export CLOUDGRANGE_API_URL="http://$VmIp:8081"
 cd $composeDir
 $pullOrLoad
 docker compose up -d
@@ -94,7 +94,7 @@ exit 0
     $deployBytes = [byte[]]($deployBytes | Where-Object { $_ -ne 13 })
 
     if ($UseWsl2) {
-        $wslPath = "/opt/cloudsmith"
+        $wslPath = "/opt/cloudgrange"
         wsl -d Ubuntu -u root -- mkdir -p $wslPath
         wsl -d Ubuntu -u root -- bash -c "cp /mnt/$(($composeSrc -replace '\\','/' -replace ':','').ToLower())/* $wslPath/"
 
@@ -107,10 +107,10 @@ exit 0
     } elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
         # SSH path — copy compose files then run deploy script.
         $sshOpts = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
-        $sshTarget = "cloudsmith@$VmIp"
+        $sshTarget = "cloudgrange@$VmIp"
 
         # Create the compose directory on the guest.
-        & ssh.exe @sshOpts $sshTarget "sudo mkdir -p $composeDir && sudo chown cloudsmith:cloudsmith $composeDir"
+        & ssh.exe @sshOpts $sshTarget "sudo mkdir -p $composeDir && sudo chown cloudgrange:cloudgrange $composeDir"
 
         # Copy each compose file via scp.
         $composeFiles = Get-ChildItem -Path $composeSrc -Recurse -File
@@ -156,7 +156,7 @@ exit 0
         }
     } else {
         if ($null -eq $Credential) {
-            $Credential = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+            $Credential = Get-Credential -UserName 'cloudgrange' -Message 'VM credential'
         }
         # Hyper-V PowerShell Direct — only for Windows guests or Linux guests with PowerShell.
         $session = New-PSSession -VMName $VmName -Credential $Credential
@@ -197,7 +197,7 @@ exit 0
     if (-not $portalOk) {
         Write-Host ""
         Write-Host "  [FAILURE] Portal is not reachable at https://$VmIp after 30 seconds." -ForegroundColor Red
-        Write-Host "  Check container logs with: docker compose -f /opt/cloudsmith/docker-compose.yml logs --tail=50" -ForegroundColor Yellow
+        Write-Host "  Check container logs with: docker compose -f /opt/cloudgrange/docker-compose.yml logs --tail=50" -ForegroundColor Yellow
         Write-Error "Deploy-DockerCompose: portal reachability check failed. See container logs for details."
     }
     Write-Host "  Portal is reachable at https://$VmIp" -ForegroundColor Green

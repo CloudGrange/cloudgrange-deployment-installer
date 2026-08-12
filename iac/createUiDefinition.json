@@ -11,7 +11,7 @@
           "password": "Administrator Password",
           "confirmPassword": "Confirm Password"
         },
-        "toolTip": "Password for the CloudSmith administrator account. Must be at least 12 characters and contain uppercase, lowercase, digit, and special character.",
+        "toolTip": "Password for the CloudGrange administrator account. Must be at least 12 characters and contain uppercase, lowercase, digit, and special character.",
         "constraints": {
           "required": true,
           "regex": "^(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{12,128}$",
@@ -25,15 +25,15 @@
     ],
     "steps": [
       {
-        "name": "cloudsmithSettings",
-        "label": "CloudSmith Settings",
+        "name": "cloudgrangeSettings",
+        "label": "CloudGrange Settings",
         "elements": [
           {
             "name": "environmentName",
             "type": "Microsoft.Common.DropDown",
             "label": "Environment",
             "defaultValue": "Development",
-            "toolTip": "The environment tier. Used as a prefix for Azure resource names (e.g. rg-cloudsmith-dev-eus-001).",
+            "toolTip": "The environment tier. Used as a prefix for Azure resource names (e.g. rg-cloudgrange-dev-eus-001).",
             "constraints": {
               "required": true,
               "allowedValues": [
@@ -50,7 +50,7 @@
             "type": "Microsoft.Common.TextBox",
             "label": "Container Image Tag",
             "defaultValue": "v1.0.0",
-            "toolTip": "The CloudSmith container image version to deploy. Use 'v1.0.0' for the latest stable release. Do not use 'latest' in production.",
+            "toolTip": "The CloudGrange container image version to deploy. Use 'v1.0.0' for the latest stable release. Do not use 'latest' in production.",
             "constraints": {
               "required": true,
               "regex": "^[A-Za-z0-9._/-]{1,128}$",
@@ -62,7 +62,7 @@
             "name": "postgresAdminUser",
             "type": "Microsoft.Common.TextBox",
             "label": "Database Administrator Username",
-            "defaultValue": "cloudsmith",
+            "defaultValue": "cloudgrange",
             "toolTip": "Username for the PostgreSQL administrator account.",
             "constraints": {
               "required": true,
@@ -101,13 +101,13 @@
     ],
     "outputs": {
       "location":              "[location()]",
-      "environment":           "[steps('cloudsmithSettings').environmentName]",
-      "imageTag":              "[steps('cloudsmithSettings').imageTag]",
-      "postgresAdminUser":     "[steps('cloudsmithSettings').postgresAdminUser]",
+      "environment":           "[steps('cloudgrangeSettings').environmentName]",
+      "imageTag":              "[steps('cloudgrangeSettings').imageTag]",
+      "postgresAdminUser":     "[steps('cloudgrangeSettings').postgresAdminUser]",
       "postgresAdminPassword": "[basics('adminPassword').password]",
       "masterKey":             "[concat(guid(), guid())]",
-      "costCenter":            "[steps('cloudsmithSettings').costCenter]",
-      "ownerEmail":            "[steps('cloudsmithSettings').ownerEmail]"
+      "costCenter":            "[steps('cloudgrangeSettings').costCenter]",
+      "ownerEmail":            "[steps('cloudgrangeSettings').ownerEmail]"
     }
   }
 }

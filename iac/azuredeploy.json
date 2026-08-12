@@ -2,7 +2,7 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "Deploys CloudSmith to Azure Container Apps. See https://github.com/cloudsmith-cloud/cloudsmith-installer for full documentation."
+    "description": "Deploys CloudGrange to Azure Container Apps. See https://github.com/cloudgrange-cloud/cloudgrange-installer for full documentation."
   },
   "parameters": {
     "location": {
@@ -24,12 +24,12 @@
       "type": "string",
       "defaultValue": "v1.0.0",
       "metadata": {
-        "description": "CloudSmith container image tag. Use v1.0.0 for the latest stable release."
+        "description": "CloudGrange container image tag. Use v1.0.0 for the latest stable release."
       }
     },
     "postgresAdminUser": {
       "type": "string",
-      "defaultValue": "cloudsmith",
+      "defaultValue": "cloudgrange",
       "metadata": {
         "description": "PostgreSQL administrator username."
       }
@@ -51,7 +51,7 @@
       "type": "string",
       "defaultValue": "admin",
       "metadata": {
-        "description": "CloudSmith portal administrator username."
+        "description": "CloudGrange portal administrator username."
       }
     },
     "costCenter": {
@@ -70,7 +70,7 @@
     }
   },
   "variables": {
-    "workload": "cloudsmith",
+    "workload": "cloudgrange",
     "instance": "001",
     "regionCodes": {
       "eastus":            "eus",
@@ -110,9 +110,9 @@
     "aceEnvName":   "[concat('cae-', variables('suffix'))]",
     "apiAppName":   "[concat('ca-', variables('workload'), '-api-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
     "portalAppName":"[concat('ca-', variables('workload'), '-portal-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
-    "apiImage":     "[concat('ghcr.io/cloudsmith-cloud/cloudsmith-api:', parameters('imageTag'))]",
-    "portalImage":  "[concat('ghcr.io/cloudsmith-cloud/cloudsmith-portal:', parameters('imageTag'))]",
-    "allTags": "[createObject('Environment', parameters('environment'), 'Workload', 'cloudsmith', 'CostCenter', parameters('costCenter'), 'Owner', parameters('ownerEmail'), 'BusinessUnit', parameters('costCenter'), 'DataClassification', 'Internal', 'Criticality', 'Low', 'ManagedBy', 'arm')]"
+    "apiImage":     "[concat('ghcr.io/cloudgrange-cloud/cloudgrange-api:', parameters('imageTag'))]",
+    "portalImage":  "[concat('ghcr.io/cloudgrange-cloud/cloudgrange-portal:', parameters('imageTag'))]",
+    "allTags": "[createObject('Environment', parameters('environment'), 'Workload', 'cloudgrange', 'CostCenter', parameters('costCenter'), 'Owner', parameters('ownerEmail'), 'BusinessUnit', parameters('costCenter'), 'DataClassification', 'Internal', 'Criticality', 'Low', 'ManagedBy', 'arm')]"
   },
   "resources": [
     {
@@ -186,7 +186,7 @@
     {
       "type": "Microsoft.KeyVault/vaults/secrets",
       "apiVersion": "2023-07-01",
-      "name": "[concat(variables('kvName'), '/cloudsmith-master-key')]",
+      "name": "[concat(variables('kvName'), '/cloudgrange-master-key')]",
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', variables('kvName'))]",
         "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), 'Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('miName'), 'KeyVaultSecretsOfficer'))]"
@@ -236,7 +236,7 @@
     {
       "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
       "apiVersion": "2023-06-01-preview",
-      "name": "[concat(variables('pgName'), '/cloudsmith')]",
+      "name": "[concat(variables('pgName'), '/cloudgrange')]",
       "dependsOn": [
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('pgName'))]"
       ],
@@ -292,7 +292,7 @@
         "[resourceId('Microsoft.App/managedEnvironments', variables('aceEnvName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]",
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('pgName'))]",
-        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'cloudsmith-master-key')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'cloudgrange-master-key')]",
         "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('kvName'), 'postgres-admin-password')]"
       ],
       "properties": {
@@ -301,8 +301,8 @@
           "activeRevisionsMode": "Single",
           "secrets": [
             {
-              "name": "cloudsmith-master-key",
-              "keyVaultUrl": "[concat(reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2023-07-01').vaultUri, 'secrets/cloudsmith-master-key')]",
+              "name": "cloudgrange-master-key",
+              "keyVaultUrl": "[concat(reference(resourceId('Microsoft.KeyVault/vaults', variables('kvName')), '2023-07-01').vaultUri, 'secrets/cloudgrange-master-key')]",
               "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('miName'))]"
             },
             {
@@ -327,11 +327,11 @@
                 "memory": "1Gi"
               },
               "env": [
-                { "name": "CLOUDSMITH_ENV",           "value": "[parameters('environment')]" },
-                { "name": "CLOUDSMITH_MASTER_KEY",    "secretRef": "cloudsmith-master-key" },
+                { "name": "CLOUDGRANGE_ENV",           "value": "[parameters('environment')]" },
+                { "name": "CLOUDGRANGE_MASTER_KEY",    "secretRef": "cloudgrange-master-key" },
                 { "name": "POSTGRES_HOST",            "value": "[concat(variables('pgName'), '.postgres.database.azure.com')]" },
                 { "name": "POSTGRES_PORT",            "value": "5432" },
-                { "name": "POSTGRES_DB",              "value": "cloudsmith" },
+                { "name": "POSTGRES_DB",              "value": "cloudgrange" },
                 { "name": "POSTGRES_USER",            "value": "[parameters('postgresAdminUser')]" },
                 { "name": "POSTGRES_PASSWORD",        "secretRef": "postgres-password" },
                 { "name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "value": "[reference(resourceId('Microsoft.Insights/components', variables('appiName')), '2020-02-02').ConnectionString]" },
@@ -403,8 +403,8 @@
                 "memory": "0.5Gi"
               },
               "env": [
-                { "name": "CLOUDSMITH_API_URL", "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').configuration.ingress.fqdn)]" },
-                { "name": "CLOUDSMITH_ENV",     "value": "[parameters('environment')]" }
+                { "name": "CLOUDGRANGE_API_URL", "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').configuration.ingress.fqdn)]" },
+                { "name": "CLOUDGRANGE_ENV",     "value": "[parameters('environment')]" }
               ],
               "probes": [
                 {
@@ -441,21 +441,21 @@
       "type": "string",
       "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('portalAppName')), '2024-03-01').configuration.ingress.fqdn)]",
       "metadata": {
-        "description": "URL of the CloudSmith portal. Open this in your browser to complete the first-run setup wizard."
+        "description": "URL of the CloudGrange portal. Open this in your browser to complete the first-run setup wizard."
       }
     },
     "apiUrl": {
       "type": "string",
       "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('apiAppName')), '2024-03-01').configuration.ingress.fqdn)]",
       "metadata": {
-        "description": "Base URL of the CloudSmith API."
+        "description": "Base URL of the CloudGrange API."
       }
     },
     "adminUsername": {
       "type": "string",
       "value": "[parameters('adminUsername')]",
       "metadata": {
-        "description": "CloudSmith administrator username. Use this with the password you supplied to sign in after the first-run wizard completes."
+        "description": "CloudGrange administrator username. Use this with the password you supplied to sign in after the first-run wizard completes."
       }
     }
   }

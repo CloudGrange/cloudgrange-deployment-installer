@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Remove-TestKvSecrets.ps1 — Delete all secrets whose names start with "test-" from kv-hcs-vault-01.
@@ -11,7 +11,7 @@
 #   -Force   Skip interactive confirmation and delete immediately.
 #
 # Audit log:
-#   Written to $env:TEMP\cloudsmith-kv-cleanup-<timestamp>.log
+#   Written to $env:TEMP\cloudgrange-kv-cleanup-<timestamp>.log
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 $VaultName  = 'kv-hcs-vault-01'
 $Prefix     = 'test-'
 $Timestamp  = Get-Date -Format 'yyyyMMdd-HHmmss'
-$LogPath    = Join-Path $env:TEMP "cloudsmith-kv-cleanup-$Timestamp.log"
+$LogPath    = Join-Path $env:TEMP "cloudgrange-kv-cleanup-$Timestamp.log"
 
 function Write-Log {
     param([string]$Message)

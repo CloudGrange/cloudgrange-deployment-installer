@@ -2,19 +2,19 @@
   "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "CloudSmith full test environment — deploys CloudSmith PaaS management platform AND a 2-node Hyper-V lab cluster with domain controller and relay in a single click."
+    "description": "CloudGrange full test environment — deploys CloudGrange PaaS management platform AND a 2-node Hyper-V lab cluster with domain controller and relay in a single click."
   },
   "parameters": {
     "adminPassword": {
       "type": "securestring",
       "metadata": {
-        "description": "Password for the Hyper-V lab VM admin account (cloudadmin) and the CloudSmith database. 12+ characters, must include uppercase, lowercase, digit, and special character."
+        "description": "Password for the Hyper-V lab VM admin account (cloudadmin) and the CloudGrange database. 12+ characters, must include uppercase, lowercase, digit, and special character."
       }
     },
     "masterKey": {
       "type": "securestring",
       "metadata": {
-        "description": "AES-256 master key for CloudSmith encryption. Base64-encoded 32 random bytes. PowerShell: [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))"
+        "description": "AES-256 master key for CloudGrange encryption. Base64-encoded 32 random bytes. PowerShell: [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))"
       }
     },
     "environment": {
@@ -34,12 +34,12 @@
     }
   },
   "variables": {
-    "labRgName": "[concat('rg-cloudsmith-lab-', parameters('environment'), '-cus-001')]",
+    "labRgName": "[concat('rg-cloudgrange-lab-', parameters('environment'), '-cus-001')]",
     "commonTags": {
       "Environment": "[parameters('environment')]",
-      "Workload": "cloudsmith",
+      "Workload": "cloudgrange",
       "CostCenter": "Engineering",
-      "Owner": "platform@cloudsmith.cloud",
+      "Owner": "platform@cloudgrange.cloud",
       "BusinessUnit": "Engineering",
       "DataClassification": "Internal",
       "Criticality": "Low"
@@ -56,12 +56,12 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
-      "name": "cloudsmith-paas",
+      "name": "cloudgrange-paas",
       "location": "[parameters('location')]",
       "properties": {
         "mode": "Incremental",
         "templateLink": {
-          "uri": "https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/azuredeploy.json"
+          "uri": "https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/azuredeploy.json"
         },
         "parameters": {
           "location":                   { "value": "[parameters('location')]" },
@@ -85,7 +85,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
-      "name": "cloudsmith-lab",
+      "name": "cloudgrange-lab",
       "resourceGroup": "[variables('labRgName')]",
       "dependsOn": [
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('labRgName'))]"
@@ -93,7 +93,7 @@
       "properties": {
         "mode": "Incremental",
         "templateLink": {
-          "uri": "https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/azuredeploy-lab.json"
+          "uri": "https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/azuredeploy-lab.json"
         },
         "parameters": {
           "adminPassword": { "value": "[parameters('adminPassword')]" }

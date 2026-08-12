@@ -1,26 +1,26 @@
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# CloudSmith installer prereq bootstrap.
+# CloudGrange installer prereq bootstrap.
 #
-# Goal: the operator runs Install-CloudSmith.ps1 on a clean Windows Server 2025
+# Goal: the operator runs Install-CloudGrange.ps1 on a clean Windows Server 2025
 # box and gets a working installation with no other downloads. We DO NOT require
 # Windows ADK, do not require a manual QEMU install, and do not assume the
 # operator has any developer tooling.
 #
-# This file is dot-sourced by Install-CloudSmith.ps1 and exposes:
-#   - Initialize-CloudSmithPrereqs: ensures qemu-img is available
+# This file is dot-sourced by Install-CloudGrange.ps1 and exposes:
+#   - Initialize-CloudGrangePrereqs: ensures qemu-img is available
 #   - New-CiDataIso: builds a NoCloud cloud-init seed ISO using IMAPI2 (built
 #     into Windows since Vista — no ADK / oscdimg required)
 
 Set-StrictMode -Version Latest
 
-function Initialize-CloudSmithPrereqs {
+function Initialize-CloudGrangePrereqs {
     <#
     .SYNOPSIS
         Verifies installer-side prerequisites and auto-installs the missing ones.
     .DESCRIPTION
-        PowerShell 7+ is enforced by the #requires directive in Install-CloudSmith.ps1.
+        PowerShell 7+ is enforced by the #requires directive in Install-CloudGrange.ps1.
         Hyper-V is checked in the main installer.
         This function handles the two prerequisites the installer needs at image-conversion
         and seed-ISO-build time:
@@ -35,13 +35,13 @@ function Initialize-CloudSmithPrereqs {
     # qemu-img is required to convert the Ubuntu cloud .img to a Hyper-V Gen2 .vhdx.
     if (-not (Get-Command qemu-img.exe -ErrorAction SilentlyContinue)) {
         Write-Host "  qemu-img not found - installing QEMU for Windows..."
-        Install-CloudSmithQemu
+        Install-CloudGrangeQemu
     } else {
         Write-Host "  qemu-img: available" -ForegroundColor Green
     }
 }
 
-function Install-CloudSmithQemu {
+function Install-CloudGrangeQemu {
     <#
     .SYNOPSIS
         Downloads and silently installs the latest QEMU for Windows build.
@@ -90,7 +90,7 @@ function Install-CloudSmithQemu {
     Write-Host "  qemu-img installed at $InstallDir" -ForegroundColor Green
 }
 
-function Clear-CloudSmithSparseAttribute {
+function Clear-CloudGrangeSparseAttribute {
     <#
     .SYNOPSIS
         Removes the NTFS Sparse attribute from a VHDX file so Hyper-V will mount it.

@@ -7,7 +7,7 @@ name: Fresh Deploy — PaaS Smoke
 #   vars:    AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, FRESH_DEPLOY_LOCATION (default centralus)
 #   secrets: AZURE_FEDERATED_CLIENT_ID (OIDC workload-identity federation for this repo)
 #
-# Reference: design/cicd/fresh-deploy-ci-gates.md (cloudsmith-internal)
+# Reference: design/cicd/fresh-deploy-ci-gates.md (cloudgrange-internal)
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ permissions:
 
 env:
   AZURE_LOCATION:     ${{ vars.FRESH_DEPLOY_LOCATION || 'centralus' }}
-  RG_NAME:            rg-cs-preflight-${{ inputs.suffix }}
+  RG_NAME:            rg-cg-preflight-${{ inputs.suffix }}
   DEPLOYMENT_NAME:    fresh-deploy-${{ github.run_id }}-${{ inputs.suffix }}
 
 jobs:
@@ -77,9 +77,9 @@ jobs:
               "commonTags": {
                 "value": {
                   "Environment":        "test",
-                  "Workload":           "cloudsmith",
+                  "Workload":           "cloudgrange",
                   "CostCenter":         "Preflight",
-                  "Owner":              "ci-preflight@cloudsmith.cloud",
+                  "Owner":              "ci-preflight@cloudgrange.cloud",
                   "BusinessUnit":       "Engineering",
                   "DataClassification": "Internal",
                   "Criticality":        "Low"
@@ -87,7 +87,7 @@ jobs:
               },
               "apiImageTag":            { "value": "${{ inputs.image_tag }}" },
               "portalImageTag":         { "value": "${{ inputs.image_tag }}" },
-              "postgresAdminUser":      { "value": "cloudsmith" },
+              "postgresAdminUser":      { "value": "cloudgrange" },
               "postgresAdminPassword":  { "value": "${{ steps.secrets.outputs.pg_pwd }}" },
               "masterKey":              { "value": "${{ steps.secrets.outputs.master_key }}" },
               "entraTenantId":          { "value": "" },
@@ -122,7 +122,7 @@ jobs:
           KV_NAME:         ${{ steps.deploy.outputs.kv_name }}
         run: |
           # Health probes + setup-status pre-wizard checks.
-          # The full unified suite lives in cloudsmith-tests (AB#2353) — until that
+          # The full unified suite lives in cloudgrange-tests (AB#2353) — until that
           # ships this gate runs the inline pre-setup smoke.
           set -e
           for url in "${BASE_API_URL}/health/ready" "${BASE_API_URL}/health/live" "${BASE_PORTAL_URL}/" "${BASE_PORTAL_URL}/login" "${BASE_PORTAL_URL}/setup"; do
@@ -135,7 +135,7 @@ jobs:
           if [ "$code" != "409" ]; then echo "::error::pre-setup gate broken (expected 409, got $code)"; exit 1; fi
           echo "  PASS pre-setup gate (clusters -> 409)"
           # Token retrievable from KV
-          if ! az keyvault secret show --vault-name "$KV_NAME" --name cloudsmith-initial-admin-token --query value -o tsv > /dev/null 2>&1; then
+          if ! az keyvault secret show --vault-name "$KV_NAME" --name cloudgrange-initial-admin-token --query value -o tsv > /dev/null 2>&1; then
             echo "::warning::initial admin token not yet in KV — bootstrap may still be starting"
           else
             echo "  PASS initial admin token retrievable from KV"

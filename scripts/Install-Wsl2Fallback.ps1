@@ -1,12 +1,12 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 # AB#1597 — WSL2 fallback deploy helper (not supported for production use)
 
 function Install-Wsl2Fallback {
     <#
     .SYNOPSIS
-        Configures WSL2 and deploys the CloudSmith Docker Compose stack inside the
+        Configures WSL2 and deploys the CloudGrange Docker Compose stack inside the
         WSL2 Ubuntu distribution.
 
     .DESCRIPTION
@@ -37,7 +37,7 @@ function Install-Wsl2Fallback {
     Write-Host "  ################################################################" -ForegroundColor Yellow
     Write-Host ""
 
-    # AB#1597 Step 1: Generate .wslconfig with memory/cpu limits for CloudSmith.
+    # AB#1597 Step 1: Generate .wslconfig with memory/cpu limits for CloudGrange.
     # These limits prevent the WSL2 VM from consuming the entire host's RAM during
     # image pulls or migrations.
     $wslConfig = @"
@@ -103,16 +103,16 @@ service docker start || true
     & wsl.exe -d $DistroName -u root -- service docker start 2>$null
     Write-Host "  Docker CE: available" -ForegroundColor Green
 
-    # Copy the compose stack into /opt/cloudsmith inside WSL2.
-    Write-Progress-Step "Deploying CloudSmith compose stack inside WSL2"
+    # Copy the compose stack into /opt/cloudgrange inside WSL2.
+    Write-Progress-Step "Deploying CloudGrange compose stack inside WSL2"
     $composeSrc = Join-Path $PSScriptRoot '..\compose'
     $composeSrcAbs = (Resolve-Path -LiteralPath $composeSrc).Path
     # Convert Windows path to WSL2 mount path (e.g., C:\foo -> /mnt/c/foo).
     $wslMountPath = '/mnt/' + ($composeSrcAbs -replace '\\','/' -replace '^([A-Za-z]):','$1').ToLower()
     $wslMountPath = $wslMountPath -replace '/+','/' # collapse double slashes
 
-    & wsl.exe -d $DistroName -u root -- mkdir -p /opt/cloudsmith
-    & wsl.exe -d $DistroName -u root -- bash -c "cp -r ${wslMountPath}/. /opt/cloudsmith/"
+    & wsl.exe -d $DistroName -u root -- mkdir -p /opt/cloudgrange
+    & wsl.exe -d $DistroName -u root -- bash -c "cp -r ${wslMountPath}/. /opt/cloudgrange/"
 
     # Generate a random DB password in memory only — never written to any host file.
     $dbPassword = [Convert]::ToBase64String(
@@ -122,8 +122,8 @@ service docker start || true
     $wslDeployScript = @"
 set -euo pipefail
 export DB_PASSWORD="$dbPassword"
-export CLOUDSMITH_VERSION="$Version"
-cd /opt/cloudsmith
+export CLOUDGRANGE_VERSION="$Version"
+cd /opt/cloudgrange
 docker compose pull
 docker compose up -d --remove-orphans
 
@@ -142,7 +142,7 @@ fi
 
     $wslDeployScript -replace "`r", '' | & wsl.exe -d $DistroName -u root -- bash -s
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "CloudSmith compose deploy inside WSL2 failed (exit $LASTEXITCODE)."
+        Write-Error "CloudGrange compose deploy inside WSL2 failed (exit $LASTEXITCODE)."
     }
 
     # AB#1597 Step 5: Verify portal is reachable at http://localhost.
@@ -158,7 +158,7 @@ fi
         Start-Sleep -Seconds 5
     }
     if (-not $portalOk) {
-        Write-Warning "Portal did not respond at http://localhost within 60s. Check WSL2 container logs with: wsl -d Ubuntu -u root -- docker compose -f /opt/cloudsmith/docker-compose.yml logs --tail=50"
+        Write-Warning "Portal did not respond at http://localhost within 60s. Check WSL2 container logs with: wsl -d Ubuntu -u root -- docker compose -f /opt/cloudgrange/docker-compose.yml logs --tail=50"
     } else {
         Write-Host "  Portal reachable at http://localhost" -ForegroundColor Green
     }

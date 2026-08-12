@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a new capability or improvement for CloudSmith
+about: Suggest a new capability or improvement for CloudGrange
 title: "[FEATURE] "
 labels: enhancement
 assignees: ''

@@ -1,13 +1,13 @@
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Azure Developer CLI (azd) manifest for CloudSmith MVP — Azure PaaS (Model B).
+# Azure Developer CLI (azd) manifest for CloudGrange MVP — Azure PaaS (Model B).
 # Per ADR-043 (azd + Bicep). Container images are prebuilt and published to
 # ghcr.io by each service repo's CI (ADR-046); azd provisions the infra and the
 # Container Apps reference those images directly.
 #
 # Usage:
-#   azd env new cloudsmith-mvp
+#   azd env new cloudgrange-mvp
 #   azd env set ENTRA_TENANT_ID <tenant-guid>
 #   azd env set ENTRA_CLIENT_ID <app-client-id>
 #   azd env set ENTRA_CLIENT_SECRET <secret> --secret
@@ -17,17 +17,17 @@
 #   azd env set GHCR_TOKEN <read-packages-pat> --secret
 #   azd provision
 
-name: cloudsmith-mvp
+name: cloudgrange-mvp
 metadata:
-  template: cloudsmith-mvp@0.1.0
+  template: cloudgrange-mvp@0.1.0
 
 infra:
   provider: bicep
   path: .
   module: main
 
-# Post-provision hook — runs FluentMigrator migrations via the cloudsmith-api container (AB#1605).
-# The API is designed to auto-migrate on startup (CoreKernelExtensions.MigrateCloudSmithDatabase);
+# Post-provision hook — runs FluentMigrator migrations via the cloudgrange-api container (AB#1605).
+# The API is designed to auto-migrate on startup (CoreKernelExtensions.MigrateCloudGrangeDatabase);
 # the hook restarts the API ACA revision so the migration runs in a known-fresh context
 # and then polls the /health/ready endpoint to confirm the API became healthy.
 # AB#1669 — added health-check poll (HIGH operational excellence finding from WAF-CAF assessment).
@@ -105,7 +105,7 @@ hooks:
       if [ -n "$PORTAL_URL" ]; then
         echo ""
         echo "============================================================"
-        echo "  CloudSmith is provisioned and ready for first-run setup."
+        echo "  CloudGrange is provisioned and ready for first-run setup."
         echo ""
         echo "  Open this URL to complete setup:"
         echo "  ${PORTAL_URL}/setup"

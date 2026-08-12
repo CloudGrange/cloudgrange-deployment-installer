@@ -1,13 +1,13 @@
 name: Fresh Deploy — On-Prem Compose Smoke
 # AB#2351 — manual gate: provision a throwaway Hyper-V host VM in the dev tenant,
-# run Install-CloudSmith.ps1 in Online mode, run the same unified smoke test, then
+# run Install-CloudGrange.ps1 in Online mode, run the same unified smoke test, then
 # delete the RG. Catches Compose/installer drift before release.
 #
 # Inputs come from GH org vars + secrets so nothing is hardcoded:
 #   vars:    AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, FRESH_DEPLOY_LOCATION
 #   secrets: AZURE_FEDERATED_CLIENT_ID
 #
-# Reference: design/cicd/fresh-deploy-ci-gates.md (cloudsmith-internal)
+# Reference: design/cicd/fresh-deploy-ci-gates.md (cloudgrange-internal)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ on:
         default: '2025-datacenter-azure-edition'
         type: string
       image_tag:
-        description: 'Cloudsmith image tag to install (defaults to main).'
+        description: 'CloudGrange image tag to install (defaults to main).'
         required: false
         default: 'main'
         type: string
@@ -43,7 +43,7 @@ permissions:
 
 env:
   AZURE_LOCATION:  ${{ vars.FRESH_DEPLOY_LOCATION || 'eastus2' }}
-  RG_NAME:         rg-cs-preflight-onprem-${{ inputs.suffix }}
+  RG_NAME:         rg-cg-preflight-onprem-${{ inputs.suffix }}
   VM_NAME:         cs-onprem-${{ inputs.suffix }}
 
 jobs:
@@ -61,7 +61,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Create RG
-        run: az group create --name "${RG_NAME}" --location "${AZURE_LOCATION}" --tags Workload=cloudsmith Environment=test CostCenter=Preflight Owner=ci-preflight@cloudsmith.cloud BusinessUnit=Engineering DataClassification=Internal Criticality=Low
+        run: az group create --name "${RG_NAME}" --location "${AZURE_LOCATION}" --tags Workload=cloudgrange Environment=test CostCenter=Preflight Owner=ci-preflight@cloudgrange.cloud BusinessUnit=Engineering DataClassification=Internal Criticality=Low
 
       - name: Generate VM admin password
         id: secrets
@@ -77,11 +77,11 @@ jobs:
             --name "${VM_NAME}" \
             --image "MicrosoftWindowsServer:WindowsServer:${{ inputs.windows_sku }}:latest" \
             --size "${{ inputs.vm_size }}" \
-            --admin-username cloudsmith \
+            --admin-username cloudgrange \
             --admin-password "${{ steps.secrets.outputs.admin_pwd }}" \
             --public-ip-address-allocation static \
             --nsg-rule SSH \
-            --tags Workload=cloudsmith Environment=test CostCenter=Preflight Owner=ci-preflight@cloudsmith.cloud BusinessUnit=Engineering DataClassification=Internal Criticality=Low
+            --tags Workload=cloudgrange Environment=test CostCenter=Preflight Owner=ci-preflight@cloudgrange.cloud BusinessUnit=Engineering DataClassification=Internal Criticality=Low
           az vm open-port --resource-group "${RG_NAME}" --name "${VM_NAME}" --port 443 --priority 1010
 
       - name: Disable VBS + install Hyper-V via DISM (Azure-Edition required)
@@ -94,12 +94,12 @@ jobs:
       - name: Wait for VM reboot
         run: sleep 120
 
-      - name: Run Install-CloudSmith.ps1 in Online mode
+      - name: Run Install-CloudGrange.ps1 in Online mode
         run: |
           az vm run-command invoke \
             --resource-group "${RG_NAME}" --name "${VM_NAME}" \
             --command-id RunPowerShellScript \
-            --scripts "Invoke-WebRequest -Uri 'https://github.com/cloudsmith-cloud/cloudsmith-installer/releases/latest/download/Install-CloudSmith.ps1' -OutFile C:\\Install-CloudSmith.ps1; pwsh -File C:\\Install-CloudSmith.ps1 -Mode Online -ImageTag '${{ inputs.image_tag }}' -NonInteractive"
+            --scripts "Invoke-WebRequest -Uri 'https://github.com/cloudgrange-cloud/cloudgrange-installer/releases/latest/download/Install-CloudGrange.ps1' -OutFile C:\\Install-CloudGrange.ps1; pwsh -File C:\\Install-CloudGrange.ps1 -Mode Online -ImageTag '${{ inputs.image_tag }}' -NonInteractive"
 
       - name: Run unified smoke test against the on-prem VM
         run: |

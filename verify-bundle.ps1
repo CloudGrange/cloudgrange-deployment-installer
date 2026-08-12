@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Verify the SHA-256 manifest of a CloudSmith bundled distribution ZIP (AB#1587).
+    Verify the SHA-256 manifest of a CloudGrange bundled distribution ZIP (AB#1587).
 
 .DESCRIPTION
     Reads SHA256SUMS from the bundle ZIP and verifies each contained file against
@@ -9,13 +9,13 @@
     file is missing or corrupted.
 
 .PARAMETER BundlePath
-    Path to the Install-CloudSmith-Bundled.zip file to verify.
+    Path to the Install-CloudGrange-Bundled.zip file to verify.
 
 .PARAMETER ExtractPath
     Optional directory to extract to. Defaults to a temp directory.
 
 .EXAMPLE
-    .\verify-bundle.ps1 -BundlePath .\Install-CloudSmith-Bundled.zip
+    .\verify-bundle.ps1 -BundlePath .\Install-CloudGrange-Bundled.zip
 #>
 [CmdletBinding()]
 param(
@@ -35,7 +35,7 @@ if (-not (Test-Path $BundlePath)) {
 # Work in a temp dir if no extract path given
 $ownTemp = $false
 if ([string]::IsNullOrEmpty($ExtractPath)) {
-    $ExtractPath = Join-Path $env:TEMP "cloudsmith-bundle-verify-$(Get-Random)"
+    $ExtractPath = Join-Path $env:TEMP "cloudgrange-bundle-verify-$(Get-Random)"
     $ownTemp = $true
 }
 
@@ -46,7 +46,7 @@ try {
 
     $manifestPath = Join-Path $ExtractPath 'SHA256SUMS'
     if (-not (Test-Path $manifestPath)) {
-        Write-Error "SHA256SUMS manifest not found in bundle. The bundle may be corrupted or was not created by the CloudSmith release workflow."
+        Write-Error "SHA256SUMS manifest not found in bundle. The bundle may be corrupted or was not created by the CloudGrange release workflow."
     }
 
     $manifest = Get-Content $manifestPath | Where-Object { $_ -match '\S' } | ForEach-Object {

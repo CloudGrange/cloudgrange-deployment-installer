@@ -1,6 +1,6 @@
 // installer-test-vm.bicep
 // Provisions a clean Hyper-V-capable Windows Server 2025 Azure Edition VM
-// for CloudSmith installer testing (Online / Bundled / Appliance modes).
+// for CloudGrange installer testing (Online / Bundled / Appliance modes).
 // Deploy: az deployment group create -g <rg> --template-file installer-test-vm.bicep --parameters @installer-test-vm.params.json
 
 @description('VM name')

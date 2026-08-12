@@ -1,4 +1,4 @@
-// Copyright 2026 CloudSmith Contributors
+// Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Azure Monitor metric alert rules module (AB#1668 — MEDIUM operational excellence finding).
@@ -83,7 +83,7 @@ resource alertApiAvailability 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   location: 'Global'
   tags: allTagsBase
   properties: {
-    description: 'CloudSmith API container app restarted more than 3 times in 15 minutes (crash loop).'
+    description: 'CloudGrange API container app restarted more than 3 times in 15 minutes (crash loop).'
     severity: 1
     enabled: true
     scopes: [ apiAppId ]
@@ -118,7 +118,7 @@ resource alertPortalAvailability 'Microsoft.Insights/metricAlerts@2018-03-01' = 
   location: 'Global'
   tags: allTagsBase
   properties: {
-    description: 'CloudSmith Portal container app restarted more than 3 times in 15 minutes (crash loop).'
+    description: 'CloudGrange Portal container app restarted more than 3 times in 15 minutes (crash loop).'
     severity: 2
     enabled: true
     scopes: [ portalAppId ]
@@ -153,7 +153,7 @@ resource alertPgCpu 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   location: 'Global'
   tags: allTagsBase
   properties: {
-    description: 'CloudSmith PostgreSQL CPU > 80% for 10 minutes.'
+    description: 'CloudGrange PostgreSQL CPU > 80% for 10 minutes.'
     severity: 2
     enabled: true
     scopes: [ pgServerId ]
@@ -188,7 +188,7 @@ resource alertPgStorage 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   location: 'Global'
   tags: allTagsBase
   properties: {
-    description: 'CloudSmith PostgreSQL storage > 80%.'
+    description: 'CloudGrange PostgreSQL storage > 80%.'
     severity: 1
     enabled: true
     scopes: [ pgServerId ]
@@ -223,7 +223,7 @@ resource alertKvThrottle 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   location: 'Global'
   tags: allTagsBase
   properties: {
-    description: 'CloudSmith Key Vault is receiving throttled requests (HTTP 429).'
+    description: 'CloudGrange Key Vault is receiving throttled requests (HTTP 429).'
     severity: 2
     enabled: true
     scopes: [ kvId ]

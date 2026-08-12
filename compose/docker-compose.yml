@@ -1,4 +1,4 @@
-# CloudSmith standalone six-container stack (ADR-029)
+# CloudGrange standalone six-container stack (ADR-029)
 # Six default services: api, portal, postgres, prometheus, loki, otel-collector
 # Optional profiles:
 #   --profile keycloak  — enable when using Keycloak as external IdP (ADR-047)
@@ -6,33 +6,33 @@
 #
 # Required environment variables (set in .env or export):
 #   POSTGRES_PASSWORD        — PostgreSQL superuser password
-#   CLOUDSMITH_API_URL       — Public URL of the API (e.g. https://cloudsmith.example.com)
+#   CLOUDGRANGE_API_URL       — Public URL of the API (e.g. https://cloudgrange.example.com)
 #
 # Optional environment variables:
-#   CLOUDSMITH_VERSION       — Container image tag (default: latest)
-#   CLOUDSMITH_DB_CONNECTION — Full connection string (overrides auto-generated from POSTGRES_* vars)
-#   CLOUDSMITH_OTLP_ENDPOINT — OTel collector gRPC endpoint (default: http://otel-collector:4317)
+#   CLOUDGRANGE_VERSION       — Container image tag (default: latest)
+#   CLOUDGRANGE_DB_CONNECTION — Full connection string (overrides auto-generated from POSTGRES_* vars)
+#   CLOUDGRANGE_OTLP_ENDPOINT — OTel collector gRPC endpoint (default: http://otel-collector:4317)
 #   KEYCLOAK_HOSTNAME        — Keycloak external hostname (keycloak profile only)
 #   KEYCLOAK_ADMIN_USER      — Keycloak admin username (keycloak profile only)
 #   KEYCLOAK_ADMIN_PASSWORD  — Keycloak admin password (keycloak profile only)
 #   RELAY_ENROLLMENT_TOKEN   — Enrollment token for relay (relay profile only)
 
-name: cloudsmith
+name: cloudgrange
 
 services:
-  cloudsmith-api:
-    image: ghcr.io/cloudsmith-cloud/cloudsmith-api:${CLOUDSMITH_VERSION:-latest}
+  cloudgrange-api:
+    image: ghcr.io/cloudgrange-cloud/cloudgrange-api:${CLOUDGRANGE_VERSION:-latest}
     restart: always
     ports:
       - "8081:8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__Default=${CLOUDSMITH_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudsmith};Username=${POSTGRES_USER:-cloudsmith};Password=${POSTGRES_PASSWORD}}
-      - OpenTelemetry__Endpoint=${CLOUDSMITH_OTLP_ENDPOINT:-http://otel-collector:4317}
+      - ConnectionStrings__Default=${CLOUDGRANGE_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudgrange};Username=${POSTGRES_USER:-cloudgrange};Password=${POSTGRES_PASSWORD}}
+      - OpenTelemetry__Endpoint=${CLOUDGRANGE_OTLP_ENDPOINT:-http://otel-collector:4317}
       # AB#2348 / BUG-4: default portal URL so the API health monitor can probe portal:80
       # over the internal Docker network. Without this, the probe logs "invalid request URI"
-      # every cycle. Override CLOUDSMITH_PORTAL_URL only if the portal runs out-of-stack.
-      - CLOUDSMITH_PORTAL_URL=${CLOUDSMITH_PORTAL_URL:-http://cloudsmith-portal:80}
+      # every cycle. Override CLOUDGRANGE_PORTAL_URL only if the portal runs out-of-stack.
+      - CLOUDGRANGE_PORTAL_URL=${CLOUDGRANGE_PORTAL_URL:-http://cloudgrange-portal:80}
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,22 +43,22 @@ services:
       retries: 5
       start_period: 30s
     networks:
-      - cloudsmith
+      - cloudgrange
 
-  cloudsmith-portal:
-    image: ghcr.io/cloudsmith-cloud/cloudsmith-portal:${CLOUDSMITH_VERSION:-latest}
+  cloudgrange-portal:
+    image: ghcr.io/cloudgrange-cloud/cloudgrange-portal:${CLOUDGRANGE_VERSION:-latest}
     restart: always
     # AB#1593: port 443 is now handled by the nginx TLS terminator.
     # Port 80 is internal only (not exposed on the host); nginx proxies to it.
     expose:
       - "80"
     environment:
-      - CLOUDSMITH_API_URL=${CLOUDSMITH_API_URL:-http://localhost:8081}
+      - CLOUDGRANGE_API_URL=${CLOUDGRANGE_API_URL:-http://localhost:8081}
     depends_on:
-      cloudsmith-api:
+      cloudgrange-api:
         condition: service_healthy
     networks:
-      - cloudsmith
+      - cloudgrange
 
   # AB#1593: nginx TLS terminator — terminates HTTPS on 443, proxies to portal on port 80.
   # Self-signed cert is generated at install time; mounted from the nginx_certs named volume.
@@ -73,27 +73,27 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx_certs:/etc/nginx/certs:ro
     depends_on:
-      - cloudsmith-portal
+      - cloudgrange-portal
     networks:
-      - cloudsmith
+      - cloudgrange
 
   postgres:
     image: postgres:16-alpine
     restart: always
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-cloudsmith}
-      - POSTGRES_USER=${POSTGRES_USER:-cloudsmith}
+      - POSTGRES_DB=${POSTGRES_DB:-cloudgrange}
+      - POSTGRES_USER=${POSTGRES_USER:-cloudgrange}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cloudsmith} -d ${POSTGRES_DB:-cloudsmith}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cloudgrange} -d ${POSTGRES_DB:-cloudgrange}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
     networks:
-      - cloudsmith
+      - cloudgrange
 
   prometheus:
     image: prom/prometheus:latest
@@ -106,7 +106,7 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
     networks:
-      - cloudsmith
+      - cloudgrange
 
   loki:
     image: grafana/loki:latest
@@ -116,7 +116,7 @@ services:
       - ./loki-config.yml:/etc/loki/local-config.yaml:ro
     command: -config.file=/etc/loki/local-config.yaml
     networks:
-      - cloudsmith
+      - cloudgrange
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
@@ -125,12 +125,12 @@ services:
       - ./otel-collector.yml:/etc/otel/config.yaml:ro
     command: ["--config=/etc/otel/config.yaml"]
     networks:
-      - cloudsmith
+      - cloudgrange
 
   # --- Optional: Keycloak (--profile keycloak) ---
   # AB#1592: Production-mode Keycloak using PostgreSQL backend.
   # Enable when using Keycloak as the external IdP. Not required for first-run setup;
-  # the CloudSmith first-run wizard can configure Keycloak as an IdP after initial setup.
+  # the CloudGrange first-run wizard can configure Keycloak as an IdP after initial setup.
   keycloak:
     profiles: ["keycloak"]
     image: quay.io/keycloak/keycloak:26.6
@@ -140,11 +140,11 @@ services:
     environment:
       # AB#1592: use PostgreSQL — not dev-file in-process DB.
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-cloudsmith}
-      KC_DB_USERNAME: ${POSTGRES_USER:-cloudsmith}
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-cloudgrange}
+      KC_DB_USERNAME: ${POSTGRES_USER:-cloudgrange}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
       # AB#1592: configurable hostname; defaults to localhost for standalone installs.
-      KC_HOSTNAME: ${CLOUDSMITH_HOSTNAME:-localhost}
+      KC_HOSTNAME: ${CLOUDGRANGE_HOSTNAME:-localhost}
       KC_HTTP_PORT: "8080"
       # KC_HTTP_ENABLED required in production mode when TLS termination is handled externally.
       KC_HTTP_ENABLED: "true"
@@ -152,7 +152,7 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
     volumes:
-      - ./keycloak/cloudsmith-realm.json:/opt/keycloak/data/import/cloudsmith-realm.json:ro
+      - ./keycloak/cloudgrange-realm.json:/opt/keycloak/data/import/cloudgrange-realm.json:ro
     ports:
       - "8080:8080"
     depends_on:
@@ -165,27 +165,27 @@ services:
       retries: 10
       start_period: 60s
     networks:
-      - cloudsmith
+      - cloudgrange
 
   # --- Optional: Local relay (--profile relay) ---
   # Enable when running a relay alongside the control plane on the same host.
   # Production deployments typically run the relay on each managed Hyper-V host.
-  cloudsmith-relay:
+  cloudgrange-relay:
     profiles: ["relay"]
-    image: ghcr.io/cloudsmith-cloud/cloudsmith-relay:${CLOUDSMITH_VERSION:-latest}
+    image: ghcr.io/cloudgrange-cloud/cloudgrange-relay:${CLOUDGRANGE_VERSION:-latest}
     restart: always
     ports:
       - "8443:8443"
     environment:
-      - RELAY_PAAS_URL=http://cloudsmith-api:8080
+      - RELAY_PAAS_URL=http://cloudgrange-api:8080
       - RELAY_ENROLLMENT_TOKEN=${RELAY_ENROLLMENT_TOKEN}
       - RELAY_DISPLAY_NAME=${RELAY_DISPLAY_NAME:-site-relay}
       - RELAY_CLUSTER_ID=${RELAY_CLUSTER_ID:-default}
       - RELAY_LISTEN_PORT=8443
-      - RELAY_IDENTITY_DIR=/var/lib/cloudsmith-relay/identity
+      - RELAY_IDENTITY_DIR=/var/lib/cloudgrange-relay/identity
       - Logging__LogLevel__Default=Information
     depends_on:
-      cloudsmith-api:
+      cloudgrange-api:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8443) 2>/dev/null || exit 1"]
@@ -194,7 +194,7 @@ services:
       retries: 5
       start_period: 20s
     networks:
-      - cloudsmith
+      - cloudgrange
 
 volumes:
   postgres_data:
@@ -205,5 +205,5 @@ volumes:
   nginx_certs:
 
 networks:
-  cloudsmith:
+  cloudgrange:
     driver: bridge

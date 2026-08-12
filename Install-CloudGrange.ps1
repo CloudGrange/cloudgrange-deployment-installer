@@ -1,6 +1,6 @@
 #Requires -RunAsAdministrator
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 # ADR-029: Standalone On-Premises Container Runtime (Hyper-V VM + Docker CE)
 
@@ -9,7 +9,7 @@ param(
     [ValidateSet('Online', 'Bundled', 'Appliance')]
     [string]$Mode = 'Online',
     [string]$VmIp = '192.168.100.10',
-    [string]$VhdxPath = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
+    [string]$VhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx',
     # AB#1585 — Proxy support. Format: http://host:port or http://user:pass@host:port
     # If omitted, reads $env:HTTPS_PROXY then $env:HTTP_PROXY.
     # Credentials are NEVER logged. No proxy credential is written to disk.
@@ -17,7 +17,7 @@ param(
     [string]$ProxyUser = '',
     [SecureString]$ProxyPassword,
     [string]$Version = 'latest',
-    # AB#1852: path to the cloudsmith bundle directory (extracted zip) for offline installs.
+    # AB#1852: path to the cloudgrange bundle directory (extracted zip) for offline installs.
     # When not specified and Mode=Bundled, the installer looks in $PSScriptRoot for bundle files.
     [string]$BundlePath = '',
     [switch]$AcceptDefaults,
@@ -27,8 +27,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. "$PSScriptRoot\scripts\CloudSmith-Common.ps1"
-. "$PSScriptRoot\scripts\CloudSmith-Prereqs.ps1"
+. "$PSScriptRoot\scripts\CloudGrange-Common.ps1"
+. "$PSScriptRoot\scripts\CloudGrange-Prereqs.ps1"
 
 # AB#1585 — Proxy resolution. Priority: -HttpProxy param > $env:HTTPS_PROXY > $env:HTTP_PROXY
 # Credentials are never logged — the installer never writes proxy credentials to any file.
@@ -47,20 +47,20 @@ if (-not [string]::IsNullOrEmpty($HttpProxy)) {
     }
 }
 
-function Invoke-CloudSmithInstall {
-    Write-Host "`n  CloudSmith Installer — Mode: $Mode" -ForegroundColor Cyan
+function Invoke-CloudGrangeInstall {
+    Write-Host "`n  CloudGrange Installer — Mode: $Mode" -ForegroundColor Cyan
     Write-Host "  ─────────────────────────────────────" -ForegroundColor DarkGray
 
     # Step 1: Mandatory package integrity self-check (AB#1598)
     # The .sha256 file MUST be present alongside the installer before any host changes are made.
     # This prevents tampered or partially-downloaded installers from mutating the host.
-    $checksumFile = Join-Path $PSScriptRoot 'cloudsmith-installer.sha256'
+    $checksumFile = Join-Path $PSScriptRoot 'cloudgrange-installer.sha256'
     Write-Progress-Step "Verifying installer package integrity"
     if (-not (Test-Path $checksumFile)) {
         Write-Host ""
         Write-Host "  [ERROR] Package integrity check failed. Do not proceed." -ForegroundColor Red
-        Write-Host "  The file 'cloudsmith-installer.sha256' was not found alongside Install-CloudSmith.ps1." -ForegroundColor Red
-        Write-Host "  Re-download the complete CloudSmith installer package from the release page." -ForegroundColor Yellow
+        Write-Host "  The file 'cloudgrange-installer.sha256' was not found alongside Install-CloudGrange.ps1." -ForegroundColor Red
+        Write-Host "  Re-download the complete CloudGrange installer package from the release page." -ForegroundColor Yellow
         Write-Error "[ERROR] Package integrity check failed. Do not proceed."
     }
     $expected = (Get-Content $checksumFile -Raw).Trim().Split()[0]
@@ -88,12 +88,12 @@ function Invoke-CloudSmithInstall {
         $hvAvailable = ($hvFeature -and $hvFeature.State -eq 'Enabled')
     }
     if (-not $hvAvailable) {
-        Write-Host "  CS-INST-ERR-001: Hyper-V is not installed on this host." -ForegroundColor Red
+        Write-Host "  CG-INST-ERR-001: Hyper-V is not installed on this host." -ForegroundColor Red
         Write-Host "  To enable Hyper-V on Windows Server, run:"
         Write-Host "    Install-WindowsFeature -Name Hyper-V -IncludeManagementTools -Restart" -ForegroundColor Yellow
         Write-Host "  To enable Hyper-V on Windows 10/11:"
         Write-Host "    Enable-WindowsOptionalFeature -FeatureName Microsoft-Hyper-V-All -Online -Restart" -ForegroundColor Yellow
-        Write-Error "CS-INST-ERR-001: Hyper-V is required. Install Hyper-V and re-run the installer."
+        Write-Error "CG-INST-ERR-001: Hyper-V is required. Install Hyper-V and re-run the installer."
     }
     Write-Host "  Hyper-V: available" -ForegroundColor Green
     $useWsl2 = $false
@@ -127,10 +127,10 @@ function Invoke-CloudSmithInstall {
         }
 
         if (-not $nestedVirtEnabled) {
-            Write-Host "  CS-INST-ERR-002: This host is a virtual machine but nested virtualization is not enabled." -ForegroundColor Red
+            Write-Host "  CG-INST-ERR-002: This host is a virtual machine but nested virtualization is not enabled." -ForegroundColor Red
             Write-Host "  On Hyper-V: run on the parent host: Set-VMProcessor -VMName '<vm-name>' -ExposeVirtualizationExtensions `$true" -ForegroundColor Yellow
             Write-Host "  On Azure: use a VM size that supports nested virtualization (Standard_D_v3 / Standard_E_v3 family or later)." -ForegroundColor Yellow
-            Write-Error "CS-INST-ERR-002: Nested virtualization is required when running inside a VM. Enable nested virtualization and re-run."
+            Write-Error "CG-INST-ERR-002: Nested virtualization is required when running inside a VM. Enable nested virtualization and re-run."
         }
         Write-Host "  Nested virtualization: enabled" -ForegroundColor Green
     } else {
@@ -155,13 +155,13 @@ function Invoke-CloudSmithInstall {
 
     if (-not $useWsl2) {
         Write-Progress-Step "Bootstrapping installer prerequisites (qemu-img, ISO writer)"
-        Initialize-CloudSmithPrereqs
+        Initialize-CloudGrangePrereqs
 
         # Generate an ephemeral SSH key pair for this install session.
         # The private key is written to a temp file (mode 600) and deleted after install.
         # The public key is embedded in the VM's cloud-init authorized_keys.
         # Neither key is ever logged, committed, or persisted beyond this install run.
-        $sshKeyDir  = Join-Path $env:TEMP 'cloudsmith-install-key'
+        $sshKeyDir  = Join-Path $env:TEMP 'cloudgrange-install-key'
         New-Item -ItemType Directory -Path $sshKeyDir -Force | Out-Null
         $sshKeyPath = Join-Path $sshKeyDir 'installer_ed25519'
         if (Test-Path $sshKeyPath) { Remove-Item $sshKeyPath, "$sshKeyPath.pub" -Force }
@@ -173,7 +173,7 @@ function Invoke-CloudSmithInstall {
         # directly via CreateProcess, bypassing PowerShell's marshaling entirely.
         $sshKeygenExe = (Get-Command ssh-keygen.exe -ErrorAction Stop).Source
         $psi = New-Object System.Diagnostics.ProcessStartInfo($sshKeygenExe)
-        @('-t', 'ed25519', '-f', $sshKeyPath, '-N', '', '-C', 'cloudsmith-installer-ephemeral', '-q') |
+        @('-t', 'ed25519', '-f', $sshKeyPath, '-N', '', '-C', 'cloudgrange-installer-ephemeral', '-q') |
             ForEach-Object { $psi.ArgumentList.Add($_) }
         $psi.UseShellExecute = $false
         $keygen = [System.Diagnostics.Process]::Start($psi)
@@ -193,18 +193,18 @@ function Invoke-CloudSmithInstall {
             $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
             $bundledUbuntuPath = Join-Path $bundleRoot 'ubuntu-24.04-cloudimg.img'
         }
-        # New-CloudSmithVm.ps1 uses Hyper-V cmdlets that require Windows PowerShell (PS5.1).
+        # New-CloudGrangeVm.ps1 uses Hyper-V cmdlets that require Windows PowerShell (PS5.1).
         # Invoke via powershell.exe so the Hyper-V module loads correctly while the main
         # installer continues to run under PS7.
         & powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass `
-            -File "$PSScriptRoot\scripts\New-CloudSmithVm.ps1" `
+            -File "$PSScriptRoot\scripts\New-CloudGrangeVm.ps1" `
             -VmIp $VmIp `
             -VhdxPath $VhdxPath `
             -Mode $Mode `
             -SshPublicKeyFile "$sshKeyPath.pub" `
             -BundledImagePath $bundledUbuntuPath
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "CS-INST-ERR-010: VM provisioning failed (exit $LASTEXITCODE). Check Hyper-V event log for details."
+            Write-Error "CG-INST-ERR-010: VM provisioning failed (exit $LASTEXITCODE). Check Hyper-V event log for details."
         }
     } else {
         Write-Progress-Step "Configuring WSL2 environment"
@@ -225,7 +225,7 @@ function Invoke-CloudSmithInstall {
     }
     Write-Progress-Step "Installing Docker CE"
     . "$PSScriptRoot\scripts\Install-DockerCe.ps1"
-    $dockerCeArgs = @{ VmName = 'cloudsmith-docker'; UseWsl2 = $useWsl2; VmIp = $VmIp }
+    $dockerCeArgs = @{ VmName = 'cloudgrange-docker'; UseWsl2 = $useWsl2; VmIp = $VmIp }
     if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
         $dockerCeArgs['SshKeyPath'] = $sshKeyPath
     } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
@@ -234,9 +234,9 @@ function Invoke-CloudSmithInstall {
     Install-DockerCe @dockerCeArgs @proxyArgs
 
     # Step 6: Deploy Docker Compose stack
-    Write-Progress-Step "Deploying CloudSmith stack (6 containers)"
+    Write-Progress-Step "Deploying CloudGrange stack (6 containers)"
     . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
-    $composeArgs = @{ VmName = 'cloudsmith-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+    $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
     if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
         $composeArgs['SshKeyPath'] = $sshKeyPath
     } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
@@ -245,7 +245,7 @@ function Invoke-CloudSmithInstall {
     # AB#1852: in Bundled mode, pass the pre-saved images tar path
     if ($Mode -eq 'Bundled') {
         $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
-        $bundledImageTar = Join-Path $bundleRoot 'cloudsmith-images.tar'
+        $bundledImageTar = Join-Path $bundleRoot 'cloudgrange-images.tar'
         if (Test-Path $bundledImageTar) {
             $composeArgs['BundledImagesPath'] = $bundledImageTar
         } else {
@@ -258,19 +258,19 @@ function Invoke-CloudSmithInstall {
     # AB#1593: nginx terminates TLS on 443 and proxies to portal on 80 (internal).
     # The API is directly on port 8081 (not routed through nginx).
     # Portal URL uses HTTPS via nginx; API health check uses the direct API port.
-    Write-Progress-Step "Waiting for CloudSmith API to become healthy"
+    Write-Progress-Step "Waiting for CloudGrange API to become healthy"
     $apiHealthBase = "http://$VmIp:8081"
     $portalBase    = "https://$VmIp"
     $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/health/ready" -TimeoutSeconds 600
     if (-not $healthOk) {
-        # CS-INST-ERR-030: API did not become healthy within 10 minutes
+        # CG-INST-ERR-030: API did not become healthy within 10 minutes
         try {
             $lastResp = Invoke-WebRequest -Uri "$apiHealthBase/health/ready" -SkipCertificateCheck -TimeoutSec 5 -ErrorAction SilentlyContinue
             $lastStatus = $lastResp.StatusCode
         } catch {
             $lastStatus = 'unreachable'
         }
-        Write-Error "CS-INST-ERR-030: CloudSmith did not start within 10 minutes. Last health status: $lastStatus"
+        Write-Error "CG-INST-ERR-030: CloudGrange did not start within 10 minutes. Last health status: $lastStatus"
     }
     Write-Host "  API health: OK" -ForegroundColor Green
 
@@ -290,7 +290,7 @@ function Invoke-CloudSmithInstall {
     }
 
     Write-Host ""
-    Write-Host "  CloudSmith installed successfully!" -ForegroundColor Green
+    Write-Host "  CloudGrange installed successfully!" -ForegroundColor Green
     Write-Host "  Portal: $portalBase" -ForegroundColor Cyan
     Write-Host "  Note: The portal uses a self-signed certificate. Your browser will show a security warning." -ForegroundColor Yellow
     Write-Host "        Replace /etc/nginx/certs/ in the nginx_certs volume with a CA-signed cert for production." -ForegroundColor Gray
@@ -304,4 +304,4 @@ function Invoke-CloudSmithInstall {
     Write-Host ""
 }
 
-Invoke-CloudSmithInstall
+Invoke-CloudGrangeInstall

@@ -1,19 +1,19 @@
-# cloudsmith-installer
+# cloudgrange-installer
 
-CloudSmith installer — Hyper-V Ubuntu VM + Docker Compose stack provisioning (Online / Bundled / Appliance modes), plus one-click Azure PaaS deployment.
+CloudGrange installer — Hyper-V Ubuntu VM + Docker Compose stack provisioning (Online / Bundled / Appliance modes), plus one-click Azure PaaS deployment.
 
 ## Deploy to Azure (PaaS — fastest path)
 
-Click the button below to deploy CloudSmith to Azure Container Apps in your subscription. A friendly wizard guides you through the required settings — no ARM template knowledge needed.
+Click the button below to deploy CloudGrange to Azure Container Apps in your subscription. A friendly wizard guides you through the required settings — no ARM template knowledge needed.
 
-[![Deploy to Azure](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazure.svg?sanitize=true)](https://portal.azure.com/#blade/Microsoft_Azure_CreateUIDef/CustomDeploymentBlade/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudsmith-cloud%2Fcloudsmith-installer%2Fmain%2Fiac%2Fazuredeploy.json/uiFormDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudsmith-cloud%2Fcloudsmith-installer%2Fmain%2Fiac%2FcreateUiDefinition.json)
+[![Deploy to Azure](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazure.svg?sanitize=true)](https://portal.azure.com/#blade/Microsoft_Azure_CreateUIDef/CustomDeploymentBlade/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgrange-cloud%2Fcloudgrange-installer%2Fmain%2Fiac%2Fazuredeploy.json/uiFormDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgrange-cloud%2Fcloudgrange-installer%2Fmain%2Fiac%2FcreateUiDefinition.json)
 
 ### What the wizard asks for
 
 | Step | Fields |
 |---|---|
 | **Basics** (Azure standard) | Subscription, Resource Group (new or existing), Region |
-| **CloudSmith Settings** | Administrator Password, Environment (dev/test/stage/prod), Container Image Tag, Database Admin Username, Cost Center, Owner Email |
+| **CloudGrange Settings** | Administrator Password, Environment (dev/test/stage/prod), Container Image Tag, Database Admin Username, Cost Center, Owner Email |
 | **Review + Create** | Summary of resources to be created |
 
 ### What gets deployed (approx. 15–20 minutes)
@@ -24,10 +24,10 @@ Click the button below to deploy CloudSmith to Azure Container Apps in your subs
 | Application Insights | API traces and metrics |
 | User-Assigned Managed Identity | Workload identity for Key Vault and PostgreSQL access |
 | Key Vault | Stores the master encryption key and database password |
-| PostgreSQL Flexible Server (B1ms) | `cloudsmith` database |
+| PostgreSQL Flexible Server (B1ms) | `cloudgrange` database |
 | Container Apps Environment | Hosts the API and portal |
-| CloudSmith API Container App | REST API, external HTTPS ingress |
-| CloudSmith Portal Container App | Web portal, external HTTPS ingress |
+| CloudGrange API Container App | REST API, external HTTPS ingress |
+| CloudGrange Portal Container App | Web portal, external HTTPS ingress |
 
 ### After deployment
 
@@ -60,42 +60,42 @@ Three modes — choose based on your environment:
 
 ```powershell
 # Online mode (downloads images at install time)
-.\Install-CloudSmith.ps1 -Mode Online
+.\Install-CloudGrange.ps1 -Mode Online
 
 # Bundled mode (uses a local bundle directory)
-.\Install-CloudSmith.ps1 -Mode Bundled -BundlePath D:\cloudsmith-bundle
+.\Install-CloudGrange.ps1 -Mode Bundled -BundlePath D:\cloudgrange-bundle
 
 # Appliance mode (imports a pre-built VHDX)
-.\Install-CloudSmith.ps1 -Mode Appliance -VhdxPath D:\cloudsmith-appliance.vhdx
+.\Install-CloudGrange.ps1 -Mode Appliance -VhdxPath D:\cloudgrange-appliance.vhdx
 ```
 
 ### Update and uninstall
 
 ```powershell
 # Pull latest images and restart
-.\Update-CloudSmith.ps1
+.\Update-CloudGrange.ps1
 
 # Stop containers, remove VM and VHDX, clean up
-.\Uninstall-CloudSmith.ps1
+.\Uninstall-CloudGrange.ps1
 ```
 
 ---
 
 ## Relay agent
 
-The CloudSmith relay agent runs as a Docker container on any Linux or Windows host and connects your on-premises infrastructure to the CloudSmith portal.
+The CloudGrange relay agent runs as a Docker container on any Linux or Windows host and connects your on-premises infrastructure to the CloudGrange portal.
 
 ### Linux (one-liner)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/install-relay.sh \
+curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/install-relay.sh \
   | bash -s -- --api-url <URL> --api-key <KEY> --site-id <SITE-ID>
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/install-relay.ps1 `
+irm https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/install-relay.ps1 `
   | iex  # then supply parameters interactively, or:
 
 .\scripts\install-relay.ps1 -ApiUrl <URL> -ApiKey <KEY> -SiteId <SITE-ID>
@@ -105,7 +105,7 @@ irm https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main
 
 | Parameter | Description |
 |---|---|
-| `--api-url` / `-ApiUrl` | CloudSmith API base URL (from the portal Settings page) |
+| `--api-url` / `-ApiUrl` | CloudGrange API base URL (from the portal Settings page) |
 | `--api-key` / `-ApiKey` | Site API key (from the portal Settings page) |
 | `--site-id` / `-SiteId` | Site identifier shown in the portal |
 | `--version` / `-Version` | Container image tag (optional — defaults to latest release) |
@@ -114,7 +114,7 @@ irm https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main
 
 ```bash
 # Linux
-curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/uninstall-relay.sh | bash
+curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/uninstall-relay.sh | bash
 
 # Windows
 .\scripts\uninstall-relay.ps1
@@ -128,9 +128,9 @@ For CI/CD pipelines or operators who prefer the Azure Developer CLI:
 
 ```bash
 az login
-azd env new cloudsmith-prod
+azd env new cloudgrange-prod
 azd env set POSTGRES_ADMIN_PASSWORD <password> --secret
-azd env set CLOUDSMITH_MASTER_KEY   <base64-aes256-key> --secret
+azd env set CLOUDGRANGE_MASTER_KEY   <base64-aes256-key> --secret
 azd provision
 ```
 
@@ -141,12 +141,12 @@ See [iac/README.md](iac/README.md) for full parameter reference, bring-your-own 
 ## Repository structure
 
 ```
-cloudsmith-installer/
-├── Install-CloudSmith.ps1      — main entry point (mode selector)
-├── Update-CloudSmith.ps1       — pull images, rolling restart, run migrations
-├── Uninstall-CloudSmith.ps1    — stop containers, delete VM/VHDX, cleanup
+cloudgrange-installer/
+├── Install-CloudGrange.ps1      — main entry point (mode selector)
+├── Update-CloudGrange.ps1       — pull images, rolling restart, run migrations
+├── Uninstall-CloudGrange.ps1    — stop containers, delete VM/VHDX, cleanup
 ├── modules/
-│   ├── New-CloudSmithVM.ps1    — Hyper-V VM provisioning
+│   ├── New-CloudGrangeVM.ps1    — Hyper-V VM provisioning
 │   ├── Install-DockerCe.ps1    — Docker CE install inside VM
 │   ├── Install-Appliance.ps1   — VHDX import + start (appliance mode)
 │   └── Install-WSL2.ps1        — WSL2 fallback path

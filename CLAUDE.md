@@ -1,4 +1,4 @@
-# cloudsmith-installer — Claude Code
+# cloudgrange-installer — Claude Code
 
 @AGENTS.md
 

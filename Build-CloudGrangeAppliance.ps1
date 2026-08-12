@@ -1,31 +1,31 @@
 #Requires -RunAsAdministrator
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
-# AB#1858 — Export the cloudsmith-docker nested VM as a signed appliance VHDX.
+# AB#1858 — Export the cloudgrange-docker nested VM as a signed appliance VHDX.
 #
 # Run this on the Hyper-V host AFTER a successful 'Online' mode install has completed.
-# The nested VM (cloudsmith-docker) is exported, signed with cosign, and a manifest
+# The nested VM (cloudgrange-docker) is exported, signed with cosign, and a manifest
 # written alongside it — ready to attach to a GitHub Release.
 #
 # Usage:
-#   Build-CloudSmithAppliance.ps1 -OutputPath C:\CloudSmithAppliance [-Version 1.0.0-preview1] [-CosignKeyPath .\cosign.key]
+#   Build-CloudGrangeAppliance.ps1 -OutputPath C:\CloudGrangeAppliance [-Version 1.0.0-preview1] [-CosignKeyPath .\cosign.key]
 #
 # Prerequisites:
-#   - Hyper-V with cloudsmith-docker VM in Saved or Off state
+#   - Hyper-V with cloudgrange-docker VM in Saved or Off state
 #   - cosign installed (https://docs.sigstore.dev/cosign/system_config/installation/)
 #     OR set -SkipSigning to produce an unsigned appliance (dev/test only)
 
 [CmdletBinding()]
 param(
     # Output directory for the VHDX, SHA-256 manifest, and cosign signature.
-    [string]$OutputPath = 'C:\CloudSmithAppliance',
+    [string]$OutputPath = 'C:\CloudGrangeAppliance',
 
     # Appliance version — baked into the filename and manifest.
     [string]$Version = 'latest',
 
     # Name of the nested Hyper-V VM to export.
-    [string]$VmName = 'cloudsmith-docker',
+    [string]$VmName = 'cloudgrange-docker',
 
     # Path to the cosign private key (.key file).
     # If omitted, cosign keyless signing is attempted.
@@ -33,19 +33,19 @@ param(
     [string]$CosignKeyPath = '',
 
     # Skip cosign signing — produces an unsigned appliance.
-    # Import-CloudSmithAppliance.ps1 will require -AllowUnsigned to import it.
+    # Import-CloudGrangeAppliance.ps1 will require -AllowUnsigned to import it.
     [switch]$SkipSigning
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. "$PSScriptRoot\scripts\CloudSmith-Common.ps1"
+. "$PSScriptRoot\scripts\CloudGrange-Common.ps1"
 
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
 
-$vhdxName     = "cloudsmith-appliance-$Version.vhdx"
+$vhdxName     = "cloudgrange-appliance-$Version.vhdx"
 $vhdxPath     = Join-Path $OutputPath $vhdxName
 $sha256Path   = "$vhdxPath.sha256"
 $sigPath      = "$vhdxPath.sig"
@@ -106,7 +106,7 @@ Write-Progress-Step "Signing appliance VHDX with cosign"
 
 if ($SkipSigning) {
     Write-Host "  [WARNING] -SkipSigning specified — no signature will be created." -ForegroundColor Yellow
-    Write-Host "  Import-CloudSmithAppliance.ps1 will require -AllowUnsigned to import this appliance." -ForegroundColor Yellow
+    Write-Host "  Import-CloudGrangeAppliance.ps1 will require -AllowUnsigned to import this appliance." -ForegroundColor Yellow
 } else {
     $cosignAvailable = [bool](Get-Command cosign -ErrorAction SilentlyContinue)
     if (-not $cosignAvailable) {
@@ -132,7 +132,7 @@ if ($SkipSigning) {
 # Step 5: Output manifest
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "  CloudSmith appliance built successfully." -ForegroundColor Green
+Write-Host "  CloudGrange appliance built successfully." -ForegroundColor Green
 Write-Host "  VHDX:      $vhdxPath" -ForegroundColor Cyan
 Write-Host "  SHA-256:   $sha256Path" -ForegroundColor Gray
 if (-not $SkipSigning) {

@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# install-relay.sh — Install the CloudSmith relay agent on a Linux Docker host.
+# install-relay.sh — Install the CloudGrange relay agent on a Linux Docker host.
 #
 # Usage:
 #   bash install-relay.sh --api-url <URL> --api-key <KEY> --site-id <SITE-ID> [--version <TAG>]
 #
 # One-liner:
-#   curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/install-relay.sh \
+#   curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/install-relay.sh \
 #     | bash -s -- --api-url <URL> --api-key <KEY> --site-id <SITE-ID>
 
 set -euo pipefail
 
-CONTAINER_NAME="cloudsmith-relay"
-IMAGE_BASE="ghcr.io/cloudsmith-cloud/cloudsmith-relay"
-RELEASES_URL="https://api.github.com/repos/cloudsmith-cloud/cloudsmith-relay/releases"
+CONTAINER_NAME="cloudgrange-relay"
+IMAGE_BASE="ghcr.io/cloudgrange-cloud/cloudgrange-relay"
+RELEASES_URL="https://api.github.com/repos/cloudgrange-cloud/cloudgrange-relay/releases"
 HEALTH_TIMEOUT=30
 
 # ----------------------------------------------------------------------------
@@ -100,11 +100,11 @@ docker pull "${IMAGE}"
 # ----------------------------------------------------------------------------
 EXPECTED_DIGEST=""
 if [[ "$VERSION" != "latest" ]]; then
-    MANIFEST_URL="https://github.com/cloudsmith-cloud/cloudsmith-relay/releases/download/${VERSION}/cloudsmith-relay.sha256"
+    MANIFEST_URL="https://github.com/cloudgrange-cloud/cloudgrange-relay/releases/download/${VERSION}/cloudgrange-relay.sha256"
     echo "Verifying image digest from ${MANIFEST_URL} ..."
     MANIFEST=$(curl -sSL --fail "${MANIFEST_URL}" 2>/dev/null || true)
     if [[ -n "$MANIFEST" ]]; then
-        EXPECTED_DIGEST=$(echo "$MANIFEST" | grep "cloudsmith-relay" | awk '{print $1}' | head -1)
+        EXPECTED_DIGEST=$(echo "$MANIFEST" | grep "cloudgrange-relay" | awk '{print $1}' | head -1)
     fi
 fi
 
@@ -184,9 +184,9 @@ fi
 # Done
 # ----------------------------------------------------------------------------
 echo ""
-echo "Relay agent connected. Check the CloudSmith portal to confirm Active status."
+echo "Relay agent connected. Check the CloudGrange portal to confirm Active status."
 echo ""
 echo "Useful commands:"
 echo "  View logs:   docker logs -f ${CONTAINER_NAME}"
 echo "  Stop relay:  docker stop ${CONTAINER_NAME}"
-echo "  Uninstall:   curl -sSL https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main/scripts/uninstall-relay.sh | bash"
+echo "  Uninstall:   curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/uninstall-relay.sh | bash"

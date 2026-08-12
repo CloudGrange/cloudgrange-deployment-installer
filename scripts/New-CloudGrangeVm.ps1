@@ -1,11 +1,11 @@
 #Requires -RunAsAdministrator
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
-# ADR-029: provisions cloudsmith-docker Hyper-V VM — Gen2, Ubuntu 24.04, Docker CE host
+# ADR-029: provisions cloudgrange-docker Hyper-V VM — Gen2, Ubuntu 24.04, Docker CE host
 #
 # Supports two invocation modes:
-#   Dot-sourced: . .\New-CloudSmithVm.ps1 then call New-CloudSmithVm -VmIp ...
-#   Direct:      powershell.exe -File New-CloudSmithVm.ps1 -VmIp ... (used by PS7 installer)
+#   Dot-sourced: . .\New-CloudGrangeVm.ps1 then call New-CloudGrangeVm -VmIp ...
+#   Direct:      powershell.exe -File New-CloudGrangeVm.ps1 -VmIp ... (used by PS7 installer)
 #
 # Hyper-V cmdlets (Get-VMSwitch, New-VM, etc.) require Windows PowerShell (PS5.1).
 # The main installer (PS7) delegates VM provisioning here via powershell.exe.
@@ -13,7 +13,7 @@
 # Script-level param block MUST be the first statement after #Requires/comments.
 param(
     [string]$VmIp             = '192.168.100.10',
-    [string]$VhdxPath         = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
+    [string]$VhdxPath         = 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx',
     [string]$Mode             = 'Online',
     [string]$BundledImagePath = '',
     [string]$SshPublicKey     = '',
@@ -22,29 +22,29 @@ param(
     [string]$SshPublicKeyFile = ''
 )
 
-function New-CloudSmithVm {
+function New-CloudGrangeVm {
     [CmdletBinding()]
     param(
         [string]$VmIp    = '192.168.100.10',
-        [string]$VhdxPath = 'C:\ProgramData\CloudSmith\cloudsmith-docker.vhdx',
+        [string]$VhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx',
         [string]$Mode    = 'Online',
         [string]$BundledImagePath = '',
-        # Password for the cloudsmith OS user, set via cloud-init. Generated fresh per install;
+        # Password for the cloudgrange OS user, set via cloud-init. Generated fresh per install;
         # lives in memory only. When null/empty, the account is locked (SSH key only).
         [SecureString]$VmUserPassword = $null,
         # SSH public key (openssh format: "ssh-ed25519 AAAA... comment") to add to
-        # the cloudsmith user's authorized_keys via cloud-init. When provided, the
+        # the cloudgrange user's authorized_keys via cloud-init. When provided, the
         # installer uses SSH (not Hyper-V PowerShell Direct) to run guest commands.
         [string]$SshPublicKey = ''
     )
 
     $ErrorActionPreference = 'Stop'
 
-    $vmName     = 'cloudsmith-docker'
-    $switchName = 'cloudsmith-internal'
+    $vmName     = 'cloudgrange-docker'
+    $switchName = 'cloudgrange-internal'
     $hostIp     = '192.168.100.1'
     $vmGateway  = '192.168.100.1'
-    $natName    = 'CloudSmithNAT'
+    $natName    = 'CloudGrangeNAT'
 
     # Import Hyper-V module — required in PS5.1 subprocess context (PS7 cannot load it).
     # Auto-install the Hyper-V PowerShell management tools if missing (e.g. when Hyper-V
@@ -59,7 +59,7 @@ function New-CloudSmithVm {
     }
     Import-Module Hyper-V -ErrorAction Stop
 
-    # Remove any existing cloudsmith-docker VM before (re)provisioning.
+    # Remove any existing cloudgrange-docker VM before (re)provisioning.
     # This releases VHDX and DVD-drive ISO file locks held by a running VM from a
     # prior install attempt, preventing "file in use" errors on VHDX convert and
     # ISO rebuild, and OOM failures from two 8 GB VMs existing simultaneously.
@@ -74,7 +74,7 @@ function New-CloudSmithVm {
         Write-Host "  Existing VM removed"
     }
 
-    # Hyper-V internal switch + WinNAT so the cloudsmith-docker VM has internet access.
+    # Hyper-V internal switch + WinNAT so the cloudgrange-docker VM has internet access.
     # An Internal switch provides a private network; WinNAT adds outbound NAT so the
     # nested VM can pull images from ghcr.io, update packages, etc.
     if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
@@ -143,13 +143,13 @@ function New-CloudSmithVm {
     }
 
     # Convert .img to VHDX using qemu-img (required for Hyper-V Gen2).
-    # The installer auto-installs QEMU in Install-CloudSmithPrereqs; this is a
+    # The installer auto-installs QEMU in Install-CloudGrangePrereqs; this is a
     # belt-and-braces check in case the function is called directly.
     $qemuImgCmd = Get-Command qemu-img -ErrorAction SilentlyContinue
     $qemuImg = if ($qemuImgCmd) { $qemuImgCmd.Source } else { $null }
     if (-not $qemuImg) {
-        . "$PSScriptRoot\CloudSmith-Prereqs.ps1"
-        Initialize-CloudSmithPrereqs
+        . "$PSScriptRoot\CloudGrange-Prereqs.ps1"
+        Initialize-CloudGrangePrereqs
         $qemuImgCmd = Get-Command qemu-img -ErrorAction SilentlyContinue
         $qemuImg = if ($qemuImgCmd) { $qemuImgCmd.Source } else { $null }
         if (-not $qemuImg) {
@@ -175,11 +175,11 @@ function New-CloudSmithVm {
     # Clear the NTFS Sparse attribute on the freshly-converted VHDX. Hyper-V
     # Gen2 refuses to power on a sparse VHDX with 0xC03A001A; qemu-img can
     # leave the file marked sparse on NTFS even when subformat=dynamic.
-    . "$PSScriptRoot\CloudSmith-Prereqs.ps1"
-    Clear-CloudSmithSparseAttribute -Path $VhdxPath
+    . "$PSScriptRoot\CloudGrange-Prereqs.ps1"
+    Clear-CloudGrangeSparseAttribute -Path $VhdxPath
 
     # Build cloud-init NoCloud seed ISO (user-data + meta-data)
-    $ciDir = Join-Path $env:TEMP 'cloudsmith-cloud-init'
+    $ciDir = Join-Path $env:TEMP 'cloudgrange-cloud-init'
     New-Item -ItemType Directory -Path $ciDir -Force | Out-Null
 
     # Build optional chpasswd block. When a VM user password is provided, cloud-init
@@ -195,7 +195,7 @@ function New-CloudSmithVm {
 chpasswd:
   expire: false
   list: |
-    cloudsmith:$plainPwd
+    cloudgrange:$plainPwd
 "@
     }
 
@@ -217,8 +217,8 @@ chpasswd:
     $netSetupScript = @'
 #!/bin/bash
 set -e
-LOG=/var/log/cloudsmith-init.log
-echo "cloudsmith-runcmd-start $(date)" >> $LOG
+LOG=/var/log/cloudgrange-init.log
+echo "cloudgrange-runcmd-start $(date)" >> $LOG
 # Find first non-loopback interface
 for i in $(seq 1 30); do
   IFACE=$(ip link show | grep -E '^[0-9]+:' | grep -v lo | awk -F': ' '{print $2}' | head -1)
@@ -243,7 +243,7 @@ apt-get update -q >> $LOG 2>&1
 DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server qemu-guest-agent >> $LOG 2>&1
 systemctl enable --now ssh >> $LOG 2>&1
 systemctl enable --now qemu-guest-agent >> $LOG 2>&1
-echo "cloudsmith-runcmd-done $(date)" >> $LOG
+echo "cloudgrange-runcmd-done $(date)" >> $LOG
 '@
     # Substitute the actual IP/gateway into the script
     $netSetupScript = $netSetupScript -replace 'VMIP_PLACEHOLDER', $VmIp -replace 'GWIP_PLACEHOLDER', $vmGateway4
@@ -254,27 +254,27 @@ echo "cloudsmith-runcmd-done $(date)" >> $LOG
 
     $userData = @"
 #cloud-config
-hostname: cloudsmith-docker
+hostname: cloudgrange-docker
 manage_etc_hosts: true
 users:
-  - name: cloudsmith
+  - name: cloudgrange
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
     lock_passwd: false
     passwd: '*'$sshKeyLine
 $chpasswdBlock
 write_files:
-  - path: /usr/local/bin/cloudsmith-net-setup.sh
+  - path: /usr/local/bin/cloudgrange-net-setup.sh
     permissions: '0755'
     content: |
 $netSetupScriptIndented
 runcmd:
-  - /usr/local/bin/cloudsmith-net-setup.sh
+  - /usr/local/bin/cloudgrange-net-setup.sh
 "@
 
     $metaData = @"
-instance-id: cloudsmith-docker
-local-hostname: cloudsmith-docker
+instance-id: cloudgrange-docker
+local-hostname: cloudgrange-docker
 "@
 
     # network-config: separate file for the NoCloud datasource.
@@ -284,7 +284,7 @@ local-hostname: cloudsmith-docker
     $networkConfig = @"
 version: 2
 ethernets:
-  cloudsmith-eth:
+  cloudgrange-eth:
     match:
       name: "e*"
     set-name: eth0
@@ -314,8 +314,8 @@ ethernets:
     $seedIso = Join-Path $vhdxDir 'cloud-init-seed.iso'
     # Build the NoCloud seed ISO via IMAPI2 (built into Windows since Vista).
     # No Windows ADK / oscdimg dependency — operators are not expected to install
-    # developer tools to deploy CloudSmith on-prem.
-    . "$PSScriptRoot\CloudSmith-Prereqs.ps1"
+    # developer tools to deploy CloudGrange on-prem.
+    . "$PSScriptRoot\CloudGrange-Prereqs.ps1"
     Write-Host "  Building cloud-init seed ISO (IMAPI2)..."
     New-CiDataIso -SourceDir $ciDir -OutputIso $seedIso -VolumeLabel 'cidata'
 
@@ -324,7 +324,7 @@ ethernets:
     $freeBytes = (Get-PSDrive -Name $vhdxDrive.TrimEnd(':') -ErrorAction SilentlyContinue).Free
     if ($freeBytes -and $freeBytes -lt 64GB) {
         $freeGB = [Math]::Round($freeBytes / 1GB, 1)
-        Write-Error "CS-INST-ERR-003: Insufficient disk space at $VhdxPath. Required: 60 GB free. Available: ${freeGB} GB."
+        Write-Error "CG-INST-ERR-003: Insufficient disk space at $VhdxPath. Required: 60 GB free. Available: ${freeGB} GB."
     }
 
     # Create VM — Generation 2, 8 GB RAM (static minimum), 4 vCPU, Secure Boot (AB#1582)
@@ -350,7 +350,7 @@ ethernets:
     }
 
     # Windows Firewall — forward port 443 from management NIC to VM
-    $fwRuleName = 'CloudSmith-Portal-443'
+    $fwRuleName = 'CloudGrange-Portal-443'
     if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
         # Port forwarding via netsh portproxy (management NIC → VM IP)
@@ -384,7 +384,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         $effectiveSshKey = (Get-Content -LiteralPath $SshPublicKeyFile -Raw).Trim()
     }
 
-    . "$PSScriptRoot\CloudSmith-Common.ps1"
-    New-CloudSmithVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
+    . "$PSScriptRoot\CloudGrange-Common.ps1"
+    New-CloudGrangeVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
         -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath
 }

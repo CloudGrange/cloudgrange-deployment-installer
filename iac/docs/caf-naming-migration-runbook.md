@@ -2,7 +2,7 @@
 
 **AB#1670 — CAF naming migration guidance**  
 **Standard:** ADR-048 (Azure resource naming and tagging standard)  
-**Scope:** CloudSmith PaaS resources managed by `iac/main.bicep`
+**Scope:** CloudGrange PaaS resources managed by `iac/main.bicep`
 
 ---
 
@@ -22,14 +22,14 @@ Populate the mapping table below with your results:
 
 | Current name | Resource type | CAF target name | Override param in `main.parameters.json` |
 |---|---|---|---|
-| `cloudsmith-logs` | `Microsoft.OperationalInsights/workspaces` | `log-cloudsmith-dev-cus-001` | `logAnalyticsName` |
-| `cloudsmith-appi` | `Microsoft.Insights/components` | `appi-cloudsmith-dev-cus-001` | `applicationInsightsName` |
+| `cloudgrange-logs` | `Microsoft.OperationalInsights/workspaces` | `log-cloudgrange-dev-cus-001` | `logAnalyticsName` |
+| `cloudgrange-appi` | `Microsoft.Insights/components` | `appi-cloudgrange-dev-cus-001` | `applicationInsightsName` |
 | `cs-kv-abc123` | `Microsoft.KeyVault/vaults` | `kvclouddevcus001abc123` | `keyVaultName` |
-| `cloudsmith-pg` | `Microsoft.DBforPostgreSQL/flexibleServers` | `psql-cloudsmith-dev-cus-001` | `postgresServerName` |
-| `cloudsmith-cae` | `Microsoft.App/managedEnvironments` | `cae-cloudsmith-dev-cus-001` | `containerAppsEnvironmentName` |
-| `cloudsmith-api` | `Microsoft.App/containerApps` | `ca-cloudsmith-api-dev-cus-001` | `apiAppName` |
-| `cloudsmith-portal` | `Microsoft.App/containerApps` | `ca-cloudsmith-portal-dev-cus-001` | `portalAppName` |
-| `cloudsmith-mi` | `Microsoft.ManagedIdentity/userAssignedIdentities` | `id-cloudsmith-dev-cus-001` | `managedIdentityName` |
+| `cloudgrange-pg` | `Microsoft.DBforPostgreSQL/flexibleServers` | `psql-cloudgrange-dev-cus-001` | `postgresServerName` |
+| `cloudgrange-cae` | `Microsoft.App/managedEnvironments` | `cae-cloudgrange-dev-cus-001` | `containerAppsEnvironmentName` |
+| `cloudgrange-api` | `Microsoft.App/containerApps` | `ca-cloudgrange-api-dev-cus-001` | `apiAppName` |
+| `cloudgrange-portal` | `Microsoft.App/containerApps` | `ca-cloudgrange-portal-dev-cus-001` | `portalAppName` |
+| `cloudgrange-mi` | `Microsoft.ManagedIdentity/userAssignedIdentities` | `id-cloudgrange-dev-cus-001` | `managedIdentityName` |
 
 **CAF name pattern (ADR-048):** `{abbr}-{workload}-{env}-{regionCode}-{instance}`  
 **Key Vault pattern (length-constrained):** `{abbr}{workloadShort}{env}{regionCode}{instance}{rgHash}` (24 chars max, no separators, 6-char hash for uniqueness)
@@ -48,13 +48,13 @@ Add overrides to `main.parameters.json`:
   "contentVersion": "1.0.0.0",
   "parameters": {
     "keyVaultName":               { "value": "cs-kv-abc123def456" },
-    "logAnalyticsName":           { "value": "cloudsmith-logs" },
-    "applicationInsightsName":    { "value": "cloudsmith-appi" },
-    "postgresServerName":         { "value": "cloudsmith-pg" },
-    "containerAppsEnvironmentName": { "value": "cloudsmith-cae" },
-    "apiAppName":                 { "value": "cloudsmith-api" },
-    "portalAppName":              { "value": "cloudsmith-portal" },
-    "managedIdentityName":        { "value": "cloudsmith-mi" }
+    "logAnalyticsName":           { "value": "cloudgrange-logs" },
+    "applicationInsightsName":    { "value": "cloudgrange-appi" },
+    "postgresServerName":         { "value": "cloudgrange-pg" },
+    "containerAppsEnvironmentName": { "value": "cloudgrange-cae" },
+    "apiAppName":                 { "value": "cloudgrange-api" },
+    "portalAppName":              { "value": "cloudgrange-portal" },
+    "managedIdentityName":        { "value": "cloudgrange-mi" }
   }
 }
 ```
@@ -67,7 +67,7 @@ When these overrides are present, `azd provision` re-deploys against the existin
 
 ## 3. Note on Terraform
 
-CloudSmith IaC is Bicep-only per ADR-043. Terraform is not used. If an operator has existing Terraform state managing CloudSmith resources, they must import those resources into Bicep management via `az deployment group create --mode Incremental` against the existing RG. Terraform import procedures are outside the scope of this runbook.
+CloudGrange IaC is Bicep-only per ADR-043. Terraform is not used. If an operator has existing Terraform state managing CloudGrange resources, they must import those resources into Bicep management via `az deployment group create --mode Incremental` against the existing RG. Terraform import procedures are outside the scope of this runbook.
 
 ---
 
@@ -105,8 +105,8 @@ This re-deploys using the previous parameter values. ARM incremental mode revert
 For non-production environments where data loss is acceptable:
 
 ```powershell
-# NEVER run azd down on rg-cloudsmith-dev-cus-001 (live dev) without explicit approval
-# Only use on named test RGs: rg-cs-test-*, rg-cloudsmith-onprem-*
+# NEVER run azd down on rg-cloudgrange-dev-cus-001 (live dev) without explicit approval
+# Only use on named test RGs: rg-cg-test-*, rg-cloudgrange-onprem-*
 azd down --purge --resource-group <test-rg-name>
 ```
 
@@ -146,11 +146,11 @@ az deployment sub create \
   --location centralus \
   --template-file iac/main.bicep \
   --parameters @iac/main.parameters.json \
-               resourceGroupName=rg-cloudsmith-prod-cus-002 \
+               resourceGroupName=rg-cloudgrange-prod-cus-002 \
                instance=002
 ```
 
-This creates all resources with CAF-pattern names in `rg-cloudsmith-prod-cus-002` alongside the existing `rg-cloudsmith-prod-cus-001`.
+This creates all resources with CAF-pattern names in `rg-cloudgrange-prod-cus-002` alongside the existing `rg-cloudgrange-prod-cus-001`.
 
 ### 5.2 Sync PostgreSQL data
 
@@ -158,12 +158,12 @@ Option A — logical replication (minimal downtime, requires PG superuser):
 
 ```sql
 -- On source server: create a publication
-CREATE PUBLICATION cloudsmith_pub FOR ALL TABLES;
+CREATE PUBLICATION cloudgrange_pub FOR ALL TABLES;
 
 -- On target server: create a subscription
-CREATE SUBSCRIPTION cloudsmith_sub
-  CONNECTION 'host=<old-pg-fqdn> dbname=cloudsmith user=cloudsmith password=<pw>'
-  PUBLICATION cloudsmith_pub;
+CREATE SUBSCRIPTION cloudgrange_sub
+  CONNECTION 'host=<old-pg-fqdn> dbname=cloudgrange user=cloudgrange password=<pw>'
+  PUBLICATION cloudgrange_pub;
 ```
 
 Wait for the subscription to reach `consistent snapshot` state. Validate row counts:
@@ -177,8 +177,8 @@ Option B — pg_dump/restore (downtime required):
 
 ```bash
 # On a machine with network access to both servers
-pg_dump -h <old-pg-fqdn> -U cloudsmith -d cloudsmith -F c -f cloudsmith.dump
-pg_restore -h <new-pg-fqdn> -U cloudsmith -d cloudsmith -F c cloudsmith.dump
+pg_dump -h <old-pg-fqdn> -U cloudgrange -d cloudgrange -F c -f cloudgrange.dump
+pg_restore -h <new-pg-fqdn> -U cloudgrange -d cloudgrange -F c cloudgrange.dump
 ```
 
 ### 5.3 Switch ACA traffic
@@ -188,8 +188,8 @@ Update DNS CNAME records (or Azure Traffic Manager if configured) to point to th
 ```powershell
 # Get the new portal FQDN
 az containerapp show \
-  --name ca-cloudsmith-portal-prod-cus-002 \
-  --resource-group rg-cloudsmith-prod-cus-002 \
+  --name ca-cloudgrange-portal-prod-cus-002 \
+  --resource-group rg-cloudgrange-prod-cus-002 \
   --query 'properties.configuration.ingress.fqdn' \
   --output tsv
 ```
@@ -206,7 +206,7 @@ curl -f https://<new-portal-fqdn>/
 curl -f https://<new-api-fqdn>/health/ready
 
 # Authenticated smoke test (adjust to your test suite)
-# Run: cloudsmith-api integration tests against new environment
+# Run: cloudgrange-api integration tests against new environment
 ```
 
 ### 5.5 Decommission old RG
@@ -217,12 +217,12 @@ After 24 hours of clean operation with the new environment:
 # Confirm KV soft-delete is enabled (7-day fallback window for secret recovery)
 az keyvault show \
   --name <old-kv-name> \
-  --resource-group rg-cloudsmith-prod-cus-001 \
+  --resource-group rg-cloudgrange-prod-cus-001 \
   --query 'properties.enableSoftDelete'
 
 # Delete the old RG (30-second confirmation window)
 az group delete \
-  --name rg-cloudsmith-prod-cus-001 \
+  --name rg-cloudgrange-prod-cus-001 \
   --yes --no-wait
 ```
 

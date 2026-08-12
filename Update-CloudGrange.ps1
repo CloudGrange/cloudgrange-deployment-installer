@@ -1,12 +1,12 @@
 #Requires -RunAsAdministrator
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 # AB#1595 — Rolling update: pull images, restart, migrate, verify, report version
 
 [CmdletBinding()]
 param(
-    [string]$VmName  = 'cloudsmith-docker',
+    [string]$VmName  = 'cloudgrange-docker',
     [string]$VmIp    = '192.168.100.10',
     [string]$Version = 'latest',
     [bool]$UseWsl2   = $false
@@ -14,36 +14,36 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\scripts\CloudSmith-Common.ps1"
+. "$PSScriptRoot\scripts\CloudGrange-Common.ps1"
 
-Write-Progress-Step "Pulling new CloudSmith images (version: $Version)"
+Write-Progress-Step "Pulling new CloudGrange images (version: $Version)"
 
 $upgradeScript = {
     param([string]$Version)
-    Set-Location /opt/cloudsmith
-    $env:CLOUDSMITH_VERSION = $Version
+    Set-Location /opt/cloudgrange
+    $env:CLOUDGRANGE_VERSION = $Version
     docker compose pull
 
     # Rolling restart — infrastructure services first, api last to minimise downtime
-    docker compose up -d --no-deps --remove-orphans postgres prometheus loki otel-collector cloudsmith-portal
+    docker compose up -d --no-deps --remove-orphans postgres prometheus loki otel-collector cloudgrange-portal
     Start-Sleep 10
-    docker compose up -d --no-deps --remove-orphans cloudsmith-api
+    docker compose up -d --no-deps --remove-orphans cloudgrange-api
     docker compose ps
 }
 
 if ($UseWsl2) {
     wsl -d Ubuntu -u root -- pwsh -Command $upgradeScript.ToString() -Args $Version
 } else {
-    $cred = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+    $cred = Get-Credential -UserName 'cloudgrange' -Message 'VM credential'
     Invoke-Command -VMName $VmName -Credential $cred -ScriptBlock $upgradeScript -ArgumentList $Version
 }
 
 # AB#1595 Step 3: Wait for API to become healthy, then trigger pending migrations
-Write-Progress-Step "Waiting for CloudSmith API to become healthy after restart"
+Write-Progress-Step "Waiting for CloudGrange API to become healthy after restart"
 $apiBase = "http://$VmIp:8081"
 $healthOk = Wait-ForHttpOk -Url "$apiBase/health/ready" -TimeoutSeconds 300
 if (-not $healthOk) {
-    Write-Error "CloudSmith API did not become healthy within 5 minutes after update. Check container logs."
+    Write-Error "CloudGrange API did not become healthy within 5 minutes after update. Check container logs."
 }
 Write-Host "  API health: OK" -ForegroundColor Green
 
@@ -74,7 +74,7 @@ try {
 # AB#1595 Step 4: Verify all compose services are healthy after restart
 Write-Progress-Step "Verifying all services are running after update"
 $verifyScript = {
-    Set-Location /opt/cloudsmith
+    Set-Location /opt/cloudgrange
     $notRunning = docker compose ps --format json 2>$null |
         ForEach-Object { $_ | ConvertFrom-Json -ErrorAction SilentlyContinue } |
         Where-Object { $_.State -ne 'running' }
@@ -105,4 +105,4 @@ try {
 }
 
 Write-Host ""
-Write-Host "  [CloudSmith] Update complete. Version: $newVersion" -ForegroundColor Green
+Write-Host "  [CloudGrange] Update complete. Version: $newVersion" -ForegroundColor Green

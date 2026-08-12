@@ -11,7 +11,7 @@
 - **Endpoint:** `https://mcp.hybridsolutions.cloud/mcp`
 - **Transport:** Streamable HTTP (remote)
 - **Auth:** OAuth 2.1 brokered to Microsoft Entra; members of `sg-hcs-mcp-users` only. Clients prompt for Entra sign-in on first connect.
-- **Bootstrap:** call `bootstrap(repo="cloudsmith-installer", client="<your client>")` at session start.
+- **Bootstrap:** call `bootstrap(repo="cloudgrange-installer", client="<your client>")` at session start.
 - **Per-tool config:** `.mcp.json` (Claude Code), `.codex/config.toml` (Codex), `.gemini/settings.json` (Gemini), `.cursor/mcp.json` (Cursor), `.vscode/mcp.json` (VS Code Copilot).
 
 <!-- Add any additional MCP servers this repo uses below. -->

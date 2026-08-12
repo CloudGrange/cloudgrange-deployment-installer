@@ -1,21 +1,21 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-function Initialize-CloudSmith {
+function Initialize-CloudGrange {
     [CmdletBinding()]
     param(
-        [string]$VmName  = 'cloudsmith-docker',
+        [string]$VmName  = 'cloudgrange-docker',
         [bool]$UseWsl2   = $false
     )
 
     $initScript = {
         # Generate master secrets key (AES-256 — 32 random bytes base64-encoded)
         $key = [Convert]::ToBase64String((1..32 | ForEach-Object { [byte](Get-Random -Maximum 256) }))
-        mkdir -p /etc/cloudsmith
-        echo $key | tee /etc/cloudsmith/secrets.key > /dev/null
-        chmod 600 /etc/cloudsmith/secrets.key
-        chown cloudsmith:cloudsmith /etc/cloudsmith/secrets.key
+        mkdir -p /etc/cloudgrange
+        echo $key | tee /etc/cloudgrange/secrets.key > /dev/null
+        chmod 600 /etc/cloudgrange/secrets.key
+        chown cloudgrange:cloudgrange /etc/cloudgrange/secrets.key
 
         # Generate one-time setup token
         $token = [System.Web.Security.Membership]::GeneratePassword(32, 4) 2>/dev/null
@@ -28,7 +28,7 @@ function Initialize-CloudSmith {
     if ($UseWsl2) {
         $token = wsl -d Ubuntu -u root -- pwsh -Command $initScript.ToString()
     } else {
-        $cred = Get-Credential -UserName 'cloudsmith' -Message 'VM credential'
+        $cred = Get-Credential -UserName 'cloudgrange' -Message 'VM credential'
         $token = Invoke-Command -VMName $VmName -Credential $cred -ScriptBlock $initScript
     }
 

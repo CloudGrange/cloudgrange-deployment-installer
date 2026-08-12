@@ -1,4 +1,4 @@
-// Copyright 2026 CloudSmith Contributors
+// Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Module boundary for the PostgreSQL Flexible Server Entra administrator.

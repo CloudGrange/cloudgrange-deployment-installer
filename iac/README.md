@@ -1,6 +1,6 @@
-# CloudSmith — Azure PaaS (Model B) Deployment
+# CloudGrange — Azure PaaS (Model B) Deployment
 
-Infrastructure-as-code for deploying CloudSmith to Azure PaaS using the Azure
+Infrastructure-as-code for deploying CloudGrange to Azure PaaS using the Azure
 Developer CLI (`azd`) + Bicep, per **ADR-043** (deployment mechanism),
 **ADR-006** (Azure Container Apps hosting), and **ADR-044** (portal delivered as
 an ACA container, not Static Web Apps).
@@ -13,10 +13,10 @@ an ACA container, not Static Web Apps).
 | Application Insights | API traces/metrics (Azure Monitor replaces Loki/Prometheus on PaaS) |
 | User-assigned Managed Identity | Workload identity; granted Key Vault Secrets User |
 | Key Vault | Secret storage (RBAC mode) |
-| PostgreSQL Flexible Server (B1ms) | `cloudsmith` database |
+| PostgreSQL Flexible Server (B1ms) | `cloudgrange` database |
 | Container Apps Environment | Hosts the API and portal container apps |
-| `cloudsmith-api` Container App | API host, external ingress :8080, image from ghcr.io |
-| `cloudsmith-portal` Container App | Portal nginx image, external ingress :80, image from ghcr.io |
+| `cloudgrange-api` Container App | API host, external ingress :8080, image from ghcr.io |
+| `cloudgrange-portal` Container App | Portal nginx image, external ingress :80, image from ghcr.io |
 
 **Auth on PaaS is Entra ID** (per `design/sequence-diagrams/login-oidc-paas.md`),
 not Keycloak. Keycloak is the standalone/Model A IdP only.
@@ -65,7 +65,7 @@ the server for Entra-only once the API's MI DB connection is verified
 ## Prerequisites
 
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) and [azd](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
-- The container images published to `ghcr.io/cloudsmith-cloud/*`. While they
+- The container images published to `ghcr.io/cloudgrange-cloud/*`. While they
   remain **private**, supply `GHCR_USERNAME` + `GHCR_TOKEN` (a `read:packages`
   PAT). Once the images are **public** (ADR-046), leave both empty and the
   registry credential block is omitted automatically.
@@ -90,7 +90,7 @@ azd up
 - **Contributor** — creates all resources (resource group, ACA, Key Vault,
   PostgreSQL, etc.)
 - **Role Based Access Control Administrator** — assigns built-in roles to the
-  CloudSmith workload managed identity (Key Vault Secrets Officer, Monitoring
+  CloudGrange workload managed identity (Key Vault Secrets Officer, Monitoring
   Metrics Publisher)
 - **Owner** covers both; either combination works.
 
@@ -107,19 +107,19 @@ rights are needed at deploy time.
 The deployment UAMI is **separate** from the workload UAMI that the ACA apps use
 at runtime (API → Key Vault, API → PostgreSQL). The workload UAMI is always
 created by the Bicep templates. The deployment UAMI is pre-created by an admin
-and never modified by CloudSmith.
+and never modified by CloudGrange.
 
 **One-time admin setup (run as Owner or User Access Admin):**
 
 ```bash
 # Create the deployment identity
 az identity create \
-  --name id-cloudsmith-deploy \
+  --name id-cloudgrange-deploy \
   --resource-group rg-your-platform \
   --location eastus
 
 MI_PRINCIPAL=$(az identity show \
-  --name id-cloudsmith-deploy \
+  --name id-cloudgrange-deploy \
   --resource-group rg-your-platform \
   --query principalId -o tsv)
 
@@ -166,7 +166,7 @@ documentation and a reference for audit tooling.
 
 ```json
 "deploymentManagedIdentityId": {
-  "value": "/subscriptions/<sub-id>/resourceGroups/rg-your-platform/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-cloudsmith-deploy"
+  "value": "/subscriptions/<sub-id>/resourceGroups/rg-your-platform/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-cloudgrange-deploy"
 }
 ```
 
@@ -174,9 +174,9 @@ documentation and a reference for audit tooling.
 
 ```bash
 az login                   # or: azd auth login
-azd env new cloudsmith-mvp
+azd env new cloudgrange-mvp
 azd env set POSTGRES_ADMIN_PASSWORD <password> --secret
-azd env set CLOUDSMITH_MASTER_KEY   <base64-aes256-key> --secret
+azd env set CLOUDGRANGE_MASTER_KEY   <base64-aes256-key> --secret
 # Only required while images are private (until ADR-046 public flip):
 azd env set GHCR_USERNAME <github-user>
 azd env set GHCR_TOKEN    <read-packages-pat> --secret
@@ -205,7 +205,7 @@ The deployment outputs `PORTAL_URL` and `API_URL`.
 
 Configuring Entra SSO requires an **App Registration** in your Azure AD tenant
 with redirect URIs pointing at the portal and API FQDNs. This is **only needed
-if you want operators to log into the CloudSmith portal using their corporate
+if you want operators to log into the CloudGrange portal using their corporate
 Entra credentials**. If you skip this, the portal uses local username/password
 authentication (ADR-047 first-run wizard).
 

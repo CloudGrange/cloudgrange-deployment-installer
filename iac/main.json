@@ -19,7 +19,7 @@
     },
     "workload": {
       "type": "string",
-      "defaultValue": "cloudsmith",
+      "defaultValue": "cloudgrange",
       "minLength": 2,
       "maxLength": 12,
       "metadata": {
@@ -97,7 +97,7 @@
     },
     "postgresAdminUser": {
       "type": "string",
-      "defaultValue": "cloudsmith",
+      "defaultValue": "cloudgrange",
       "metadata": {
         "description": "PostgreSQL administrator login."
       }
@@ -370,7 +370,7 @@
     "masterKey": {
       "type": "securestring",
       "metadata": {
-        "description": "256-bit AES master key (base64-encoded). Must be supplied at deploy time via environment variable CLOUDSMITH_MASTER_KEY or azd env set. Written to Key Vault; ACA reads it via KV secret reference."
+        "description": "256-bit AES master key (base64-encoded). Must be supplied at deploy time via environment variable CLOUDGRANGE_MASTER_KEY or azd env set. Written to Key Vault; ACA reads it via KV secret reference."
       }
     },
     "enablePgBouncer": {
@@ -494,7 +494,7 @@
     },
     "postgresDatabaseName": {
       "type": "string",
-      "defaultValue": "cloudsmith",
+      "defaultValue": "cloudgrange",
       "metadata": {
         "description": "Override PostgreSQL database name."
       }
@@ -619,7 +619,7 @@
     },
     "rgTagsEffective": "[union(parameters('commonTags'), variables('autoTags'), parameters('resourceGroupTags'))]",
     "ownerLooksLikeEmail": "[and(contains(parameters('commonTags'), 'Owner'), contains(string(parameters('commonTags').Owner), '@'))]",
-    "budgetContactEmail": "[if(variables('ownerLooksLikeEmail'), string(parameters('commonTags').Owner), 'cloudsmith-alerts@example.com')]",
+    "budgetContactEmail": "[if(variables('ownerLooksLikeEmail'), string(parameters('commonTags').Owner), 'cloudgrange-alerts@example.com')]",
     "_budgetStartDate": "[format('{0}-01', substring(parameters('deploymentTime'), 0, 7))]"
   },
   "resources": {
@@ -692,7 +692,7 @@
     "resources": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "cloudsmith-resources",
+      "name": "cloudgrange-resources",
       "resourceGroup": "[variables('rgNameEffective')]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -1095,7 +1095,7 @@
             },
             "postgresAdminUser": {
               "type": "string",
-              "defaultValue": "cloudsmith",
+              "defaultValue": "cloudgrange",
               "metadata": {
                 "description": "PostgreSQL admin login."
               }
@@ -1369,7 +1369,7 @@
             },
             "postgresDatabaseName": {
               "type": "string",
-              "defaultValue": "cloudsmith"
+              "defaultValue": "cloudgrange"
             },
             "containerAppsEnvironmentName": {
               "type": "string",
@@ -1454,8 +1454,8 @@
             "imagesArePrivate": "[not(empty(parameters('ghcrToken')))]",
             "_apiImageTagEff": "[if(empty(parameters('apiImageTag')), parameters('imageTag'), parameters('apiImageTag'))]",
             "_portalImageTagEff": "[if(empty(parameters('portalImageTag')), parameters('imageTag'), parameters('portalImageTag'))]",
-            "apiImage": "[format('ghcr.io/cloudsmith-cloud/cloudsmith-api:{0}', variables('_apiImageTagEff'))]",
-            "portalImage": "[format('ghcr.io/cloudsmith-cloud/cloudsmith-portal:{0}', variables('_portalImageTagEff'))]",
+            "apiImage": "[format('ghcr.io/cloudgrange-cloud/cloudgrange-api:{0}', variables('_apiImageTagEff'))]",
+            "portalImage": "[format('ghcr.io/cloudgrange-cloud/cloudgrange-portal:{0}', variables('_portalImageTagEff'))]",
             "pgFqdn": "[format('{0}.postgres.database.azure.com', variables('postgresServerNameEffective'))]",
             "oidcPreseed": "[not(empty(parameters('entraClientId')))]",
             "_entraAuthorityBase": "[if(endsWith(parameters('entraAuthorityBase'), '/'), substring(parameters('entraAuthorityBase'), 0, sub(length(parameters('entraAuthorityBase')), 1)), parameters('entraAuthorityBase'))]",
@@ -1463,9 +1463,9 @@
             "oidcApiEnv": "[if(variables('oidcPreseed'), createArray(createObject('name', 'Keycloak__Authority', 'value', variables('entraAuthority')), createObject('name', 'Keycloak__ClientId', 'value', parameters('entraClientId')), createObject('name', 'Keycloak__ClientSecret', 'secretRef', 'entra-client-secret'), createObject('name', 'Keycloak__RequireHttpsMetadata', 'value', 'true')), createArray())]",
             "dbHost": "[if(parameters('enablePgBouncer'), 'localhost', variables('pgFqdn'))]",
             "pgPasswordSecretName": "[format('cs-{0}-core-db-password', parameters('environment'))]",
-            "masterKeySecretName": "cloudsmith-master-key",
-            "entraClientSecretName": "cloudsmith-entra-client-secret",
-            "appInsightsSecretName": "cloudsmith-appinsights-connection-string",
+            "masterKeySecretName": "cloudgrange-master-key",
+            "entraClientSecretName": "cloudgrange-entra-client-secret",
+            "appInsightsSecretName": "cloudgrange-appinsights-connection-string",
             "kvDnsSuffix": "[environment().suffixes.keyvaultDns]",
             "byoLawId": "[coalesce(tryGet(parameters('bringYourOwn'), 'logAnalyticsWorkspaceId'), '')]",
             "byoAppiId": "[coalesce(tryGet(parameters('bringYourOwn'), 'applicationInsightsId'), '')]",
@@ -1626,7 +1626,7 @@
                 "destinations": {
                   "monitoringAccounts": [
                     {
-                      "name": "cloudsmithAmw",
+                      "name": "cloudgrangeAmw",
                       "accountResourceId": "[resourceId('Microsoft.Monitor/accounts', variables('azureMonitorWorkspaceNameEffective'))]"
                     }
                   ]
@@ -1637,7 +1637,7 @@
                       "Microsoft-PrometheusMetrics"
                     ],
                     "destinations": [
-                      "cloudsmithAmw"
+                      "cloudgrangeAmw"
                     ]
                   }
                 ]
@@ -1927,10 +1927,10 @@
                     ]
                   },
                   "registries": "[variables('registries')]",
-                  "secrets": "[concat(createArray(createObject('name', 'pg-password', 'keyVaultUrl', variables('pgPasswordSecretUri'), 'identity', variables('miId')), createObject('name', 'cloudsmith-master-key', 'keyVaultUrl', variables('masterKeySecretUri'), 'identity', variables('miId')), createObject('name', 'appinsights-connection-string', 'keyVaultUrl', variables('appInsightsSecretUri'), 'identity', variables('miId'))), if(variables('oidcPreseed'), createArray(createObject('name', 'entra-client-secret', 'keyVaultUrl', variables('entraClientSecretUri'), 'identity', variables('miId'))), createArray()), if(variables('imagesArePrivate'), createArray(createObject('name', 'ghcr-token', 'value', parameters('ghcrToken'))), createArray()))]"
+                  "secrets": "[concat(createArray(createObject('name', 'pg-password', 'keyVaultUrl', variables('pgPasswordSecretUri'), 'identity', variables('miId')), createObject('name', 'cloudgrange-master-key', 'keyVaultUrl', variables('masterKeySecretUri'), 'identity', variables('miId')), createObject('name', 'appinsights-connection-string', 'keyVaultUrl', variables('appInsightsSecretUri'), 'identity', variables('miId'))), if(variables('oidcPreseed'), createArray(createObject('name', 'entra-client-secret', 'keyVaultUrl', variables('entraClientSecretUri'), 'identity', variables('miId'))), createArray()), if(variables('imagesArePrivate'), createArray(createObject('name', 'ghcr-token', 'value', parameters('ghcrToken'))), createArray()))]"
                 },
                 "template": {
-                  "containers": "[concat(createArray(createObject('name', 'cloudsmith-api', 'image', variables('apiImage'), 'resources', createObject('cpu', json(parameters('apiAppCpu')), 'memory', parameters('apiAppMemory')), 'env', union(createArray(createObject('name', 'ASPNETCORE_ENVIRONMENT', 'value', 'Production'), createObject('name', 'ConnectionStrings__Default', 'secretRef', 'pg-password'), createObject('name', 'ConnectionStrings__DefaultHost', 'value', variables('dbHost')), createObject('name', 'ConnectionStrings__DefaultDatabase', 'value', parameters('postgresDatabaseName')), createObject('name', 'ConnectionStrings__DefaultUser', 'value', parameters('postgresAdminUser')), createObject('name', 'ApplicationInsights__ConnectionString', 'secretRef', 'appinsights-connection-string'), createObject('name', 'AZURE_CLIENT_ID', 'value', if(empty(variables('byoMiId')), reference('newMi').clientId, reference('existingMi').clientId)), createObject('name', 'Monitoring__Endpoints__1__HealthUrl', 'value', format('https://{0}.{1}', variables('portalAppNameEffective'), if(empty(variables('byoCaeId')), reference('newCae').defaultDomain, reference('existingCae').defaultDomain))), createObject('name', 'AZURE_MONITOR_WORKSPACE_ENDPOINT', 'value', reference('amw').metrics.prometheusQueryEndpoint), createObject('name', 'AZURE_MONITOR_DCE_ENDPOINT', 'value', reference('dce').metricsIngestion.endpoint), createObject('name', 'AZURE_MONITOR_DCR_IMMUTABLE_ID', 'value', reference('dcr').immutableId), createObject('name', 'CLOUDSMITH_MASTER_KEY', 'secretRef', 'cloudsmith-master-key'), createObject('name', 'CLOUDSMITH_DEPLOYMENT_MODE', 'value', 'paas'), createObject('name', 'CLOUDSMITH_KEY_VAULT_NAME', 'value', variables('kvNameEffective')), createObject('name', 'AZURE_SUBSCRIPTION_ID', 'value', subscription().subscriptionId), createObject('name', 'AZURE_TENANT_ID', 'value', subscription().tenantId), createObject('name', 'CLOUDSMITH_ACA_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'CLOUDSMITH_ACA_APP_NAME', 'value', variables('apiAppNameEffective')), createObject('name', 'CLOUDSMITH_AZURE_REGION', 'value', parameters('location'))), variables('oidcApiEnv')), 'probes', createArray(createObject('type', 'Startup', 'httpGet', createObject('path', '/health/startup', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'initialDelaySeconds', 5, 'periodSeconds', 5, 'failureThreshold', 12), createObject('type', 'Liveness', 'httpGet', createObject('path', '/health/live', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'periodSeconds', 30, 'failureThreshold', 3), createObject('type', 'Readiness', 'httpGet', createObject('path', '/health/ready', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'periodSeconds', 10, 'failureThreshold', 3)))), if(parameters('enablePgBouncer'), createArray(variables('pgBouncerContainer')), createArray()))]",
+                  "containers": "[concat(createArray(createObject('name', 'cloudgrange-api', 'image', variables('apiImage'), 'resources', createObject('cpu', json(parameters('apiAppCpu')), 'memory', parameters('apiAppMemory')), 'env', union(createArray(createObject('name', 'ASPNETCORE_ENVIRONMENT', 'value', 'Production'), createObject('name', 'ConnectionStrings__Default', 'secretRef', 'pg-password'), createObject('name', 'ConnectionStrings__DefaultHost', 'value', variables('dbHost')), createObject('name', 'ConnectionStrings__DefaultDatabase', 'value', parameters('postgresDatabaseName')), createObject('name', 'ConnectionStrings__DefaultUser', 'value', parameters('postgresAdminUser')), createObject('name', 'ApplicationInsights__ConnectionString', 'secretRef', 'appinsights-connection-string'), createObject('name', 'AZURE_CLIENT_ID', 'value', if(empty(variables('byoMiId')), reference('newMi').clientId, reference('existingMi').clientId)), createObject('name', 'Monitoring__Endpoints__1__HealthUrl', 'value', format('https://{0}.{1}', variables('portalAppNameEffective'), if(empty(variables('byoCaeId')), reference('newCae').defaultDomain, reference('existingCae').defaultDomain))), createObject('name', 'AZURE_MONITOR_WORKSPACE_ENDPOINT', 'value', reference('amw').metrics.prometheusQueryEndpoint), createObject('name', 'AZURE_MONITOR_DCE_ENDPOINT', 'value', reference('dce').metricsIngestion.endpoint), createObject('name', 'AZURE_MONITOR_DCR_IMMUTABLE_ID', 'value', reference('dcr').immutableId), createObject('name', 'CLOUDGRANGE_MASTER_KEY', 'secretRef', 'cloudgrange-master-key'), createObject('name', 'CLOUDGRANGE_DEPLOYMENT_MODE', 'value', 'paas'), createObject('name', 'CLOUDGRANGE_KEY_VAULT_NAME', 'value', variables('kvNameEffective')), createObject('name', 'AZURE_SUBSCRIPTION_ID', 'value', subscription().subscriptionId), createObject('name', 'AZURE_TENANT_ID', 'value', subscription().tenantId), createObject('name', 'CLOUDGRANGE_ACA_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'CLOUDGRANGE_ACA_APP_NAME', 'value', variables('apiAppNameEffective')), createObject('name', 'CLOUDGRANGE_AZURE_REGION', 'value', parameters('location'))), variables('oidcApiEnv')), 'probes', createArray(createObject('type', 'Startup', 'httpGet', createObject('path', '/health/startup', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'initialDelaySeconds', 5, 'periodSeconds', 5, 'failureThreshold', 12), createObject('type', 'Liveness', 'httpGet', createObject('path', '/health/live', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'periodSeconds', 30, 'failureThreshold', 3), createObject('type', 'Readiness', 'httpGet', createObject('path', '/health/ready', 'port', parameters('apiAppTargetPort'), 'scheme', 'HTTP'), 'periodSeconds', 10, 'failureThreshold', 3)))), if(parameters('enablePgBouncer'), createArray(variables('pgBouncerContainer')), createArray()))]",
                   "scale": {
                     "minReplicas": "[parameters('apiAppMinReplicas')]",
                     "maxReplicas": "[parameters('apiAppMaxReplicas')]",
@@ -1984,7 +1984,7 @@
                 "template": {
                   "containers": [
                     {
-                      "name": "cloudsmith-portal",
+                      "name": "cloudgrange-portal",
                       "image": "[variables('portalImage')]",
                       "resources": {
                         "cpu": "[json(parameters('portalAppCpu'))]",
@@ -1992,27 +1992,27 @@
                       },
                       "env": [
                         {
-                          "name": "CLOUDSMITH_API_URL",
+                          "name": "CLOUDGRANGE_API_URL",
                           "value": ""
                         },
                         {
-                          "name": "CLOUDSMITH_AUTH_URL",
+                          "name": "CLOUDGRANGE_AUTH_URL",
                           "value": "[variables('entraAuthority')]"
                         },
                         {
-                          "name": "CLOUDSMITH_API_UPSTREAM",
+                          "name": "CLOUDGRANGE_API_UPSTREAM",
                           "value": "[format('https://{0}', reference('apiApp').configuration.ingress.fqdn)]"
                         },
                         {
-                          "name": "CLOUDSMITH_API_HOST",
+                          "name": "CLOUDGRANGE_API_HOST",
                           "value": "[reference('apiApp').configuration.ingress.fqdn]"
                         },
                         {
-                          "name": "CLOUDSMITH_FWD_PROTO",
+                          "name": "CLOUDGRANGE_FWD_PROTO",
                           "value": "https"
                         },
                         {
-                          "name": "CLOUDSMITH_API_INTERNAL_URL",
+                          "name": "CLOUDGRANGE_API_INTERNAL_URL",
                           "value": "[format('https://{0}', reference('apiApp').configuration.ingress.fqdn)]"
                         }
                       ],
@@ -2131,7 +2131,7 @@
               "condition": "[parameters('enableAlertRules')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
-              "name": "cloudsmith-alerts",
+              "name": "cloudgrange-alerts",
               "properties": {
                 "expressionEvaluationOptions": {
                   "scope": "inner"
@@ -2267,7 +2267,7 @@
                       "location": "Global",
                       "tags": "[parameters('allTagsBase')]",
                       "properties": {
-                        "description": "CloudSmith API container app restarted more than 3 times in 15 minutes (crash loop).",
+                        "description": "CloudGrange API container app restarted more than 3 times in 15 minutes (crash loop).",
                         "severity": 1,
                         "enabled": true,
                         "scopes": [
@@ -2306,7 +2306,7 @@
                       "location": "Global",
                       "tags": "[parameters('allTagsBase')]",
                       "properties": {
-                        "description": "CloudSmith Portal container app restarted more than 3 times in 15 minutes (crash loop).",
+                        "description": "CloudGrange Portal container app restarted more than 3 times in 15 minutes (crash loop).",
                         "severity": 2,
                         "enabled": true,
                         "scopes": [
@@ -2345,7 +2345,7 @@
                       "location": "Global",
                       "tags": "[parameters('allTagsBase')]",
                       "properties": {
-                        "description": "CloudSmith PostgreSQL CPU > 80% for 10 minutes.",
+                        "description": "CloudGrange PostgreSQL CPU > 80% for 10 minutes.",
                         "severity": 2,
                         "enabled": true,
                         "scopes": [
@@ -2384,7 +2384,7 @@
                       "location": "Global",
                       "tags": "[parameters('allTagsBase')]",
                       "properties": {
-                        "description": "CloudSmith PostgreSQL storage > 80%.",
+                        "description": "CloudGrange PostgreSQL storage > 80%.",
                         "severity": 1,
                         "enabled": true,
                         "scopes": [
@@ -2423,7 +2423,7 @@
                       "location": "Global",
                       "tags": "[parameters('allTagsBase')]",
                       "properties": {
-                        "description": "CloudSmith Key Vault is receiving throttled requests (HTTP 429).",
+                        "description": "CloudGrange Key Vault is receiving throttled requests (HTTP 429).",
                         "severity": 2,
                         "enabled": true,
                         "scopes": [
@@ -2541,7 +2541,7 @@
       "condition": "[parameters('enablePolicyAssignments')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "cloudsmith-policy",
+      "name": "cloudgrange-policy",
       "resourceGroup": "[variables('rgNameEffective')]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -2604,7 +2604,7 @@
               "name": "[format('cs-kv-key-expiry-{0}', parameters('environment'))]",
               "location": "[parameters('location')]",
               "properties": {
-                "displayName": "CloudSmith — KV keys should have expiration date",
+                "displayName": "CloudGrange — KV keys should have expiration date",
                 "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/5ff38825-c5d8-47c5-b70e-069a21955146",
                 "parameters": {
                   "minimumDaysBeforeExpiration": {
@@ -2619,7 +2619,7 @@
               "name": "[format('cs-kv-firewall-{0}', parameters('environment'))]",
               "location": "[parameters('location')]",
               "properties": {
-                "displayName": "CloudSmith — KV should have firewall enabled (Audit; Deny post-Phase-V)",
+                "displayName": "CloudGrange — KV should have firewall enabled (Audit; Deny post-Phase-V)",
                 "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/55615ac9-af46-4a59-874e-391cc3dfb490",
                 "parameters": {}
               }
@@ -2630,7 +2630,7 @@
               "name": "[format('cs-pg-public-{0}', parameters('environment'))]",
               "location": "[parameters('location')]",
               "properties": {
-                "displayName": "CloudSmith — PG public network access should be disabled (Audit; Deny post-Phase-V)",
+                "displayName": "CloudGrange — PG public network access should be disabled (Audit; Deny post-Phase-V)",
                 "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/c9299215-ae47-4f50-9c54-8a392f68a052",
                 "parameters": {}
               }
@@ -2645,7 +2645,7 @@
               "name": "[format('cs-tag-{0}-{1}', toLower(variables('requiredTags')[copyIndex()]), parameters('environment'))]",
               "location": "[parameters('location')]",
               "properties": {
-                "displayName": "[format('CloudSmith — require tag {0}', variables('requiredTags')[copyIndex()])]",
+                "displayName": "[format('CloudGrange — require tag {0}', variables('requiredTags')[copyIndex()])]",
                 "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/871b6d14-10aa-478d-b590-94f262ecfa99",
                 "parameters": {
                   "tagName": {

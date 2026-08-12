@@ -1,6 +1,6 @@
 #Requires -Version 5.1
-# Invoke-InstallerTest.ps1 — Repeatable CloudSmith installer test runner
-# Deploys a fresh test VM (or reuses existing), runs Install-CloudSmith.ps1
+# Invoke-InstallerTest.ps1 — Repeatable CloudGrange installer test runner
+# Deploys a fresh test VM (or reuses existing), runs Install-CloudGrange.ps1
 # as the local admin (not SYSTEM), streams the log, reports pass/fail.
 #
 # Usage:
@@ -13,7 +13,7 @@ param(
     [ValidateSet('Online','Bundled','Appliance')]
     [string]$Mode = 'Online',
 
-    [string]$ResourceGroup = 'rg-cs-online-001',
+    [string]$ResourceGroup = 'rg-cg-online-001',
     [string]$VmName        = 'vmonline001',
     [string]$Location      = 'eastus2',
 
@@ -76,12 +76,12 @@ if ($Fresh) {
 # ── 3. Build the installer run-command script ─────────────────────────────────
 Write-Host "Preparing installer run-command (Mode=$Mode, running as $AdminUser)..." -ForegroundColor Cyan
 
-$logPath = 'C:\CloudSmithInstall\install.log'
-$installDir = 'C:\CloudSmithInstall'
-$raw = 'https://raw.githubusercontent.com/cloudsmith-cloud/cloudsmith-installer/main'
+$logPath = 'C:\CloudGrangeInstall\install.log'
+$installDir = 'C:\CloudGrangeInstall'
+$raw = 'https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main'
 
-$scripts = @('CloudSmith-Common.ps1','CloudSmith-Prereqs.ps1','New-CloudSmithVm.ps1',
-             'Install-DockerCe.ps1','Initialize-CloudSmith.ps1','Deploy-DockerCompose.ps1',
+$scripts = @('CloudGrange-Common.ps1','CloudGrange-Prereqs.ps1','New-CloudGrangeVm.ps1',
+             'Install-DockerCe.ps1','Initialize-CloudGrange.ps1','Deploy-DockerCompose.ps1',
              'Register-EntraApp.ps1')
 
 # Root-level support scripts referenced by the scripts/ directory (relative path ..\)
@@ -96,7 +96,7 @@ $composeFiles = @(
     'compose/loki-config.yml',
     'compose/otel-collector.yml',
     'compose/prometheus.yml',
-    'compose/keycloak/cloudsmith-realm.json',
+    'compose/keycloak/cloudgrange-realm.json',
     'compose/nginx/nginx.conf'
 )
 
@@ -117,7 +117,7 @@ New-Item -ItemType Directory -Force '$installDir' | Out-Null
 New-Item -ItemType Directory -Force '$installDir\scripts' | Out-Null
 New-Item -ItemType Directory -Force '$installDir\compose\keycloak' | Out-Null
 New-Item -ItemType Directory -Force '$installDir\compose\nginx' | Out-Null
-foreach (`$f in @('Install-CloudSmith.ps1','cloudsmith-installer.sha256')) {
+foreach (`$f in @('Install-CloudGrange.ps1','cloudgrange-installer.sha256')) {
     Invoke-WebRequest -Uri '$raw/`$f' -OutFile '$installDir\`$f' -UseBasicParsing
 }
 foreach (`$f in @('$($scripts -join "','")')) {
@@ -133,23 +133,23 @@ foreach (`$f in @('$($composeFiles -join "','")')) {
 Write-Host "Scripts downloaded."
 
 # Register scheduled task to run installer as $AdminUser (not SYSTEM)
-`$taskArg = "-NonInteractive -ExecutionPolicy Bypass -Command & '$installDir\Install-CloudSmith.ps1' -Mode $Mode -VmIp 192.168.100.10 -AcceptDefaults *> '$logPath'"
+`$taskArg = "-NonInteractive -ExecutionPolicy Bypass -Command & '$installDir\Install-CloudGrange.ps1' -Mode $Mode -VmIp 192.168.100.10 -AcceptDefaults *> '$logPath'"
 `$action    = New-ScheduledTaskAction -Execute `$pwshPath -Argument `$taskArg
 `$principal = New-ScheduledTaskPrincipal -UserId ".\$AdminUser" -LogonType Password -RunLevel Highest
-Register-ScheduledTask -TaskName 'CloudSmithInstall' -Action `$action -Principal `$principal -Password `$AdminPassword -Force | Out-Null
+Register-ScheduledTask -TaskName 'CloudGrangeInstall' -Action `$action -Principal `$principal -Password `$AdminPassword -Force | Out-Null
 Write-Host "Starting installer as $AdminUser..."
-Start-ScheduledTask -TaskName 'CloudSmithInstall'
+Start-ScheduledTask -TaskName 'CloudGrangeInstall'
 
 # Poll until the task finishes (up to 50 minutes)
 `$timeout = 3000; `$elapsed = 0
 while (`$elapsed -lt `$timeout) {
-    `$state = (Get-ScheduledTask -TaskName 'CloudSmithInstall' -ErrorAction SilentlyContinue).State
+    `$state = (Get-ScheduledTask -TaskName 'CloudGrangeInstall' -ErrorAction SilentlyContinue).State
     if (`$state -ne 'Running') { break }
     Start-Sleep -Seconds 15; `$elapsed += 15
     Write-Host "  ...still running (`${elapsed}s elapsed)"
 }
-`$exitCode = (Get-ScheduledTaskInfo -TaskName 'CloudSmithInstall').LastTaskResult
-Unregister-ScheduledTask -TaskName 'CloudSmithInstall' -Confirm:`$false -ErrorAction SilentlyContinue
+`$exitCode = (Get-ScheduledTaskInfo -TaskName 'CloudGrangeInstall').LastTaskResult
+Unregister-ScheduledTask -TaskName 'CloudGrangeInstall' -Confirm:`$false -ErrorAction SilentlyContinue
 
 Write-Host "=== INSTALLER LOG ==="
 if (Test-Path '$logPath') { Get-Content '$logPath' } else { Write-Host "(no log file)" }

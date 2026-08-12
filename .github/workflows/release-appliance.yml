@@ -1,10 +1,10 @@
 name: Release Appliance
-# Builds the CloudSmith Appliance VHDX on v*.*.* tag push (AB#1858).
+# Builds the CloudGrange Appliance VHDX on v*.*.* tag push (AB#1858).
 # Requires a Windows self-hosted runner with Hyper-V enabled.
 #
 # The appliance is built by:
-#   1. Running Install-CloudSmith.ps1 in Online mode to create a working cloudsmith-docker VM.
-#   2. Calling Build-CloudSmithAppliance.ps1 to export, compact, and sign the VHDX.
+#   1. Running Install-CloudGrange.ps1 in Online mode to create a working cloudgrange-docker VM.
+#   2. Calling Build-CloudGrangeAppliance.ps1 to export, compact, and sign the VHDX.
 #   3. Attaching the VHDX + SHA-256 manifest + cosign signature to the GitHub Release.
 #
 # NOTE: GitHub-hosted runners do not support Hyper-V. A self-hosted Windows runner
@@ -28,7 +28,7 @@ jobs:
     runs-on: [self-hosted, windows, hyper-v]
     timeout-minutes: 120
     env:
-      APPLIANCE_OUTPUT: C:\CloudSmithAppliance
+      APPLIANCE_OUTPUT: C:\CloudGrangeAppliance
     steps:
       - uses: actions/checkout@v4
 
@@ -46,12 +46,12 @@ jobs:
       - name: Run Online installer to build source VM
         shell: pwsh
         run: |
-          .\Install-CloudSmith.ps1 -Mode Online -AcceptDefaults
+          .\Install-CloudGrange.ps1 -Mode Online -AcceptDefaults
 
       - name: Export and sign appliance VHDX
         shell: pwsh
         run: |
-          .\Build-CloudSmithAppliance.ps1 `
+          .\Build-CloudGrangeAppliance.ps1 `
             -OutputPath '${{ env.APPLIANCE_OUTPUT }}' `
             -Version '${{ steps.version.outputs.version }}'
 
@@ -64,9 +64,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.APPLIANCE_OUTPUT }}/cloudsmith-appliance-${{ steps.version.outputs.version }}.vhdx
-            ${{ env.APPLIANCE_OUTPUT }}/cloudsmith-appliance-${{ steps.version.outputs.version }}.vhdx.sha256
-            ${{ env.APPLIANCE_OUTPUT }}/cloudsmith-appliance-${{ steps.version.outputs.version }}.vhdx.sig
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx.sha256
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx.sig
           tag_name: ${{ github.ref_name }}
           fail_on_unmatched_files: false
 
@@ -77,5 +77,5 @@ jobs:
           if (Test-Path '${{ env.APPLIANCE_OUTPUT }}') {
             Remove-Item '${{ env.APPLIANCE_OUTPUT }}' -Recurse -Force -ErrorAction SilentlyContinue
           }
-          Stop-VM -Name cloudsmith-docker -Force -ErrorAction SilentlyContinue
-          Remove-VM -Name cloudsmith-docker -Force -ErrorAction SilentlyContinue
+          Stop-VM -Name cloudgrange-docker -Force -ErrorAction SilentlyContinue
+          Remove-VM -Name cloudgrange-docker -Force -ErrorAction SilentlyContinue

@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Get-TestKvSecrets.ps1 — List all secrets whose names start with "test-" in kv-hcs-vault-01.

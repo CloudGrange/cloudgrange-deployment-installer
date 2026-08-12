@@ -1,0 +1,16 @@
+-----BEGIN PUBLIC KEY-----
+PLACEHOLDER — replace with the actual CloudGrange release signing public key.
+
+This file is checked in as a placeholder so that:
+  1. Import-CloudGrangeAppliance.ps1 can locate the key at a known path.
+  2. CI can validate that the key file exists before publishing a release.
+
+The real key is managed in the CloudGrange release pipeline and stored in
+kv-hcs-vault-01 (secret: cloudgrange-appliance-signing-pubkey).
+
+To regenerate a key pair with cosign:
+  cosign generate-key-pair --output-key-prefix cloudgrange-signing-key
+
+The resulting cloudgrange-signing-key.key (private) stays in Key Vault only.
+The cloudgrange-signing-key.pub (this file) is committed to the installer repo.
+-----END PUBLIC KEY-----

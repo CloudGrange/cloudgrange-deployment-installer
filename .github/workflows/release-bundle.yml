@@ -1,7 +1,7 @@
 name: Release Bundle
 # Builds the air-gap bundled distribution ZIP on v*.*.* tag push (AB#1586, AB#1587).
 # The bundle contains all container images as .tar files, cloud-init templates,
-# and Install-CloudSmith.ps1 — sufficient to install CloudSmith with no internet access.
+# and Install-CloudGrange.ps1 — sufficient to install CloudGrange with no internet access.
 on:
   push:
     tags:
@@ -14,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IMAGES: |
-        ghcr.io/cloudsmith-cloud/cloudsmith-api:latest
-        ghcr.io/cloudsmith-cloud/cloudsmith-portal:latest
-        ghcr.io/cloudsmith-cloud/cloudsmith-relay:latest
+        ghcr.io/cloudgrange-cloud/cloudgrange-api:latest
+        ghcr.io/cloudgrange-cloud/cloudgrange-portal:latest
+        ghcr.io/cloudgrange-cloud/cloudgrange-relay:latest
     steps:
       - uses: actions/checkout@v4
 
@@ -48,10 +48,10 @@ jobs:
 
       - name: Copy installer files into bundle
         run: |
-          cp Install-CloudSmith.ps1   bundle/
+          cp Install-CloudGrange.ps1   bundle/
           cp verify-bundle.ps1        bundle/
-          cp Uninstall-CloudSmith.ps1 bundle/ 2>/dev/null || true
-          cp Update-CloudSmith.ps1    bundle/ 2>/dev/null || true
+          cp Uninstall-CloudGrange.ps1 bundle/ 2>/dev/null || true
+          cp Update-CloudGrange.ps1    bundle/ 2>/dev/null || true
           cp -r scripts/              bundle/scripts/
           cp -r compose/              bundle/compose/
 
@@ -68,7 +68,7 @@ jobs:
       - name: Create bundle ZIP
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          ZIP_NAME="Install-CloudSmith-Bundled.zip"
+          ZIP_NAME="Install-CloudGrange-Bundled.zip"
           cd bundle
           zip -r "../${ZIP_NAME}" .
           cd ..
@@ -78,14 +78,14 @@ jobs:
 
       - name: Verify bundle integrity
         run: |
-          pwsh -Command ".\verify-bundle.ps1 -BundlePath 'Install-CloudSmith-Bundled.zip'"
+          pwsh -Command ".\verify-bundle.ps1 -BundlePath 'Install-CloudGrange-Bundled.zip'"
         continue-on-error: false
 
       - name: Attach bundle to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            Install-CloudSmith-Bundled.zip
-            Install-CloudSmith-Bundled.zip.sha256
+            Install-CloudGrange-Bundled.zip
+            Install-CloudGrange-Bundled.zip.sha256
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true

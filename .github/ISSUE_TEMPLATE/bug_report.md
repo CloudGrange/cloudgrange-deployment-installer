@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a defect in CloudSmith installer or on-prem runtime
+about: Report a defect in CloudGrange installer or on-prem runtime
 title: "[BUG] "
 labels: bug
 assignees: ''
@@ -14,7 +14,7 @@ A clear description of what is wrong and what you expected to happen.
 
 | Field | Value |
 |---|---|
-| CloudSmith version | |
+| CloudGrange version | |
 | Install mode | Online / Bundled / Appliance |
 | Host OS | Windows Server 2022 / 2025 |
 | Host type | Physical / Azure VM / On-prem VM |
@@ -38,8 +38,8 @@ What you expected to happen.
 ## Logs
 
 Paste relevant log lines from:
-- **On-prem API:** `docker logs cloudsmith-api`
-- **On-prem Agent:** `C:\ProgramData\CloudSmith\logs\agent-*.log`
+- **On-prem API:** `docker logs cloudgrange-api`
+- **On-prem Agent:** `C:\ProgramData\CloudGrange\logs\agent-*.log`
 - **Installer:** the installer terminal output
 
 ```

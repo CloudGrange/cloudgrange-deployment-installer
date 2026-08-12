@@ -1,6 +1,6 @@
 #Requires -RunAsAdministrator
 #Requires -Version 7.0
-# Copyright 2026 CloudSmith Contributors
+# Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 # AB#1588 — Import pre-built VHDX appliance into Hyper-V (3-minute SLA)
 # AB#1589 — SHA-256 + cosign signature validation before any VM creation
@@ -12,7 +12,7 @@ param(
     [string]$AppliancePath,
 
     # Optional: explicit path to the sha256 manifest. Defaults to <AppliancePath>.sha256
-    # and then falls back to cloudsmith-appliance.sha256 in the same directory.
+    # and then falls back to cloudgrange-appliance.sha256 in the same directory.
     [string]$ChecksumPath = '',
 
     # Optional: explicit path to the cosign signature file.
@@ -20,7 +20,7 @@ param(
     [string]$SignaturePath = '',
 
     # Optional: path to the cosign public key used to verify the signature.
-    # Defaults to cloudsmith-signing-key.pub in the same directory as the VHDX,
+    # Defaults to cloudgrange-signing-key.pub in the same directory as the VHDX,
     # then falls back to the key bundled with the installer.
     [string]$SigningKeyPath = '',
 
@@ -30,12 +30,12 @@ param(
     [switch]$AllowUnsigned,
 
     [string]$VmIp   = '192.168.100.10',
-    [string]$VmName = 'cloudsmith-docker'
+    [string]$VmName = 'cloudgrange-docker'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\scripts\CloudSmith-Common.ps1"
+. "$PSScriptRoot\scripts\CloudGrange-Common.ps1"
 
 $applianceDir = Split-Path $AppliancePath -Parent
 
@@ -48,11 +48,11 @@ if (-not (Test-Path $AppliancePath)) {
     Write-Error "Appliance VHDX not found: $AppliancePath"
 }
 
-# Resolve checksum file: explicit param → <vhdx>.sha256 → cloudsmith-appliance.sha256 in same dir
+# Resolve checksum file: explicit param → <vhdx>.sha256 → cloudgrange-appliance.sha256 in same dir
 $resolvedChecksumPath = $ChecksumPath
 if ([string]::IsNullOrEmpty($resolvedChecksumPath)) {
     $candidate1 = "$AppliancePath.sha256"
-    $candidate2 = Join-Path $applianceDir 'cloudsmith-appliance.sha256'
+    $candidate2 = Join-Path $applianceDir 'cloudgrange-appliance.sha256'
     if (Test-Path $candidate1) {
         $resolvedChecksumPath = $candidate1
     } elseif (Test-Path $candidate2) {
@@ -64,7 +64,7 @@ if ([string]::IsNullOrEmpty($resolvedChecksumPath) -or -not (Test-Path $resolved
     Write-Host ""
     Write-Host "  [ERROR] SHA-256 manifest not found." -ForegroundColor Red
     Write-Host "  Expected at: $AppliancePath.sha256" -ForegroundColor Red
-    Write-Host "           or: $(Join-Path $applianceDir 'cloudsmith-appliance.sha256')" -ForegroundColor Red
+    Write-Host "           or: $(Join-Path $applianceDir 'cloudgrange-appliance.sha256')" -ForegroundColor Red
     Write-Host "  Download the manifest from the same release page as the VHDX." -ForegroundColor Yellow
     Write-Error "Appliance integrity check failed: sha256 manifest is missing. Aborting before any VM creation."
 }
@@ -106,8 +106,8 @@ if ([string]::IsNullOrEmpty($resolvedSigPath)) {
 # Resolve signing key path: explicit → same dir as VHDX → installer dir
 $resolvedKeyPath = $SigningKeyPath
 if ([string]::IsNullOrEmpty($resolvedKeyPath)) {
-    $keyInApplianceDir = Join-Path $applianceDir 'cloudsmith-signing-key.pub'
-    $keyInInstallerDir = Join-Path $PSScriptRoot 'cloudsmith-signing-key.pub'
+    $keyInApplianceDir = Join-Path $applianceDir 'cloudgrange-signing-key.pub'
+    $keyInInstallerDir = Join-Path $PSScriptRoot 'cloudgrange-signing-key.pub'
     if (Test-Path $keyInApplianceDir) {
         $resolvedKeyPath = $keyInApplianceDir
     } elseif (Test-Path $keyInInstallerDir) {
@@ -130,7 +130,7 @@ if ($sigFilePresent) {
     if ([string]::IsNullOrEmpty($resolvedKeyPath) -or -not (Test-Path $resolvedKeyPath)) {
         Write-Host ""
         Write-Host "  [ERROR] Signing key not found — cannot verify the appliance signature." -ForegroundColor Red
-        Write-Host "  Place cloudsmith-signing-key.pub alongside the VHDX or in the installer directory." -ForegroundColor Yellow
+        Write-Host "  Place cloudgrange-signing-key.pub alongside the VHDX or in the installer directory." -ForegroundColor Yellow
         throw "Signing key not found. Signature verification is required by ADR-045. Aborting import."
     }
     Write-Host "  Running: cosign verify-blob --key $resolvedKeyPath --signature $resolvedSigPath $AppliancePath" -ForegroundColor Gray
@@ -165,7 +165,7 @@ if ($sigFilePresent) {
 # AB#1588 Step 3: Create Hyper-V VM from the validated VHDX
 # ---------------------------------------------------------------------------
 Write-Progress-Step "Creating Hyper-V internal switch (if needed)"
-$switchName = 'cloudsmith-internal'
+$switchName = 'cloudgrange-internal'
 if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
     New-VMSwitch -Name $switchName -SwitchType Internal | Out-Null
     Write-Host "  Created virtual switch: $switchName" -ForegroundColor Gray
@@ -189,7 +189,7 @@ Set-VMFirmware -VM $vm -SecureBootTemplate 'MicrosoftUEFICertificateAuthority'
 Set-VMFirmware -VM $vm -EnableSecureBoot On
 
 # Open firewall for portal access
-$fwRuleName = 'CloudSmith-Portal-443'
+$fwRuleName = 'CloudGrange-Portal-443'
 if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
     netsh interface portproxy add v4tov4 listenport=443 connectaddress=$VmIp connectport=443 | Out-Null
@@ -202,7 +202,7 @@ if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyCont
 Write-Progress-Step "Starting appliance VM"
 Start-VM -Name $VmName
 
-Write-Host "  Waiting for CloudSmith portal to become reachable (SLA: 3 minutes)..." -ForegroundColor Gray
+Write-Host "  Waiting for CloudGrange portal to become reachable (SLA: 3 minutes)..." -ForegroundColor Gray
 $portalUrl   = "https://$VmIp"
 $slaSeconds  = 180
 $ok          = Wait-ForHttpOk -Url $portalUrl -TimeoutSeconds $slaSeconds
@@ -213,14 +213,14 @@ if (-not $ok) {
     Write-Host ""
     Write-Host "  [ERROR] Portal did not become reachable within 3 minutes." -ForegroundColor Red
     Write-Host "  The appliance VM has been stopped. Check the Hyper-V console for boot errors." -ForegroundColor Red
-    Write-Error "CS-APPL-ERR-001: 3-minute SLA exceeded — portal not reachable at $portalUrl. VM stopped."
+    Write-Error "CG-APPL-ERR-001: 3-minute SLA exceeded — portal not reachable at $portalUrl. VM stopped."
 }
 
 # ---------------------------------------------------------------------------
 # AB#1588 Step 5: Print admin URL and initial setup token
 # ---------------------------------------------------------------------------
 # The appliance emits the initial setup token to the VM's startup log at
-# /var/log/cloudsmith-init.log — retrieve it from the setup-status API endpoint.
+# /var/log/cloudgrange-init.log — retrieve it from the setup-status API endpoint.
 $setupToken = ''
 try {
     $apiBase    = "http://$VmIp:8081"
@@ -234,7 +234,7 @@ try {
 }
 
 Write-Host ""
-Write-Host "  CloudSmith appliance is live!" -ForegroundColor Green
+Write-Host "  CloudGrange appliance is live!" -ForegroundColor Green
 Write-Host "  Portal:  $portalUrl" -ForegroundColor Cyan
 if ($setupToken) {
     # Security: never embed the token in a URL query parameter — it would appear in browser

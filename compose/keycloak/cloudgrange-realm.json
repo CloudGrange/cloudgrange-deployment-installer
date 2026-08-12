@@ -1,7 +1,7 @@
 {
-  "realm": "cloudsmith",
+  "realm": "cloudgrange",
   "enabled": true,
-  "displayName": "CloudSmith",
+  "displayName": "CloudGrange",
   "sslRequired": "none",
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
@@ -19,8 +19,8 @@
   },
   "clients": [
     {
-      "clientId": "cloudsmith-portal",
-      "name": "CloudSmith Portal",
+      "clientId": "cloudgrange-portal",
+      "name": "CloudGrange Portal",
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
@@ -68,8 +68,8 @@
       ]
     },
     {
-      "clientId": "cloudsmith-api",
-      "name": "CloudSmith API",
+      "clientId": "cloudgrange-api",
+      "name": "CloudGrange API",
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
@@ -77,14 +77,14 @@
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["http://localhost:8081/*", "http://localhost/*", "http://cloudsmith-dev.eastus.cloudapp.azure.com/*", "http://cloudsmith-dev.eastus.cloudapp.azure.com:8081/*"],
+      "redirectUris": ["http://localhost:8081/*", "http://localhost/*", "http://cloudgrange-dev.eastus.cloudapp.azure.com/*", "http://cloudgrange-dev.eastus.cloudapp.azure.com:8081/*"],
       "protocol": "openid-connect"
     }
   ],
   "users": [
     {
-      "username": "admin@cloudsmith.local",
-      "email": "admin@cloudsmith.local",
+      "username": "admin@cloudgrange.local",
+      "email": "admin@cloudgrange.local",
       "enabled": true,
       "emailVerified": true,
       "credentials": [

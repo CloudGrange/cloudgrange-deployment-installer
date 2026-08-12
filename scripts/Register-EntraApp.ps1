@@ -1,12 +1,12 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Create or update Entra ID app registrations for CloudSmith PaaS (AB#1602).
+    Create or update Entra ID app registrations for CloudGrange PaaS (AB#1602).
 
 .DESCRIPTION
     Creates two app registrations in the target Entra tenant:
-      1. cloudsmith-api — the backend API app (exposes OAuth2 scopes)
-      2. cloudsmith-portal — the SPA client (MSAL public client)
+      1. cloudgrange-api — the backend API app (exposes OAuth2 scopes)
+      2. cloudgrange-portal — the SPA client (MSAL public client)
 
     Idempotent: if the app already exists (by displayName + signInAudience), it is
     updated rather than re-created. The output object contains client IDs and tenant
@@ -19,12 +19,12 @@
     Entra tenant ID (GUID). Defaults to the current az CLI tenant.
 
 .PARAMETER ApiRedirectUri
-    HTTPS URI of the cloudsmith-api ACA app. Used to set allowed audiences and CORS.
-    Example: https://ca-cloudsmith-api-dev-eus-001.azurecontainerapps.io
+    HTTPS URI of the cloudgrange-api ACA app. Used to set allowed audiences and CORS.
+    Example: https://ca-cloudgrange-api-dev-eus-001.azurecontainerapps.io
 
 .PARAMETER PortalRedirectUri
     HTTPS redirect URI for the portal SPA. Must end with /auth/callback.
-    Example: https://ca-cloudsmith-portal-dev-eus-001.azurecontainerapps.io/auth/callback
+    Example: https://ca-cloudgrange-portal-dev-eus-001.azurecontainerapps.io/auth/callback
 
 .PARAMETER OutputFile
     Optional path to write output as JSON. Useful for piping into azd env set.
@@ -32,8 +32,8 @@
 .EXAMPLE
     .\Register-EntraApp.ps1 `
         -TenantId 00000000-0000-0000-0000-000000000000 `
-        -ApiRedirectUri https://ca-cloudsmith-api-dev-eus-001.azurecontainerapps.io `
-        -PortalRedirectUri https://ca-cloudsmith-portal-dev-eus-001.azurecontainerapps.io/auth/callback
+        -ApiRedirectUri https://ca-cloudgrange-api-dev-eus-001.azurecontainerapps.io `
+        -PortalRedirectUri https://ca-cloudgrange-portal-dev-eus-001.azurecontainerapps.io/auth/callback
 #>
 [CmdletBinding()]
 param(
@@ -54,9 +54,9 @@ if ([string]::IsNullOrEmpty($TenantId)) {
 }
 Write-Host "Entra tenant: $TenantId"
 
-$ApiAppDisplayName    = 'cloudsmith-api'
-$PortalAppDisplayName = 'cloudsmith-portal'
-$ApiIdentifierUri     = "api://cloudsmith-api/$TenantId"
+$ApiAppDisplayName    = 'cloudgrange-api'
+$PortalAppDisplayName = 'cloudgrange-portal'
+$ApiIdentifierUri     = "api://cloudgrange-api/$TenantId"
 $AccessScopeId        = [System.Guid]::NewGuid().ToString()
 
 # ---------------------------------------------------------------------------
@@ -83,13 +83,13 @@ $apiApp = Get-OrCreateApp -DisplayName $ApiAppDisplayName
 # Set identifier URI + exposed scope (api://)
 Write-Host "Setting identifier URI and exposed scope for API app..."
 $scopeJson = @{
-    adminConsentDescription = 'Access CloudSmith API on behalf of the user'
-    adminConsentDisplayName = 'Access CloudSmith API'
+    adminConsentDescription = 'Access CloudGrange API on behalf of the user'
+    adminConsentDisplayName = 'Access CloudGrange API'
     id                      = $AccessScopeId
     isEnabled               = $true
     type                    = 'User'
-    userConsentDescription  = 'Allow CloudSmith portal to access the API on your behalf'
-    userConsentDisplayName  = 'Access CloudSmith API'
+    userConsentDescription  = 'Allow CloudGrange portal to access the API on your behalf'
+    userConsentDisplayName  = 'Access CloudGrange API'
     value                   = 'access_as_user'
 } | ConvertTo-Json -Compress
 

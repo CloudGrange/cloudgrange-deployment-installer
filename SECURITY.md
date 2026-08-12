@@ -12,7 +12,7 @@
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email **security@cloudsmith.cloud** with:
+Email **security@cloudgrange.cloud** with:
 - A description of the vulnerability and its impact
 - Steps to reproduce or a proof-of-concept (if available)
 - The affected version(s)
@@ -26,9 +26,9 @@ We follow **coordinated disclosure**: we ask that you keep the vulnerability pri
 
 ## Scope
 
-In scope: CloudSmith platform code, CloudSmith SDK, official CloudSmith modules
+In scope: CloudGrange platform code, CloudGrange SDK, official CloudGrange modules
 Out of scope: Third-party dependencies (report to the upstream project directly)
 
 ## PGP key
 
-A PGP public key for encrypted reports is available at `https://cloudsmith.cloud/security.asc`
+A PGP public key for encrypted reports is available at `https://cloudgrange.cloud/security.asc`
