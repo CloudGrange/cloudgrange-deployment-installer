@@ -7,8 +7,8 @@
       {
         "matcher": "Write|Edit",
         "hooks": [
-          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-installer/.claude/hooks/block-secrets.ps1" },
-          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-installer/.claude/hooks/validate-path.ps1" }
+          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-deployment-installer/.claude/hooks/block-secrets.ps1" },
+          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-deployment-installer/.claude/hooks/validate-path.ps1" }
         ]
       }
     ],
@@ -16,14 +16,14 @@
       {
         "matcher": "Write|Edit",
         "hooks": [
-          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-installer/.claude/hooks/log-tokens.ps1" }
+          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-deployment-installer/.claude/hooks/log-tokens.ps1" }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-installer/.claude/hooks/summarize-session.ps1" }
+          { "type": "command", "command": "pwsh -NonInteractive -File D:/git/cloudgrange-cloud/cloudgrange-deployment-installer/.claude/hooks/summarize-session.ps1" }
         ]
       }
     ]
@@ -50,7 +50,7 @@
       "Bash(az:*)",
       "Bash(pwsh -NoProfile -Command:*)",
       "Bash(pwsh -NoProfile -File:*)",
-      "Read(//d/git/cloudgrange-cloud/cloudgrange-installer/**)",
+      "Read(//d/git/cloudgrange-cloud/cloudgrange-deployment-installer/**)",
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",

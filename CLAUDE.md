@@ -1,4 +1,4 @@
-# cloudgrange-installer — Claude Code
+# cloudgrange-deployment-installer — Claude Code
 
 @AGENTS.md
 

@@ -1,4 +1,4 @@
-# cloudgrange-installer — Agent instructions
+# cloudgrange-deployment-installer — Agent instructions
 
 <!--
   AGENTS.md is the canonical, cross-tool instruction file for this repo.
@@ -25,7 +25,7 @@ standards, hard rules, and orchestration guidance.
 **At session start, call:**
 
 ```
-bootstrap(repo="cloudgrange-installer", client="<your client: claude-code | codex | gemini | cursor | vscode>")
+bootstrap(repo="cloudgrange-deployment-installer", client="<your client: claude-code | codex | gemini | cursor | vscode>")
 ```
 
 It returns this repo's scope, the applicable hard rules, the index of applicable

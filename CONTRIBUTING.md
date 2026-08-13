@@ -1,4 +1,4 @@
-# Contributing to cloudgrange-installer
+# Contributing to cloudgrange-deployment-installer
 
 Thank you for your interest in contributing to CloudGrange. This project is licensed under [Apache 2.0](LICENSE) and uses the [Developer Certificate of Origin (DCO)](https://developercertificate.org/) instead of a CLA.
 

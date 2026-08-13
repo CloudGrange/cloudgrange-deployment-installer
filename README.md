@@ -1,4 +1,4 @@
-# cloudgrange-installer
+# cloudgrange-deployment-installer
 
 CloudGrange installer — Hyper-V Ubuntu VM + Docker Compose stack provisioning (Online / Bundled / Appliance modes), plus one-click Azure PaaS deployment.
 
@@ -6,7 +6,7 @@ CloudGrange installer — Hyper-V Ubuntu VM + Docker Compose stack provisioning 
 
 Click the button below to deploy CloudGrange to Azure Container Apps in your subscription. A friendly wizard guides you through the required settings — no ARM template knowledge needed.
 
-[![Deploy to Azure](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazure.svg?sanitize=true)](https://portal.azure.com/#blade/Microsoft_Azure_CreateUIDef/CustomDeploymentBlade/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgrange-cloud%2Fcloudgrange-installer%2Fmain%2Fiac%2Fazuredeploy.json/uiFormDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgrange-cloud%2Fcloudgrange-installer%2Fmain%2Fiac%2FcreateUiDefinition.json)
+[![Deploy to Azure](https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/1-CONTRIBUTION-GUIDE/images/deploytoazure.svg?sanitize=true)](https://portal.azure.com/#blade/Microsoft_Azure_CreateUIDef/CustomDeploymentBlade/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgrange-cloud%2Fcloudgrange-deployment-installer%2Fmain%2Fiac%2Fazuredeploy.json/uiFormDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgrange-cloud%2Fcloudgrange-deployment-installer%2Fmain%2Fiac%2FcreateUiDefinition.json)
 
 ### What the wizard asks for
 
@@ -88,14 +88,14 @@ The CloudGrange relay agent runs as a Docker container on any Linux or Windows h
 ### Linux (one-liner)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/install-relay.sh \
+curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-deployment-installer/main/scripts/install-relay.sh \
   | bash -s -- --api-url <URL> --api-key <KEY> --site-id <SITE-ID>
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/install-relay.ps1 `
+irm https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-deployment-installer/main/scripts/install-relay.ps1 `
   | iex  # then supply parameters interactively, or:
 
 .\scripts\install-relay.ps1 -ApiUrl <URL> -ApiKey <KEY> -SiteId <SITE-ID>
@@ -114,7 +114,7 @@ irm https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/ma
 
 ```bash
 # Linux
-curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/uninstall-relay.sh | bash
+curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-deployment-installer/main/scripts/uninstall-relay.sh | bash
 
 # Windows
 .\scripts\uninstall-relay.ps1
@@ -141,7 +141,7 @@ See [iac/README.md](iac/README.md) for full parameter reference, bring-your-own 
 ## Repository structure
 
 ```
-cloudgrange-installer/
+cloudgrange-deployment-installer/
 ├── Install-CloudGrange.ps1      — main entry point (mode selector)
 ├── Update-CloudGrange.ps1       — pull images, rolling restart, run migrations
 ├── Uninstall-CloudGrange.ps1    — stop containers, delete VM/VHDX, cleanup
