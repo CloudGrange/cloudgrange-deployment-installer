@@ -1,33 +1,7 @@
 # Repo intent — cloudgrange-deployment-installer
 
-**CloudGrange installer — Hyper-V Ubuntu VM + Docker Compose stack provisioning (Online / Bundled / Appliance modes), plus one-click Azure PaaS deployment.**
+This component follows the single current product baseline. Existing implementation details remain available in the revision-bound historical document. Future development is selected by the canonical module and milestone plan, not the old phase numbers or availability language.
 
-## What this repo is
+See [current product and release status](https://github.com/CloudGrange/cloudgrange-deployment-installer/blob/main/PRODUCT-STATUS.md). No implementation, runtime test or deployment occurred in this documentation consolidation.
 
-The installer for standalone CloudGrange deployments: provisions a Hyper-V
-Ubuntu VM running a Docker Compose stack, in three modes (Online / Bundled /
-Appliance), plus a one-click "Deploy to Azure" path straight to Azure Container
-Apps via an ARM template wizard (no ARM knowledge required — Administrator
-Password, Environment dev/test/stage/prod, Container Image Tag, etc.).
-
-## Shape
-
-- `Install-CloudGrange.ps1`, `Install-CloudGrange-WSL2.ps1`,
-  `Uninstall-CloudGrange.ps1`, `Update-CloudGrange.ps1` — the operator-facing
-  lifecycle scripts
-- `Build-CloudGrangeAppliance.ps1`, `Import-CloudGrangeAppliance.ps1`,
-  `New-CloudGrangeBundle.ps1` — appliance/bundle build tooling
-- `iac/azuredeploy*.json` — the ARM templates behind the "Deploy to Azure" button
-- `compose/` — the Docker Compose stack definition
-- `cloudgrange-signing-key.pub`, `New-InstallerHash.ps1`, `verify-bundle.ps1` —
-  installer integrity verification
-
-## How it relates to other repos
-
-- Deploys **`cloudgrange-platform-api`**, **`cloudgrange-portal`**, and their
-  dependencies as a packaged stack — this repo doesn't contain that application
-  code itself
-
-## Status
-
-Active — the primary installer for standalone/appliance deployments.
+[Historical document at source revision 473b253b01430153557e2e9823aad88a34ad508a](https://github.com/CloudGrange/cloudgrange-deployment-installer/blob/a8e5827e1b955f43d9997aa52f1a60d48f86b6fd/archive/2026-09-07/repo-intent.md) preserves earlier commands and rationale for that code revision. It is not current target architecture or release guidance.

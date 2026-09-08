@@ -1,34 +1,9 @@
-# Security Policy
+# Security policy
 
-## Supported versions
+Support applies only to published tested compositions: latest patch of the current minor; previous minor critical security/data-loss fixes on a best-effort basis for90days after the next minor release, or upstream support end if earlier. Older versions are unsupported. There is no guaranteed acknowledgement or fix-time SLA.
 
-| Version | Supported |
-|---|---|
-| Latest release | Yes |
-| Previous major | Yes — security patches only |
-| Older | No |
+Do not publish vulnerability details in an ordinary issue. Use this repository's Security tab private reporting option when available. If unavailable, contact the maintainer through their published profile to arrange a private channel before sharing sensitive details. This revision does not certify the availability of historical email or PGP endpoints.
 
-## Reporting a vulnerability
+Reports should identify affected versions, impact and safe reproduction evidence. The maintainer coordinates disclosure and releases an advisory/fix when ready; no automatic90day disclosure or response deadline is imposed here. Dependency vulnerabilities affecting this product are included in triage and coordinated with upstream.
 
-**Do not open a public GitHub issue for security vulnerabilities.**
-
-Email **security@cloudgrange.cloud** with:
-- A description of the vulnerability and its impact
-- Steps to reproduce or a proof-of-concept (if available)
-- The affected version(s)
-- Any suggested fix (optional)
-
-We will acknowledge your report within **2 business days** and provide a timeline for a fix. Once a patch is released, we will credit you in the release notes (unless you request otherwise).
-
-## Disclosure policy
-
-We follow **coordinated disclosure**: we ask that you keep the vulnerability private until a fix is released or 90 days have elapsed, whichever comes first.
-
-## Scope
-
-In scope: CloudGrange platform code, CloudGrange SDK, official CloudGrange modules
-Out of scope: Third-party dependencies (report to the upstream project directly)
-
-## PGP key
-
-A PGP public key for encrypted reports is available at `https://cloudgrange.cloud/security.asc`
+See [product status](PRODUCT-STATUS.md) for release and maintenance scope. Historical promises are archived and superseded.
