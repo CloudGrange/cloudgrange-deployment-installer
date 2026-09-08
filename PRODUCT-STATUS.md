@@ -1,6 +1,6 @@
 # CloudGrange product status
 
-Product planning authority: [canonical CloudGrange package](https://github.com/CloudGrange/cloudgrange-internal/blob/planning/onprem-reset-2026-09-07/pmo/decisions-2026-09-07/README.md) (internal maintainer planning). The public summary below is derived from that baseline; it is not a second roadmap. Public source/build documentation remains usable without private planning or ADO access.
+Product planning authority: [canonical CloudGrange package](https://github.com/CloudGrange/cloudgrange-internal/blob/main/pmo/decisions-2026-09-07/README.md) (internal maintainer planning). The public summary below is derived from that baseline; it is not a second roadmap. Public source/build documentation remains usable without private planning or ADO access.
 
 CloudGrange is one open-source infrastructure management product. The first planned product release installs a local control plane, discovers existing clusters/VMs and safely manages existing workloads through the portal, CLI and PowerShell. The selected first writable qualification target is Windows Server2025 Hyper-V on WSFC. No passing qualification or new release is claimed by this documentation change.
 
