@@ -34,7 +34,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at **conduct@cloudgrange.cloud**. All complaints will be reviewed and investigated promptly and fairly. Reports are reviewed on a best-effort basis; no fixed response-time commitment is made.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at **conduct@cloudgrange.cloud**. All complaints will be reviewed and investigated promptly and fairly. Response time: within 5 business days.
 
 ## Attribution
 

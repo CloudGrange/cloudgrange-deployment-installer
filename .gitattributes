@@ -7,3 +7,5 @@
 *.yaml text eol=lf
 *.json text eol=lf
 *.md text eol=lf
+# Preserve historical documentation bytes for archive hash verification.
+archive/** -text
