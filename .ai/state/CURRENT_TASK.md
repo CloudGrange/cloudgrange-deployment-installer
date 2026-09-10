@@ -1,10 +1,7 @@
-# Current task — preparatory Compact RKE2 experiment
+# Current task — correct actual Linux preflight parsing
 
-Branch feat/m0-compact-rke2-ab8913, isolated worktree D:/tmp/cloudgrange-tppoc-lab-2026-09-10/installer-rke2, based on freshly fetched origin/main dc36006. Existing main/planning worktrees preserved.
+Branch feat/m0-compact-rke2-ab8913. Infrastructure run974 transferred and hashed the original runtime sources/packages, installed pinned PowerShell7.4.19 and invoked the Linux installer Plan. Plan failed before runtime/checkpoint creation because -split bound as a parameter on Invoke-ExperimentNative in the df/free-space expression. No RKE2 install/start occurred.
 
-experiments/compact-rke2 contains pinned RKE2/airgap inputs, a PS7 Linux Plan/Install/Verify experiment, artifact guard tests and explicit acceptance limits. Actual source parses; six artifact guard cases passed and both full original vendor archives passed the actual validator. No Linux execution or task closure yet.
+The corrected expression groups the command result before splitting. Test-PreflightParsing.ps1 executes the actual expression/100GiB predicate with native-output fixtures: the original failed with the same error; corrected LF/CRLF and insufficient-space cases passed. All six actual artifact-guard cases also passed. Package pins/topology are unchanged.
 
-The tppoc Linux management VM boot qualification succeeded in infrastructure pipeline968. Next connect this exact installer source to the existing tppoc pipeline through a pinned ADO mirror checkout, install the pinned PowerShell7.4.19 package via the already qualified SSH path, deliver/hash original archives and sources, run Plan then Install, and inspect actual node/Canal/Traefik behavior. Do not use the archived Docker installer. Upstream topology/trust/backup contract, full experiment measurements, reboot/interruption and blocked-egress tests remain required. Original M0/M1 goal unchanged.
-
-Published source19dbfa83389180715bb2ebfe75c6e0324c91b486 in installer draftPR2 and ADO mirror refs/heads/tppoc-rke2-installer-source. Linux execution remains pending.
-
+Next: publish this owner revision, pin it in the infrastructure config, and run Prepare to execute the corrected Linux Plan. Only a passing actual Plan permits Install. Original974 ZIPf2c682847d5019c85dac209faafa25129d1d6100455dbb71c1a983e7c84e2c24 and host logs are retained. Read-only host inspection confirmed temporary key absence. Upstream design/trust/recovery and all runtime/addon/reboot/blocked-egress/product acceptance remain required; full M0/M1 stays Active.

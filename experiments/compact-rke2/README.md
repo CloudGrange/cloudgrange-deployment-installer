@@ -37,6 +37,9 @@ Local validation:
 
 ```powershell
 ./Test-ArtifactGuards.ps1 -EvidenceDirectory D:/tmp/cloudgrange-artifact-guard-tests
+./Test-PreflightParsing.ps1 -EvidenceDirectory D:/tmp/cloudgrange-preflight-tests
 ```
 
 This executes the actual artifact validator with changed bytes, truncation, missing files, a path escape and a wrong runtime. It does not substitute for the Linux execution tests above.
+
+The preflight regression executes the actual disk-space expression and minimum-space predicate with native-output fixtures. It reproduced the Linux974 failure before the fix: PowerShell bound `-split` as a native-wrapper parameter. Parenthesizing the command result preserves the operator boundary; LF/CRLF output and the100GiB acceptance threshold are tested.

@@ -76,7 +76,7 @@ if ($systemDisk.Count -ne 1 -or $dataDisk.Count -ne 1 -or
 $iptables = (Invoke-ExperimentNative iptables @('--version')).Trim()
 $ntpSynchronized = (Invoke-ExperimentNative timedatectl @('show','--property=NTPSynchronized','--value')).Trim()
 if ($ntpSynchronized -ne 'yes') { throw 'Management time synchronization is not established.' }
-$freeData = (Invoke-ExperimentNative df @('-B1','--output=avail',$config.data_mount) -split "`n")[-1].Trim()
+$freeData = ((Invoke-ExperimentNative df @('-B1','--output=avail',$config.data_mount)) -split "`n")[-1].Trim()
 if ([long]$freeData -lt 100GB) { throw 'Experiment data volume needs at least100GiB free headroom.' }
 
 $requestHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(
