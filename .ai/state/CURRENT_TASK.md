@@ -1,12 +1,7 @@
-# Current task
+# Current task — preparatory Compact RKE2 experiment
 
-<!-- What is being worked on right now. Keep it short; update as work moves. -->
+Branch feat/m0-compact-rke2-ab8913, isolated worktree D:/tmp/cloudgrange-tppoc-lab-2026-09-10/installer-rke2, based on freshly fetched origin/main dc36006. Existing main/planning worktrees preserved.
 
-_Nothing yet - this repo was just onboarded onto the multi-model standard._
+experiments/compact-rke2 contains pinned RKE2/airgap inputs, a PS7 Linux Plan/Install/Verify experiment, artifact guard tests and explicit acceptance limits. Actual source parses; six artifact guard cases passed and both full original vendor archives passed the actual validator. No Linux execution or task closure yet.
 
-<!--
-  Optional advisory model hint the next tool should honour if available.
-  Never overrides an explicit per-session model flag the operator has set.
-  Example: suggested-model: opus
--->
-<!-- suggested-model:  -->
+The tppoc Linux management VM boot qualification succeeded in infrastructure pipeline968. Next connect this exact installer source to the existing tppoc pipeline through a pinned ADO mirror checkout, install the pinned PowerShell7.4.19 package via the already qualified SSH path, deliver/hash original archives and sources, run Plan then Install, and inspect actual node/Canal/Traefik behavior. Do not use the archived Docker installer. Upstream topology/trust/backup contract, full experiment measurements, reboot/interruption and blocked-egress tests remain required. Original M0/M1 goal unchanged.

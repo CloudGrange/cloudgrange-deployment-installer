@@ -1,16 +1,15 @@
-# Handoff
+# Handoff — 2026-09-10 Compact runtime preparation
 
-<!--
-  Written at the END of every session by whichever tool was used.
-  This is the single most important cross-tool file — the next session
-  (possibly a different tool) starts by reading it.
--->
+Prepared an isolated worktree from current origin/main dc36006; did not change the old local main or historical planning worktree. Branch feat/m0-compact-rke2-ab8913. Installer owns canonical8085/8913–8915; the lab infrastructure owner supplies the dedicated VM and transport.
 
-## Last session
+Changes: experiments/compact-rke2/artifacts.json, tppoc.example.json, Invoke-CompactRke2Experiment.ps1, Test-ArtifactGuards.ps1, README.md and these state files. RKE2 v1.36.4+rke2r1, Canal v3.32.1-build2026082700, Traefik/CRD40.1.010 pinned against exact vendor tag/release. Binary tar SHA7bcbd3167d6947e1d79cdf722acdc740b28021fefb50dd5b974a1980776d4079; image archive801412840 bytes SHA03b82bfa0eb5df65fdedbac17c4a16a1c436d087d0026f1f172f486c27449cbb; extracted executable SHAaa7eea8ec905b89ec9a91443cbe96ddb6cd0fc7d15e422380e192b011e4e130b. Original vendor archive bytes retained in lab scratch compact-runtime-candidate; both release asset digests and checksum manifest checked.
 
-- **What changed and why:** Initial multi-model scaffold onboarding (AGENTS.md, CLAUDE.md shim, Codex/Copilot config, .mcp.json, .ai/ workspace).
-- **Files touched:** AGENTS.md, CLAUDE.md, .codex/config.toml, .github/copilot-instructions.md, .mcp.json, .ai/*
-- **Commands / tests run and results:** N/A - scaffold only
-- **Branch:** main — committed: yes — pushed: no
-- **Blockers:** None
-- **Exact next steps:** Fill in .ai/memory/PROJECT_CONTEXT.md and .ai/memory/COMMANDS.md with real repo-specific detail.
+PS7 experiment validates all original artifact bytes before creating installation state, checks Linux/root/Ubuntu24.04/x64/hostname/address/8CPU32GiB/system+data layout/iptables/time/free-data headroom, uses the supported vendor tarball layout and shipped systemd units, and preserves a request-bound checkpoint. Unknown or changed existing runtime is rejected without removal. A matching installed binary is hashed rather than overwritten.20-minute API/node readiness threshold; original files/state retained on failure. Node/pod/HelmChart observations are saved locally; no kubeconfig or token content returned. Addon, restart, blocked-egress, HA and product qualification remain explicitly false.
+
+Validation: actual PowerShell scripts parse. Six real pre-install validator cases passed (unchanged, same-size alteration, truncation, missing artifact, path escape, wrong version). Actual full downloaded archives also passed this validator. tar member list inspected and exact executable extracted/hash-checked; no Linux binary executed locally. Evidence rke2-artifact-guard-tests/f52ed32e3a3146fab27729fba2dc10ea. Linux runtime execution NOT RUN. No8913/8914/8915 closure claim. No source signature or assembled product qualification yet.
+
+VM supplied by infrastructure: cglab-mgmt01 on cg-hv01, Linux guest172.27.10.20,8CPU32GiB,200GiBOS+256GiBdata mounted/var/lib/rancher. Pipeline968 succeeded22:14:51 UTC after explicit SYSTEM-only temporary SSH key ACL fixed the original966 client rejection. Actual Ubuntu24.04/kernel6.8.0-138-generic, SSH/cloud-init/disks/DNS/HTTPS passed on the original preserved VM. Private key is a pinned tppoc vault reference owned by the infrastructure pipeline; never copy its value into this repo. PowerShell7.4.19 Debian package downloaded/hash-verified but not installed in Linux yet.
+
+Next: publish draft source and immutable ADO mirror branch; add a separate installer checkout to existing infrastructure pipeline21 only for runtime operation, pin both repo versions per run, assert the actual checkout commit, and deliver script/config/artifacts to the VM through the qualified SSH path. Plan must run before Install. Runtime file hashes must bind original downloaded bytes and exact checked-out source. Include a protected transient key file and cleanup; preserve known_hosts and exact VM/request identity. Do not use personal GitHub credentials; GitHub repo is private and must use App token for publishing. ADO mirror avoids inventing new broad GitHub grants for the lab pipeline.
+
+Upstream8084/8907/8908 topology, trust, resource/abort design and recovery-access obligations remain open. Authoritative plan: cloudgrange-internal/pmo/decisions-2026-09-07/m0-task-register.md. After startup qualify all addons/ingress, record footprint/time, reboot/data persistence, interrupted bootstrap, cached operation with public egress denied, safe teardown and promotion into F12. All original M0/M1 gates and owner acceptance remain required. The two Hyper-V clusters are still absent; the scoped FailoverClusters runtime exception is pending/unapproved in the infrastructure repo.
