@@ -33,7 +33,9 @@ The [source980 snapshot review](qualification-980.md) records complete original 
 
 The upstream management topology/preflight contract (AB#8084), dated qualification record and trust/budget/abort design (AB#8907/8908) still need reconciliation in their owning repositories. This fixture does not supply the full proxy/PKI/backup/recovery contract or claim those dependencies closed.
 
-Remaining work includes sustained footprint measurements, interrupted/partial bootstrap and safe recovery, documented teardown/promotion into F12-1, full storage/TLS/PKI contracts and assembled product testing. Public-egress denial has been tested for cached resume of the existing node; a fresh disconnected installation is not qualified. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
+The [teardown and promotion procedure](teardown-and-promotion.md) records evidence/data retention, exact-identity retirement and the remaining F12-1 owner work. No teardown has been executed; this VM remains needed for lab delivery.
+
+Remaining work includes sustained footprint measurements, interrupted/partial bootstrap and safe recovery, full storage/TLS/PKI contracts and assembled product testing. Public-egress denial has been tested for cached resume of the existing node; a fresh disconnected installation is not qualified. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
 
 Local validation:
 
