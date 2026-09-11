@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "profile": "Compact",
+  "qualification": "experiment",
+  "os": "Ubuntu24.04",
+  "architecture": "x86_64",
+  "rke2_version": "v1.36.4+rke2r1",
+  "canal_chart": "v3.32.1-build2026082700",
+  "traefik_chart": "40.1.010",
+  "artifacts": [
+    {
+      "source_uri": "https://github.com/rancher/rke2/releases/download/v1.36.4%2Brke2r1/rke2.linux-amd64.tar.gz",
+      "sha256": "7bcbd3167d6947e1d79cdf722acdc740b28021fefb50dd5b974a1980776d4079",
+      "bytes": 41190955,
+      "name": "rke2.linux-amd64.tar.gz"
+    },
+    {
+      "source_uri": "https://github.com/rancher/rke2/releases/download/v1.36.4%2Brke2r1/rke2-images.linux-amd64.tar.zst",
+      "sha256": "03b82bfa0eb5df65fdedbac17c4a16a1c436d087d0026f1f172f486c27449cbb",
+      "bytes": 801412840,
+      "name": "rke2-images.linux-amd64.tar.zst"
+    }
+  ],
+  "rke2_binary_sha256": "aa7eea8ec905b89ec9a91443cbe96ddb6cd0fc7d15e422380e192b011e4e130b"
+}
