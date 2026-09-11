@@ -29,11 +29,11 @@ The Kubernetes API and exact single node must become Ready within20minutes. A ti
 
 ## Remaining acceptance
 
-The [source980 snapshot review](qualification-980.md) records complete original evidence recovered by infrastructure collection981:12 ready running pods,8 completed installer jobs and the actual8 embedded chart versions. Two installer jobs had historical retries. Functional networking and recovery remain unqualified. `Measure-CompactRuntimeSnapshot.ps1` reproduces the review without changing the frozen installer inputs.
+The [source980 snapshot review](qualification-980.md) records complete original evidence recovered by infrastructure collection981:12 ready running pods,8 completed installer jobs and the actual8 embedded chart versions. Two installer jobs had historical retries. `Measure-CompactRuntimeSnapshot.ps1` reproduces the review without changing the frozen installer inputs. Subsequent [runtime qualification](qualification-986.md) records successful reboot persistence983, post-reboot functional DNS/HTTP984 and cached resume with public egress denied986. These results do not establish application backup/recovery or full product acceptance.
 
 The upstream management topology/preflight contract (AB#8084), dated qualification record and trust/budget/abort design (AB#8907/8908) still need reconciliation in their owning repositories. This fixture does not supply the full proxy/PKI/backup/recovery contract or claim those dependencies closed.
 
-After initial startup, verify exact deployed components, DNS/ingress and persistent data; measure install time and footprint; restart the management VM and verify configuration/data; run the cached-artifact experiment with public egress denied; exercise interrupted bootstrap and safe recovery; retain full evidence and documented teardown. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
+Remaining work includes sustained footprint measurements, interrupted/partial bootstrap and safe recovery, documented teardown/promotion into F12-1, full storage/TLS/PKI contracts and assembled product testing. Public-egress denial has been tested for cached resume of the existing node; a fresh disconnected installation is not qualified. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
 
 Local validation:
 
