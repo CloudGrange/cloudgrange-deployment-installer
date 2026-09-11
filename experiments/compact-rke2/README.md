@@ -37,7 +37,9 @@ The [teardown and promotion procedure](teardown-and-promotion.md) records eviden
 
 The [five-minute footprint observation](qualification-988.md) completed31 samples with retained original metrics and stable node/runtime identities. Two old network-probe pods were already Failed; it is not an all-pods-healthy or production-sizing result.
 
-Remaining work includes interrupted/partial bootstrap and safe recovery, full storage/TLS/PKI contracts and assembled product testing. Public-egress denial has been tested for cached resume of the existing node; a fresh disconnected installation is not qualified. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
+The [interruption and resume observation](qualification-989.md) killed the original installer process after a persisted runtime_start_requested checkpoint and resumed the unchanged installer to node_ready in4.865195seconds with original state preserved. This covers one boundary on the existing node.
+
+Remaining work includes fresh-install interruption, other bootstrap boundaries and torn writes, full storage/TLS/PKI contracts and assembled product testing. Public-egress denial has been tested for cached resume of the existing node; a fresh disconnected installation is not qualified. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
 
 Local validation:
 
