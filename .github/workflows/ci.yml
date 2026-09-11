@@ -1,51 +1,60 @@
-name: CI
+name: Installer source qualification
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
 permissions:
   contents: read
-  packages: write
-  security-events: write
+
 jobs:
-  dco:
-    if: github.event_name == 'pull_request'
-    uses: cloudgrange-cloud/cloudgrange-workflows/.github/workflows/dco-check.yml@v1.0.0
-  validate:
-    runs-on: windows-latest
+  qualify:
+    # Established CloudGrange fallback pending F01 runner admission.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - name: Validate PowerShell syntax
-        shell: pwsh
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify author signoffs
+        if: github.event_name == 'pull_request'
+        env:
+          DCO_BASE: ${{ github.event.pull_request.base.sha }}
+          DCO_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          $errors = @()
-          Get-ChildItem -Recurse -Filter '*.ps1' | ForEach-Object {
-            $parseErrors = $null
-            $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$parseErrors)
-            if ($parseErrors -and $parseErrors.Count -gt 0) { $errors += "$($_.FullName): $parseErrors" }
+          #Requires -Version 7.0
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference='Stop'
+          if($env:DCO_BASE -notmatch '^[a-f0-9]{40}$' -or $env:DCO_HEAD -notmatch '^[a-f0-9]{40}$'){throw 'Invalid commit range'}
+          $commits=@(git rev-list ($env:DCO_BASE+'..'+$env:DCO_HEAD))
+          if($LASTEXITCODE -ne 0 -or -not $commits.Count){throw 'No proposed commits'}
+          foreach($commit in $commits){
+            $author=git show -s --format='%an <%ae>' $commit
+            if($LASTEXITCODE -ne 0){throw 'Author unavailable'}
+            $trailers=@(git show -s --format='%(trailers:key=Signed-off-by,valueonly)' $commit)
+            if($LASTEXITCODE -ne 0 -or -not @($trailers|Where-Object {$_.Trim() -ieq $author.Trim()}).Count){throw 'Author signoff missing'}
           }
-          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
-      - name: PSScriptAnalyzer
-        shell: pwsh
+      - name: Qualify installer source
+        env:
+          INSTALLER_EVIDENCE: ${{ runner.temp }}/installer-source
         run: |
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
-          if ($results) { $results | Format-Table -AutoSize; exit 1 }
-  docker:
-    if: github.ref == 'refs/heads/main'
-    needs: [validate]
-    uses: cloudgrange-cloud/cloudgrange-workflows/.github/workflows/docker-build-push.yml@v1.0.0
-    with:
-      image-name: cloudgrange-installer
-    secrets: inherit
-  trivy:
-    if: github.ref == 'refs/heads/main'
-    needs: [docker]
-    uses: cloudgrange-cloud/cloudgrange-workflows/.github/workflows/trivy-scan.yml@v1.0.0
-    with:
-      image-ref: ghcr.io/cloudgrange-cloud/cloudgrange-installer:latest
-      # Report-only in CI — do not block the pipeline on CVEs during MVP.
-      # CVEs are visible in the GitHub Security tab via the SARIF upload.
-      fail-on-critical: false
-    secrets: inherit
+          #Requires -Version 7.0
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference='Stop'
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+          ./test/Invoke-InstallerSourceQualification.ps1 -EvidenceDirectory $env:INSTALLER_EVIDENCE
+      - name: Retain original qualification results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installer-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-source
+          if-no-files-found: error
+          retention-days: 30
