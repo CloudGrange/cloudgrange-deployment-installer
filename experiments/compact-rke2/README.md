@@ -1,6 +1,6 @@
 # Compact RKE2 bootstrap experiment
 
-This is preparatory implementation for AB#8913/AB#8914 in the canonical M0 runtime workstream. It has **not run on Linux yet**. No M0 task, runtime profile or CloudGrange installation is qualified by this source. The archived Docker installer is not the selected M0 implementation.
+This implements the initial Compact experiment for AB#8913/AB#8914 in the canonical M0 runtime workstream. Owner revision `8819c5fd808ad5bca9dbeddc70cc6d36773dd5a3` ran successfully on Linux: infrastructure pipeline975 passed preparation,976 installed RKE2 and977/980 verified the existing API and node readiness. Component, recovery and integrated CloudGrange qualification remain open; no M0 task is closed by startup alone.
 
 The initial fixture is the separate tppoc management VM: Ubuntu24.04, eight virtual processors,32GiB memory,200GiB system disk and a separate256GiB ext4 volume at `/var/lib/rancher`. Infrastructure run968 independently verified its actual boot, authenticated SSH, cloud-init, disks, DNS and HTTPS. Its operating-system kernel is `6.8.0-138-generic`. That evidence does not prove RKE2 startup or reboot persistence.
 
@@ -8,7 +8,7 @@ The initial fixture is the separate tppoc management VM: Ubuntu24.04, eight virt
 
 `artifacts.json` pins RKE2 `v1.36.4+rke2r1`, Canal `v3.32.1-build2026082700` and Traefik/CRD `40.1.010`. The [exact vendor chart manifest](https://github.com/rancher/rke2/blob/v1.36.4%2Brke2r1/charts/chart_versions.yaml) and [release component table](https://github.com/rancher/rke2/releases/tag/v1.36.4%2Brke2r1) agree on those versions. [SUSE's support matrix](https://www.suse.com/suse-rke2/support-matrix/all-supported-versions/rke2-v1-36/) includes Ubuntu24.04. Evidence date:2026-09-10.
 
-Both the original binary archive and801412840-byte image archive were acquired and checked against GitHub release asset digests and the vendor checksum manifest. The executable was extracted without execution and hashed independently. Artifacts remain in the lab scratch directory and are not committed. Runtime source/config transport and PowerShell installation on the Linux guest remain to implement and execute. The PowerShell7.4.19 Debian package was separately acquired and verified; it is not yet installed in the VM.
+Both the original binary archive and801412840-byte image archive were acquired and checked against GitHub release asset digests and the vendor checksum manifest. The executable was extracted and hashed independently. Artifacts remain in the lab scratch directory and are not committed. Pipeline975 verified source/config/artifact delivery and actual PowerShell7.4.19 on the original Linux guest before976 installed RKE2. The installation reached API and node readiness in53.12seconds;977 and980 each observed20pods without reinstalling.
 
 The [vendor-supported manual/tarball layout](https://docs.rke2.io/install/methods) supplies the executable and systemd units. The experiment preserves that layout and invokes native tools from PowerShell7. It does not generate a shell installer or execute the vendor uninstall/killall scripts. The original systemd units contain vendor shell hooks. First-party orchestration remains PowerShell7.
 

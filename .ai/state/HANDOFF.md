@@ -1,5 +1,7 @@
 # Handoff — 2026-09-10 Compact runtime preparation
 
+Latest documentation correction: README's stale unexecuted/pre-install statements now reflect successful975 preparation,976 installation and977/980 existing-runtime verification. The older entries below are historical. The deployed owner remains8819c5f; no bootstrap/config/manifest bytes changed. Infrastructure9ecb61d collection981 is tracking readback of source980's full observations; it was in progress when this note was written and must be inspected before claiming completion. Component and full M0/M1 qualification remain open.
+
 Prepared an isolated worktree from current origin/main dc36006; did not change the old local main or historical planning worktree. Branch feat/m0-compact-rke2-ab8913. Installer owns canonical8085/8913–8915; the lab infrastructure owner supplies the dedicated VM and transport.
 
 Changes: experiments/compact-rke2/artifacts.json, tppoc.example.json, Invoke-CompactRke2Experiment.ps1, Test-ArtifactGuards.ps1, README.md and these state files. RKE2 v1.36.4+rke2r1, Canal v3.32.1-build2026082700, Traefik/CRD40.1.010 pinned against exact vendor tag/release. Binary tar SHA7bcbd3167d6947e1d79cdf722acdc740b28021fefb50dd5b974a1980776d4079; image archive801412840 bytes SHA03b82bfa0eb5df65fdedbac17c4a16a1c436d087d0026f1f172f486c27449cbb; extracted executable SHAaa7eea8ec905b89ec9a91443cbe96ddb6cd0fc7d15e422380e192b011e4e130b. Original vendor archive bytes retained in lab scratch compact-runtime-candidate; both release asset digests and checksum manifest checked.
