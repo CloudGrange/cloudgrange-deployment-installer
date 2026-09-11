@@ -35,7 +35,9 @@ The upstream management topology/preflight contract (AB#8084), dated qualificati
 
 The [teardown and promotion procedure](teardown-and-promotion.md) records evidence/data retention, exact-identity retirement and the remaining F12-1 owner work. No teardown has been executed; this VM remains needed for lab delivery.
 
-Remaining work includes sustained footprint measurements, interrupted/partial bootstrap and safe recovery, full storage/TLS/PKI contracts and assembled product testing. Public-egress denial has been tested for cached resume of the existing node; a fresh disconnected installation is not qualified. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
+The [five-minute footprint observation](qualification-988.md) completed31 samples with retained original metrics and stable node/runtime identities. Two old network-probe pods were already Failed; it is not an all-pods-healthy or production-sizing result.
+
+Remaining work includes interrupted/partial bootstrap and safe recovery, full storage/TLS/PKI contracts and assembled product testing. Public-egress denial has been tested for cached resume of the existing node; a fresh disconnected installation is not qualified. Production recovery or HA claims are not proved by this single-node experiment. All original M0/M1 acceptance remains required.
 
 Local validation:
 
