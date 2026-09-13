@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cloudgrange.cloud/schemas/install-checkpoint/v1.json",
+  "title": "CloudGrange installer checkpoint v1",
+  "description": "Closed schema for cg-install-checkpoint-v1 (docs/product-installer-design.md §3.2). The installer validates its own checkpoint.json, checkpoint.prev and checkpoint.tmp on every read; a file that fails this schema is treated as unparsable by the recovery table. Checkpoints carry identities, digests, accessors and paths only, never secrets. previousCheckpointSha256 is 64 zeros exactly when sequence is 1 (enforced by the installer).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "installId",
+    "sequence",
+    "mode",
+    "requestSha256",
+    "compositionSha256",
+    "bomSha256",
+    "catalogPayloadSha256",
+    "productVersion",
+    "attempt",
+    "phase",
+    "phaseState",
+    "phases",
+    "updatedUtc",
+    "previousCheckpointSha256"
+  ],
+  "properties": {
+    "schema": { "const": "cg-install-checkpoint-v1" },
+    "installId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "mode": { "type": "string", "enum": ["Install", "Update", "Rollback", "Restore", "Uninstall"] },
+    "requestSha256": { "$ref": "#/$defs/sha256" },
+    "compositionSha256": {
+      "description": "SHA-256 of release/composition-manifest.json for this installation. The entry script reads it from protected state (outside the bundle) to pin cg-trust verify-tree --composition-sha256 on resume.",
+      "$ref": "#/$defs/sha256"
+    },
+    "bomSha256": { "$ref": "#/$defs/sha256" },
+    "catalogPayloadSha256": { "$ref": "#/$defs/sha256" },
+    "productVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9a-z]+(\\.[0-9a-z]+)*)?$",
+      "maxLength": 128
+    },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "phase": { "$ref": "#/$defs/phaseName" },
+    "phaseState": { "$ref": "#/$defs/phaseState" },
+    "subState": { "$ref": "#/$defs/subState" },
+    "terminal": {
+      "description": "Present once the run reached a terminal state for this request.",
+      "type": "string",
+      "pattern": "^(accepted|failed:(preflight|retrieve|runtime|storage|postgres|vault|identity|migrate|api|portal|gateway|module|handoff))$"
+    },
+    "phases": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/phaseName" },
+      "additionalProperties": { "$ref": "#/$defs/phaseEntry" }
+    },
+    "updatedUtc": { "$ref": "#/$defs/utc" },
+    "previousCheckpointSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,7})?Z$" },
+    "phaseName": {
+      "type": "string",
+      "enum": ["preflight", "retrieve", "runtime", "storage", "postgres", "vault", "identity", "migrate", "api", "portal", "gateway", "module", "handoff"]
+    },
+    "phaseState": { "type": "string", "enum": ["started", "completed", "failed"] },
+    "subState": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+    "reasonCode": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+    "phaseEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "startedUtc"],
+      "properties": {
+        "state": { "$ref": "#/$defs/phaseState" },
+        "subState": { "$ref": "#/$defs/subState" },
+        "startedUtc": { "$ref": "#/$defs/utc" },
+        "completedUtc": { "$ref": "#/$defs/utc" },
+        "failedUtc": { "$ref": "#/$defs/utc" },
+        "reasonCode": { "$ref": "#/$defs/reasonCode" },
+        "outputsSha256": { "$ref": "#/$defs/sha256" },
+        "outputs": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$" },
+          "additionalProperties": { "type": ["string", "integer", "boolean"], "maxLength": 512 }
+        }
+      }
+    }
+  }
+}
