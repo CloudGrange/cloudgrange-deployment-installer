@@ -26,8 +26,11 @@ try {
     if($findings.Count){throw 'PSScriptAnalyzer found errors; inspect retained findings.'}
     & (Join-Path $root 'experiments/compact-rke2/Test-ArtifactGuards.ps1') -EvidenceDirectory (Join-Path $EvidenceDirectory 'artifact-guards')
     & (Join-Path $root 'experiments/compact-rke2/Test-PreflightParsing.ps1') -EvidenceDirectory (Join-Path $EvidenceDirectory 'preflight-parsing')
+    $bomSchema=& (Join-Path $root 'test/Test-ReleaseBomSchema.ps1') -EvidenceDirectory (Join-Path $EvidenceDirectory 'release-bom-schema')
+    if(-not $bomSchema.passed){throw 'Release BOM schema fixtures failed; inspect retained results.'}
     $result.artifact_guard_cases=6
     $result.preflight_parsing_cases=3
+    $result.release_bom_cases=[int]$bomSchema.case_count
     $result.passed=$true
 } catch {
     $result.failure=$_.Exception.Message
