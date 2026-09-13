@@ -1,0 +1,382 @@
+{
+  "schema": "cg-release-bom-v1",
+  "channel": "m0-fixture",
+  "product": {
+    "name": "CloudGrange",
+    "version": "0.1.0-m0.rc1",
+    "releaseTag": "v0.1.0-m0.rc1",
+    "profile": "Compact",
+    "releaseRepository": "CloudGrange/cloudgrange-deployment-installer"
+  },
+  "assembly": {
+    "repository": "CloudGrange/cloudgrange-deployment-installer",
+    "repositoryId": "222",
+    "workflowPath": ".github/workflows/compose.yml",
+    "ref": "refs/heads/main",
+    "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "runId": "333",
+    "runAttempt": 1,
+    "compositionLockSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "issuedAt": 1789200000,
+  "configurationSchema": {
+    "schemaId": "cg-site-config-v1",
+    "kind": "CloudGrangeSiteConfig",
+    "schemaVersion": 1,
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "path": "schemas/site-config-v1.schema.json"
+  },
+  "compatibility": {
+    "installer": {
+      "version": "0.1.0-m0.rc1",
+      "powershellMinimum": "7.4.6"
+    },
+    "verifier": {
+      "minVersion": "0.1.0"
+    },
+    "operatingSystems": [
+      { "id": "ubuntu-24.04", "architecture": "x86_64", "role": "management-node" },
+      { "id": "windows-server-2025", "architecture": "x86_64", "role": "agent-host" }
+    ],
+    "kubernetes": {
+      "distribution": "rke2",
+      "version": "v1.36.4+rke2r1",
+      "cni": "canal@v3.32.1-build2026082700",
+      "ingress": "traefik@40.1.010",
+      "imageInventorySha256": "1212121212121212121212121212121212121212121212121212121212121212"
+    },
+    "postgresql": { "major": 17 },
+    "database": {
+      "schemaVersion": "20260901001",
+      "minCompatibleReaderVersion": "0.1.0-m0.rc1"
+    },
+    "agent": {
+      "version": "0.1.0-m0.rc1",
+      "minSupportedVersion": "0.1.0-m0.rc1"
+    },
+    "module": {
+      "sdkVersion": "0.4.0",
+      "manifestSchema": "cg-module-manifest-v1"
+    },
+    "upgradeFrom": [],
+    "rollbackTo": []
+  },
+  "members": [
+    {
+      "id": "rke2-runtime",
+      "kind": "vendor-archive",
+      "phase": "runtime",
+      "name": "rke2.linux-amd64.tar.gz",
+      "version": "v1.36.4+rke2r1",
+      "os": "linux",
+      "architecture": "amd64",
+      "sha256": "7bcbd3167d6947e1d79cdf722acdc740b28021fefb50dd5b974a1980776d4079",
+      "sizeBytes": 41190955,
+      "candidatePayloadSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "repositoryId": "222",
+        "workflowPath": ".github/workflows/curate-vendor.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "runId": "301",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "https",
+        "uri": "https://github.com/rancher/rke2/releases/download/v1.36.4%2Brke2r1/rke2.linux-amd64.tar.gz",
+        "fileName": "rke2.linux-amd64.tar.gz"
+      },
+      "vendor": {
+        "upstreamName": "rke2",
+        "upstreamVersion": "v1.36.4+rke2r1",
+        "upstreamSource": "https://github.com/rancher/rke2/releases/tag/v1.36.4%2Brke2r1",
+        "upstreamVerification": "vendor-checksum-file",
+        "curatorEvidenceSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "dependsOn": []
+    },
+    {
+      "id": "rke2-images",
+      "kind": "vendor-archive",
+      "phase": "runtime",
+      "name": "rke2-images.linux-amd64.tar.zst",
+      "version": "v1.36.4+rke2r1",
+      "os": "linux",
+      "architecture": "amd64",
+      "sha256": "03b82bfa0eb5df65fdedbac17c4a16a1c436d087d0026f1f172f486c27449cbb",
+      "sizeBytes": 801412840,
+      "candidatePayloadSha256": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "repositoryId": "222",
+        "workflowPath": ".github/workflows/curate-vendor.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "runId": "301",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "https",
+        "uri": "https://github.com/rancher/rke2/releases/download/v1.36.4%2Brke2r1/rke2-images.linux-amd64.tar.zst",
+        "fileName": "rke2-images.linux-amd64.tar.zst"
+      },
+      "vendor": {
+        "upstreamName": "rke2",
+        "upstreamVersion": "v1.36.4+rke2r1",
+        "upstreamSource": "https://github.com/rancher/rke2/releases/tag/v1.36.4%2Brke2r1",
+        "upstreamVerification": "vendor-checksum-file",
+        "curatorEvidenceSha256": "1212121212121212121212121212121212121212121212121212121212121212"
+      },
+      "dependsOn": ["rke2-runtime"]
+    },
+    {
+      "id": "cg-trust",
+      "kind": "verifier",
+      "phase": "preflight",
+      "name": "cg-trust",
+      "version": "0.1.0",
+      "os": "linux",
+      "architecture": "amd64",
+      "sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "sizeBytes": 45000000,
+      "candidatePayloadSha256": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-platform-workflows",
+        "repositoryId": "111",
+        "workflowPath": ".github/workflows/release-trust-cli.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "1111111111111111111111111111111111111111",
+        "runId": "401",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "bundled",
+        "path": "bin/cg-trust"
+      },
+      "evidence": {
+        "sbomSha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+        "licenseNoticeSha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
+      },
+      "dependsOn": []
+    },
+    {
+      "id": "cg-base",
+      "kind": "helm-chart",
+      "phase": "storage",
+      "name": "cg-base",
+      "version": "0.1.0-m0.rc1",
+      "os": "any",
+      "architecture": "any",
+      "sha256": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "sizeBytes": 18000,
+      "candidatePayloadSha256": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "repositoryId": "222",
+        "workflowPath": ".github/workflows/release.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "runId": "302",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "bundled",
+        "path": "charts/cg-base-0.1.0-m0.rc1.tgz"
+      },
+      "evidence": {
+        "sbomSha256": "b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3"
+      },
+      "dependsOn": ["rke2-images"]
+    },
+    {
+      "id": "cnpg-operator-chart",
+      "kind": "vendor-helm-chart",
+      "phase": "postgres",
+      "name": "cloudnative-pg",
+      "version": "0.26.0",
+      "os": "any",
+      "architecture": "any",
+      "sha256": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+      "sizeBytes": 60000,
+      "candidatePayloadSha256": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "repositoryId": "222",
+        "workflowPath": ".github/workflows/curate-vendor.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "runId": "301",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "bundled",
+        "path": "charts/cloudnative-pg-0.26.0.tgz"
+      },
+      "vendor": {
+        "upstreamName": "cloudnative-pg/charts/cloudnative-pg",
+        "upstreamVersion": "0.26.0",
+        "upstreamSource": "ghcr.io/cloudnative-pg/charts/cloudnative-pg@sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+        "upstreamVerification": "registry-digest",
+        "curatorEvidenceSha256": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
+      },
+      "dependsOn": ["cg-base"]
+    },
+    {
+      "id": "postgresql-image",
+      "kind": "vendor-oci-image",
+      "phase": "postgres",
+      "name": "ghcr.io/cloudgrange/vendor/postgresql",
+      "version": "17.6",
+      "os": "linux",
+      "architecture": "amd64",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "sizeBytes": 150000000,
+      "candidatePayloadSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "repositoryId": "222",
+        "workflowPath": ".github/workflows/curate-vendor.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "runId": "301",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "oci",
+        "reference": "ghcr.io/cloudgrange/vendor/postgresql@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "mirrorOf": "ghcr.io/cloudnative-pg/postgresql@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "vendor": {
+        "upstreamName": "cloudnative-pg/postgresql",
+        "upstreamVersion": "17.6",
+        "upstreamSource": "ghcr.io/cloudnative-pg/postgresql@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "upstreamVerification": "registry-digest",
+        "curatorEvidenceSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "dependsOn": ["cnpg-operator-chart"]
+    },
+    {
+      "id": "api-image",
+      "kind": "oci-image",
+      "phase": "migrate",
+      "name": "ghcr.io/cloudgrange/api",
+      "version": "0.1.0-m0.rc1",
+      "os": "linux",
+      "architecture": "amd64",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "sizeBytes": 123456789,
+      "candidatePayloadSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-platform-api",
+        "repositoryId": "123456",
+        "workflowPath": ".github/workflows/release.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runId": "987654321",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "oci",
+        "reference": "ghcr.io/cloudgrange/api@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "evidence": {
+        "sbomSha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "licenseNoticeSha256": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "dependsOn": ["postgresql-image"]
+    },
+    {
+      "id": "cg-api",
+      "kind": "helm-chart",
+      "phase": "api",
+      "name": "cg-api",
+      "version": "0.1.0-m0.rc1",
+      "os": "any",
+      "architecture": "any",
+      "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+      "sizeBytes": 20000,
+      "candidatePayloadSha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "repositoryId": "222",
+        "workflowPath": ".github/workflows/release.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "runId": "302",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "bundled",
+        "path": "charts/cg-api-0.1.0-m0.rc1.tgz"
+      },
+      "evidence": {
+        "sbomSha256": "8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a"
+      },
+      "dependsOn": ["api-image"]
+    },
+    {
+      "id": "module-example",
+      "kind": "module-package",
+      "phase": "module",
+      "name": "cloudgrange-module-example",
+      "version": "0.1.0-m0.rc1",
+      "os": "any",
+      "architecture": "any",
+      "sha256": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "sizeBytes": 2500000,
+      "candidatePayloadSha256": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-module-example",
+        "repositoryId": "555",
+        "workflowPath": ".github/workflows/release.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "5555555555555555555555555555555555555555",
+        "runId": "501",
+        "runAttempt": 1
+      },
+      "retrieval": {
+        "type": "github-release-asset",
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "tag": "v0.1.0-m0.rc1",
+        "assetName": "cloudgrange-module-example-0.1.0-m0.rc1.cgmod"
+      },
+      "evidence": {
+        "sbomSha256": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3"
+      },
+      "dependsOn": ["cg-api"]
+    },
+    {
+      "id": "agent-package",
+      "kind": "agent-package",
+      "phase": "handoff",
+      "name": "cloudgrange-agent",
+      "version": "0.1.0-m0.rc1",
+      "os": "windows",
+      "architecture": "amd64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "sizeBytes": 60000000,
+      "candidatePayloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "provenance": {
+        "repository": "CloudGrange/cloudgrange-runtime-agent",
+        "repositoryId": "444",
+        "workflowPath": ".github/workflows/release.yml",
+        "ref": "refs/heads/main",
+        "sourceSha": "4444444444444444444444444444444444444444",
+        "runId": "601",
+        "runAttempt": 2
+      },
+      "retrieval": {
+        "type": "github-release-asset",
+        "repository": "CloudGrange/cloudgrange-deployment-installer",
+        "tag": "v0.1.0-m0.rc1",
+        "assetName": "cloudgrange-agent-0.1.0-m0.rc1-win-x64.zip"
+      },
+      "evidence": {
+        "sbomSha256": "abababababababababababababababababababababababababababababababab",
+        "licenseNoticeSha256": "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac"
+      },
+      "dependsOn": []
+    }
+  ]
+}
