@@ -1,0 +1,446 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cloudgrange.cloud/schemas/release-bom/v1.json",
+  "title": "CloudGrange release bill of materials v1",
+  "description": "Closed structural schema for cg-release-bom-v1. The BOM is an evidence file: its exact bytes are bound by bomSha256 in the cg-composition-v1 manifest and in the cg-catalog-v1 admission envelope (CG-015). Schema validation proves shape only; the installer additionally requires catalog/candidate authority, one-to-one member equality with the catalog, provenance equality with each candidate payload, and byte-exact artifact digests. The BOM never contains its own digest, the composition manifest digest or any catalog digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "channel",
+    "product",
+    "assembly",
+    "issuedAt",
+    "configurationSchema",
+    "compatibility",
+    "members"
+  ],
+  "properties": {
+    "schema": { "const": "cg-release-bom-v1" },
+    "channel": { "type": "string", "enum": ["m0-internal", "m0-fixture"] },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "releaseTag", "profile", "releaseRepository"],
+      "properties": {
+        "name": { "const": "CloudGrange" },
+        "version": { "$ref": "#/$defs/productVersion" },
+        "releaseTag": {
+          "type": "string",
+          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9a-z]+(\\.[0-9a-z]+)*)?$",
+          "maxLength": 128
+        },
+        "profile": { "type": "string", "enum": ["Compact"] },
+        "releaseRepository": { "$ref": "#/$defs/repository" }
+      }
+    },
+    "assembly": {
+      "description": "Producer tuple of the composition-assembly run in the release repository. Bound by the admission signature over bomSha256; cross-checked against the composition qualification evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "repositoryId", "workflowPath", "ref", "sourceSha", "runId", "runAttempt", "compositionLockSha256"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "repositoryId": { "$ref": "#/$defs/providerId" },
+        "workflowPath": { "$ref": "#/$defs/workflowPath" },
+        "ref": { "const": "refs/heads/main" },
+        "sourceSha": { "$ref": "#/$defs/gitSha" },
+        "runId": { "$ref": "#/$defs/providerId" },
+        "runAttempt": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "compositionLockSha256": {
+          "description": "SHA-256 of the reviewed composition.lock.json at sourceSha that selected every member.",
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "issuedAt": {
+      "description": "Unix UTC seconds when the BOM bytes were produced. An assertion, not a trusted timestamp.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "configurationSchema": {
+      "description": "The one site-configuration schema this composition accepts. Its sha256 must equal configurationSchemaSha256 in the composition manifest and catalog.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "version", "sha256", "path"],
+      "properties": {
+        "schema": { "const": "cg-site-config-v1" },
+        "version": { "const": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "path": { "$ref": "#/$defs/logicalPath" }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installer",
+        "verifier",
+        "operatingSystems",
+        "kubernetes",
+        "postgresql",
+        "database",
+        "agent",
+        "module",
+        "upgradeFrom",
+        "rollbackTo"
+      ],
+      "properties": {
+        "installer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "powershellMinimum"],
+          "properties": {
+            "version": { "$ref": "#/$defs/productVersion" },
+            "powershellMinimum": { "$ref": "#/$defs/semverCore" }
+          }
+        },
+        "verifier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minVersion"],
+          "properties": {
+            "minVersion": { "$ref": "#/$defs/semverCore" }
+          }
+        },
+        "operatingSystems": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "architecture", "role"],
+            "properties": {
+              "id": { "type": "string", "enum": ["ubuntu-24.04", "windows-server-2025"] },
+              "architecture": { "type": "string", "enum": ["x86_64"] },
+              "role": { "type": "string", "enum": ["management-node", "agent-host"] }
+            }
+          }
+        },
+        "kubernetes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["distribution", "version", "cni", "ingress"],
+          "properties": {
+            "distribution": { "const": "rke2" },
+            "version": { "type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\+rke2r[1-9][0-9]*$" },
+            "cni": { "type": "string", "pattern": "^canal@v[0-9A-Za-z.+-]{1,64}$" },
+            "ingress": { "type": "string", "pattern": "^traefik@[0-9A-Za-z.+-]{1,64}$" }
+          }
+        },
+        "postgresql": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["major"],
+          "properties": {
+            "major": { "const": 17 }
+          }
+        },
+        "database": {
+          "description": "Application schema compatibility used by update and rollback decisions (expand/contract migrations, F09-1).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schemaVersion", "minCompatibleReaderVersion"],
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/opaqueVersion" },
+            "minCompatibleReaderVersion": {
+              "description": "Oldest product version whose API/Core can run against schemaVersion. Rollback to an older product version without a database restore is permitted only if that version is not older than this value.",
+              "$ref": "#/$defs/productVersion"
+            }
+          }
+        },
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "minSupportedVersion"],
+          "properties": {
+            "version": { "$ref": "#/$defs/opaqueVersion" },
+            "minSupportedVersion": {
+              "description": "Oldest already-enrolled agent version the gateway in this composition still serves.",
+              "$ref": "#/$defs/opaqueVersion"
+            }
+          }
+        },
+        "module": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sdkVersion", "manifestSchema"],
+          "properties": {
+            "sdkVersion": { "$ref": "#/$defs/opaqueVersion" },
+            "manifestSchema": { "type": "string", "pattern": "^cg-module-manifest-v[1-9][0-9]*$" }
+          }
+        },
+        "upgradeFrom": {
+          "description": "Exact prior compositions this release may be applied over in place. Empty for a first release.",
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/compositionRef" }
+        },
+        "rollbackTo": {
+          "description": "Exact prior compositions this release explicitly admits as rollback targets after it has been accepted. Being listed here is the admission mechanism that lets product version decrease while trust floors never decrease; subject to database.minCompatibleReaderVersion.",
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/compositionRef" }
+        }
+      }
+    },
+    "members": {
+      "description": "Every artifact the installer places or runs. Set equality with the catalog members is required: for each entry, {sha256, candidatePayloadSha256} must match exactly one catalog member pair and vice versa.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/member" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "providerId": { "type": "string", "pattern": "^[1-9][0-9]{0,31}$" },
+    "repository": { "type": "string", "pattern": "^CloudGrange/[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 128 },
+    "workflowPath": { "type": "string", "pattern": "^\\.github/workflows/[a-zA-Z0-9_-]+\\.ya?ml$", "maxLength": 256 },
+    "semverCore": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "productVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9a-z]+(\\.[0-9a-z]+)*)?$",
+      "maxLength": 128
+    },
+    "opaqueVersion": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[0-9A-Za-z][0-9A-Za-z.+_-]*$" },
+    "logicalPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9][A-Za-z0-9._-]{0,127})*$"
+    },
+    "memberId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+    "ociReference": {
+      "description": "Digest-pinned OCI reference. Tags are not accepted anywhere in the BOM.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$",
+      "maxLength": 512
+    },
+    "httpsUri": { "type": "string", "pattern": "^https://[^\\s?#]+$", "maxLength": 1024 },
+    "compositionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "bomSha256"],
+      "properties": {
+        "version": { "$ref": "#/$defs/productVersion" },
+        "bomSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "provenance": {
+      "description": "Copy of the producer tuple from the member's candidate statement. The installer rejects the BOM if any field differs from the authenticated candidate payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "repositoryId", "workflowPath", "ref", "sourceSha", "runId", "runAttempt"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "repositoryId": { "$ref": "#/$defs/providerId" },
+        "workflowPath": { "$ref": "#/$defs/workflowPath" },
+        "ref": { "const": "refs/heads/main" },
+        "sourceSha": { "$ref": "#/$defs/gitSha" },
+        "runId": { "$ref": "#/$defs/providerId" },
+        "runAttempt": { "type": "integer", "minimum": 1, "maximum": 1024 }
+      }
+    },
+    "retrievalGithubReleaseAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "repository", "tag", "assetName"],
+      "properties": {
+        "type": { "const": "github-release-asset" },
+        "repository": { "$ref": "#/$defs/repository" },
+        "tag": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "assetName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$" }
+      }
+    },
+    "retrievalOci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "reference"],
+      "properties": {
+        "type": { "const": "oci" },
+        "reference": { "$ref": "#/$defs/ociReference" },
+        "mirrorOf": {
+          "description": "Upstream digest-identical reference when reference is a CloudGrange mirror.",
+          "$ref": "#/$defs/ociReference"
+        }
+      }
+    },
+    "retrievalHttps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri", "fileName"],
+      "properties": {
+        "type": { "const": "https" },
+        "uri": { "$ref": "#/$defs/httpsUri" },
+        "fileName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$" }
+      }
+    },
+    "retrievalBundled": {
+      "description": "Shipped inside the install bundle at this logical path (charts, schema, verifier, installer archive).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "path"],
+      "properties": {
+        "type": { "const": "bundled" },
+        "path": { "$ref": "#/$defs/logicalPath" }
+      }
+    },
+    "vendor": {
+      "description": "Required for kinds prefixed vendor-. Records what the curator verified upstream; the CloudGrange candidate endorses the selection, not upstream authorship.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upstreamName", "upstreamVersion", "upstreamSource", "upstreamVerification", "curatorEvidenceSha256"],
+      "properties": {
+        "upstreamName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "upstreamVersion": { "$ref": "#/$defs/opaqueVersion" },
+        "upstreamSource": {
+          "oneOf": [
+            { "$ref": "#/$defs/httpsUri" },
+            { "$ref": "#/$defs/ociReference" }
+          ]
+        },
+        "upstreamVerification": {
+          "type": "string",
+          "enum": ["vendor-checksum-file", "registry-digest", "vendor-signature-and-checksum"]
+        },
+        "curatorEvidenceSha256": {
+          "description": "Digest of the curator's qualification evidence file (upstream identity, checksum/signature observation, selected digest).",
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "phase",
+        "name",
+        "version",
+        "os",
+        "architecture",
+        "sha256",
+        "sizeBytes",
+        "candidatePayloadSha256",
+        "provenance",
+        "retrieval",
+        "dependsOn"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/memberId" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "oci-image",
+            "vendor-oci-image",
+            "helm-chart",
+            "vendor-helm-chart",
+            "vendor-archive",
+            "installer-archive",
+            "verifier",
+            "agent-package",
+            "module-package",
+            "script-archive"
+          ]
+        },
+        "phase": {
+          "description": "Installer phase that consumes the member.",
+          "type": "string",
+          "enum": [
+            "preflight",
+            "retrieve",
+            "runtime",
+            "storage",
+            "postgres",
+            "vault",
+            "identity",
+            "api",
+            "portal",
+            "gateway",
+            "module",
+            "handoff"
+          ]
+        },
+        "name": {
+          "description": "Stable identity without version or digest: OCI repository path, chart name, package name or file stem.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": { "$ref": "#/$defs/opaqueVersion" },
+        "os": { "type": "string", "enum": ["linux", "windows", "any"] },
+        "architecture": { "type": "string", "enum": ["amd64", "any"] },
+        "sha256": {
+          "description": "Artifact digest as the catalog binds it: SHA-256 of the file bytes, or the OCI manifest digest (hex, without the sha256: prefix) for image and chart references.",
+          "$ref": "#/$defs/sha256"
+        },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "candidatePayloadSha256": { "$ref": "#/$defs/sha256" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "retrieval": {
+          "oneOf": [
+            { "$ref": "#/$defs/retrievalGithubReleaseAsset" },
+            { "$ref": "#/$defs/retrievalOci" },
+            { "$ref": "#/$defs/retrievalHttps" },
+            { "$ref": "#/$defs/retrievalBundled" }
+          ]
+        },
+        "vendor": { "$ref": "#/$defs/vendor" },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sbomSha256": { "$ref": "#/$defs/sha256" },
+            "licenseNoticeSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "dependsOn": {
+          "description": "Member ids that must be placed before this one. Must be acyclic.",
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/memberId" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "pattern": "^vendor-" } } },
+          "then": { "required": ["vendor"] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["oci-image", "vendor-oci-image", "helm-chart", "vendor-helm-chart"] } } },
+          "then": {
+            "properties": {
+              "retrieval": {
+                "oneOf": [
+                  { "$ref": "#/$defs/retrievalOci" },
+                  { "$ref": "#/$defs/retrievalBundled" }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["oci-image", "vendor-oci-image"] } } },
+          "then": { "properties": { "os": { "const": "linux" }, "architecture": { "const": "amd64" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "agent-package" } } },
+          "then": { "properties": { "os": { "const": "windows" }, "architecture": { "const": "amd64" }, "phase": { "const": "handoff" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "verifier" } } },
+          "then": { "properties": { "phase": { "const": "preflight" } } }
+        }
+      ]
+    }
+  }
+}
