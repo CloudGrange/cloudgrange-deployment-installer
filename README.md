@@ -14,7 +14,7 @@ Owner decision 2026-09-14: CloudGrange on-premises runs on Docker Compose on one
 | `cloudgrange-portal` | `ghcr.io/cloudgrange/cloudgrange-portal` | Web portal (built from cloudgrange-portal) |
 | `cloudgrange-relay` | `ghcr.io/cloudgrange/cloudgrange-relay` | Relay for host agents, mTLS (built from cloudgrange-runtime-relay) |
 | `nginx` | `nginx:alpine` | TLS ingress on 443 |
-| `postgres` | `postgres:16-alpine` | Database and the default PostgreSQL-encrypted secrets provider (ADR-009) |
+| `postgres` | `postgres:17-alpine` | Database and the default PostgreSQL-encrypted secrets provider (ADR-009) |
 | `keycloak` | `quay.io/keycloak/keycloak:26.6` | Local identity provider (ADR-008) |
 | `otel-collector` | `otel/opentelemetry-collector-contrib` | Telemetry pipeline (ADR-016) |
 | `prometheus` | `prom/prometheus` | Metrics |

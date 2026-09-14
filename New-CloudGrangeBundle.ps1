@@ -81,7 +81,7 @@ try {
         "ghcr.io/cloudgrange/cloudgrange-portal:$Version",
         "ghcr.io/cloudgrange/cloudgrange-relay:$Version",
         'nginx:alpine',
-        'postgres:16-alpine',
+        'postgres:17-alpine',
         'quay.io/keycloak/keycloak:26.6',
         'prom/prometheus:latest',
         'grafana/loki:latest',
