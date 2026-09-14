@@ -83,16 +83,25 @@ echo "[generalize] removing SSH host keys and authorized keys"
 rm -f /etc/ssh/ssh_host_*
 find /root /home -name authorized_keys -type f -delete 2>/dev/null || true
 
-echo "[generalize] cleaning cloud-init, machine-id, logs and history"
+echo "[generalize] removing per-machine keys (fwupd client key)"
+rm -f /var/lib/fwupd/pki/secret.key /var/lib/fwupd/pki/client.pem
+
+echo "[generalize] cleaning cloud-init, machine-id, temp files, logs and history"
 cloud-init clean --logs --seed --machine-id
 rm -f /var/lib/dbus/machine-id
-rm -rf /var/lib/cloud/instances/* /var/tmp/cloudgrange-* /tmp/cloudgrange-*
-rm -f /var/log/cloudgrange-init.log /var/log/cloudgrange-firstboot.log
-journalctl --rotate >/dev/null 2>&1 || true
-journalctl --vacuum-time=1s >/dev/null 2>&1 || true
-find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' \) -delete
-find /var/log -type f -name '*.log' -exec truncate -s 0 {} +
-rm -f /root/.bash_history /home/*/.bash_history
+rm -rf /var/lib/cloud/instances/*
+# Everything in /tmp and /var/tmp (build-host harnesses, uploads), except this script's own
+# staging directory, which is removed at the very end.
+find /tmp /var/tmp -mindepth 1 -maxdepth 1 ! -path "$STAGE_DIR" -exec rm -rf {} +
+# Stop the log writers first: a deleted journal or syslog file that is still open keeps its blocks
+# allocated until shutdown, i.e. after the free-space overwrite below.
+systemctl stop rsyslog.service syslog.socket 2>/dev/null || true
+systemctl stop systemd-journald.socket systemd-journald-dev-log.socket systemd-journald-audit.socket systemd-journald.service 2>/dev/null || true
+rm -rf /var/log/journal/* /run/log/journal/*
+find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -delete
+# Truncate every remaining log: syslog, auth.log, kern.log, cloud-init, dpkg/apt, wtmp/btmp/lastlog.
+find /var/log -type f -exec truncate -s 0 {} +
+rm -f /root/.bash_history /home/*/.bash_history /root/.lesshst /home/*/.lesshst
 
 echo "[generalize] overwriting free space (deleted secrets must not survive in freed blocks)"
 sync

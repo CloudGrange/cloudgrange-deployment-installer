@@ -1,0 +1,15 @@
+# AB#8129: create the first CloudGrange realm administrator with the per-install random password
+# once Keycloak is up. Idempotent; a no-op when the user already exists.
+[Unit]
+Description=CloudGrange realm administrator bootstrap
+Requires=cloudgrange.service
+After=cloudgrange.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/cloudgrange/keycloak/bootstrap-realm-admin.sh
+TimeoutStartSec=600
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

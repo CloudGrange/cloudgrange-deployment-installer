@@ -31,6 +31,7 @@ function Deploy-DockerCompose {
     $grafanaPassword  = & $newSecret
     $relayToken       = & $newSecret
     $kcClientSecret   = & $newSecret
+    $realmAdminPassword = & $newSecret
 
     # Bash deploy script — runs entirely inside the Linux guest via SSH sudo.
     # AB#1590: After docker compose up -d:
@@ -65,9 +66,11 @@ KEYCLOAK_ADMIN_PASSWORD=$keycloakPassword
 GRAFANA_ADMIN_PASSWORD=$grafanaPassword
 RELAY_ENROLLMENT_TOKEN=$relayToken
 KEYCLOAK_API_CLIENT_SECRET=$kcClientSecret
+CLOUDGRANGE_REALM_ADMIN_PASSWORD=$realmAdminPassword
 CLOUDGRANGE_HOSTNAME=$VmIp
 ENVEOF
 fi
+grep -q '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' .env || echo "CLOUDGRANGE_REALM_ADMIN_PASSWORD=$realmAdminPassword" >> .env
 sed -i '/^CLOUDGRANGE_VERSION=/d' .env && echo "CLOUDGRANGE_VERSION=$Version" >> .env
 chmod 600 .env
 $pullOrLoad
@@ -113,6 +116,13 @@ if [ -n "`$MISSING_RESTART" ]; then
     # may temporarily show a different policy during first start.
 fi
 echo "Restart policy check complete."
+
+# --- AB#8129: first realm administrator (no user ships in the realm import) ---
+install -m 0644 $composeDir/systemd/cloudgrange-realm-admin.service /etc/systemd/system/cloudgrange-realm-admin.service
+systemctl daemon-reload
+systemctl enable cloudgrange-realm-admin.service
+systemctl restart cloudgrange-realm-admin.service
+echo "Realm administrator bootstrap complete."
 exit 0
 "@
 

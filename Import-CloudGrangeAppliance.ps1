@@ -223,8 +223,9 @@ if (-not $ok) {
 # /var/log/cloudgrange-init.log — retrieve it from the setup-status API endpoint.
 $setupToken = ''
 try {
-    $apiBase    = "http://$VmIp:8081"
-    $statusResp = Invoke-RestMethod -Uri "$apiBase/api/v1/platform/setup-status" `
+    # AB#8129: the API has no host port; it is reached through nginx TLS on 443.
+    $apiBase    = "https://${VmIp}"
+    $statusResp = Invoke-RestMethod -Uri "$apiBase/api/v1/setup/status" `
         -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
     if ($statusResp.setupToken) {
         $setupToken = $statusResp.setupToken

@@ -287,12 +287,10 @@ function Invoke-CloudGrangeInstall {
     Deploy-DockerCompose @composeArgs
 
     # Step 7: Wait for API health, then emit setup URL (AB#1627, ADR-047)
-    # AB#1593: nginx terminates TLS on 443 and proxies to portal on 80 (internal).
-    # The API is directly on port 8081 (not routed through nginx).
-    # Portal URL uses HTTPS via nginx; API health check uses the direct API port.
+    # AB#1593 / AB#8129: nginx terminates TLS on 443 and is the only published entry point. The API
+    # has no host port; /health/ and /api/ reach it through edge nginx -> portal proxy -> API.
     Write-Progress-Step "Waiting for CloudGrange API to become healthy"
-    # ${VmIp} braces: "$VmIp:8081" parses as a drive-qualified variable and yields an empty host.
-    $apiHealthBase = "http://${VmIp}:8081"
+    $apiHealthBase = "https://${VmIp}"
     $portalBase    = "https://$VmIp"
     $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/health/ready" -TimeoutSeconds 600
     if (-not $healthOk) {

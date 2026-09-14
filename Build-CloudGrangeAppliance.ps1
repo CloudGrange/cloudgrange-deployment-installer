@@ -75,6 +75,7 @@ if (-not $vm) {
 # ---------------------------------------------------------------------------
 # Step 1b (AB#8129): generalize the running VM so the appliance carries no install-time identity
 # ---------------------------------------------------------------------------
+$secretValues = @{}
 if (-not $AllowUngeneralized) {
     if ([string]::IsNullOrEmpty($SshKeyPath) -or [string]::IsNullOrEmpty($VmIp) -or -not (Test-Path $SshKeyPath)) {
         Write-Error "CG-APPL-ERR-001: -SshKeyPath and -VmIp are required to generalize '$VmName' before export (use Install-CloudGrange.ps1 -KeepInstallerSshKey). Refusing to export an ungeneralized appliance."
@@ -87,11 +88,31 @@ if (-not $AllowUngeneralized) {
     $stage = '/var/tmp/cloudgrange-appliance'
     & ssh.exe @sshOpts "cloudgrange@$VmIp" "rm -rf $stage && mkdir -p $stage"
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: cannot reach '$VmName' over SSH at $VmIp (exit $LASTEXITCODE)." }
-    foreach ($f in 'cloudgrange-generalize.sh', 'cloudgrange-firstboot.sh', 'cloudgrange-firstboot.service') {
+    foreach ($f in 'cloudgrange-generalize.sh', 'cloudgrange-firstboot.sh', 'cloudgrange-firstboot.service', 'cloudgrange-capture-secrets.sh') {
         & scp.exe @sshOpts (Join-Path $PSScriptRoot "appliance\$f") "cloudgrange@${VmIp}:$stage/$f"
         if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: upload of $f failed (exit $LASTEXITCODE)." }
     }
-    & ssh.exe @sshOpts "cloudgrange@$VmIp" "sudo sed -i 's/\r$//' $stage/* && sudo bash $stage/cloudgrange-generalize.sh"
+    & ssh.exe @sshOpts "cloudgrange@$VmIp" "sudo sed -i 's/\r$//' $stage/*"
+    if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: staging on '$VmName' failed (exit $LASTEXITCODE)." }
+
+    # Capture the install-time secret values (memory only) for the post-export VHDX scan (step 2b).
+    $captured = @(& ssh.exe @sshOpts "cloudgrange@$VmIp" "sudo bash $stage/cloudgrange-capture-secrets.sh")
+    if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-006: could not capture install-time secrets for the VHDX scan (exit $LASTEXITCODE)." }
+    foreach ($line in $captured) {
+        $i = $line.IndexOf('=')
+        if ($i -le 0) { continue }
+        $secretValues[$line.Substring(0, $i)] = [System.Text.Encoding]::Latin1.GetString([Convert]::FromBase64String($line.Substring($i + 1).Trim())).TrimEnd("`n")
+    }
+    $captured = $null
+    if ((Test-Path "$SshKeyPath.pub")) {
+        $secretValues['installer ssh public key (authorized_keys residue)'] = ((Get-Content "$SshKeyPath.pub" -Raw).Trim() -split '\s+')[1]
+    }
+    if (@($secretValues.Keys | Where-Object { $_ -like 'env:*' }).Count -lt 5) {
+        Write-Error "CG-APPL-ERR-006: expected at least 5 .env secrets on '$VmName', captured $(@($secretValues.Keys | Where-Object { $_ -like 'env:*' }).Count). Refusing to build without a secret scan baseline."
+    }
+    Write-Host "  Captured $($secretValues.Count) install-time secret values (memory only) for the VHDX scan." -ForegroundColor Gray
+
+    & ssh.exe @sshOpts "cloudgrange@$VmIp" "sudo bash $stage/cloudgrange-generalize.sh"
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-004: generalization failed inside '$VmName' (exit $LASTEXITCODE). Do not export this VM." }
     Write-Host "  Waiting for '$VmName' to power off after generalization..." -ForegroundColor Gray
     $timeout = 300; $elapsed = 0
@@ -138,6 +159,23 @@ Write-Host "  Copying and compacting VHDX (this may take several minutes)..." -F
 Copy-Item -Path $sourceVhdx -Destination $vhdxPath -Force
 Optimize-VHD -Path $vhdxPath -Mode Full
 Write-Host "  Exported: $vhdxPath ($('{0:N0}' -f ((Get-Item $vhdxPath).Length / 1MB)) MB)" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# Step 2b (AB#8129): release gate — scan the exported VHDX bytes for install-time secrets
+# ---------------------------------------------------------------------------
+Write-Progress-Step "Scanning exported VHDX for install-time secrets"
+. "$PSScriptRoot\scripts\Test-ApplianceVhdxSecrets.ps1"
+$scan = Test-ApplianceVhdxSecrets -Path $vhdxPath -Values $secretValues
+$secretValues = $null
+$scanReport = Join-Path $OutputPath 'cloudgrange-appliance.secret-scan.txt'
+@("VHDX secret scan $([DateTime]::UtcNow.ToString('s'))Z  $vhdxName  literals=$($scan.LiteralsCount)  findings=$($scan.Findings)") + $scan.Report |
+    Set-Content -Path $scanReport -Encoding utf8
+$scan.Report | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+if (-not $scan.Passed) {
+    Remove-Item -LiteralPath $vhdxPath -Force
+    Write-Error "CG-APPL-ERR-007: the exported VHDX contains $($scan.Findings) install-time secret occurrence(s) (see $scanReport). The VHDX was deleted; do not release."
+}
+Write-Host "  Secret scan passed: 0 findings ($($scan.LiteralsCount) captured values + pattern check)." -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
 # Step 3: Compute SHA-256 manifest

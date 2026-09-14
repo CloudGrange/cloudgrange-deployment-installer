@@ -29,7 +29,8 @@ systemctl try-restart ssh.service ssh.socket 2>/dev/null || true
 echo "[firstboot] waiting for an IPv4 address"
 IP=''
 for _ in $(seq 1 150); do
-    IP=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
+    # Ignore container bridges (docker0, br-*, veth*): only the VM's own NIC address is valid.
+    IP=$(ip -4 -o addr show scope global | awk '$2 !~ /^(docker|br-|veth)/ {print $4}' | cut -d/ -f1 | head -1)
     [ -n "$IP" ] && break
     sleep 2
 done
@@ -50,6 +51,7 @@ KEYCLOAK_ADMIN_PASSWORD=$(rnd)
 GRAFANA_ADMIN_PASSWORD=$(rnd)
 RELAY_ENROLLMENT_TOKEN=$(rnd)
 KEYCLOAK_API_CLIENT_SECRET=$(rnd)
+CLOUDGRANGE_REALM_ADMIN_PASSWORD=$(rnd)
 CLOUDGRANGE_HOSTNAME=$IP
 CLOUDGRANGE_VERSION=${VERSION:-latest}
 ENVEOF

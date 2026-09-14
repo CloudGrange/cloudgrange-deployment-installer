@@ -40,7 +40,8 @@ if ($UseWsl2) {
 
 # AB#1595 Step 3: Wait for API to become healthy, then trigger pending migrations
 Write-Progress-Step "Waiting for CloudGrange API to become healthy after restart"
-$apiBase = "http://$VmIp:8081"
+# AB#8129: the API has no host port; it is reached through nginx TLS on 443.
+$apiBase = "https://${VmIp}"
 $healthOk = Wait-ForHttpOk -Url "$apiBase/health/ready" -TimeoutSeconds 300
 if (-not $healthOk) {
     Write-Error "CloudGrange API did not become healthy within 5 minutes after update. Check container logs."

@@ -15,10 +15,14 @@ permissions:
 jobs:
   build-bundle:
     runs-on: ubuntu-latest
-    env:
-      CLOUDGRANGE_VERSION: latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine release version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
+          echo "CLOUDGRANGE_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -27,12 +31,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve image list from compose
+      - name: Pin first-party images by digest and gate every image (AB#8129)
         run: |
-          { docker compose -f compose/docker-compose.yml config --images; grep -v '^\s*$' compose/helper-images.txt; } | sort -u > images.txt
+          # First-party images for exactly this version, stamped into the bundle's compose file as
+          # repo:<version>@sha256:<digest>. The gate then requires a digest on EVERY image (no exemptions).
+          for svc in api portal relay; do docker pull "ghcr.io/cloudgrange/cloudgrange-$svc:$CLOUDGRANGE_VERSION"; done
+          bash scripts/Set-FirstPartyImagePins.sh compose/docker-compose.yml "$CLOUDGRANGE_VERSION"
+          bash scripts/Test-ComposeImagePins.sh compose > images.txt
           echo "Images:"; cat images.txt
-          # AB#8129: every vendor image must be digest-pinned.
-          if grep -v '^ghcr.io/cloudgrange/' images.txt | grep -vq '@sha256:'; then echo "Unpinned vendor image"; exit 1; fi
 
       - name: Pull container images
         run: |
@@ -45,15 +51,12 @@ jobs:
       - name: Save container images to one tar
         run: |
           mkdir -p bundle
-          # AB#8129: save vendor images under their tag names. A digest-only `docker save` loads
+          # AB#8129: save every image under its tag name. A digest-only `docker save` loads
           # unnamed, and compose's "repo:tag@sha256:..." then cannot resolve without a registry.
           : > save.txt
           while IFS= read -r image; do
             [ -z "$image" ] && continue
-            case "$image" in
-              ghcr.io/cloudgrange/*) echo "$image" >> save.txt ;;
-              *) named="${image%@sha256:*}"; docker tag "$image" "$named"; echo "$named" >> save.txt ;;
-            esac
+            named="${image%@sha256:*}"; docker tag "$image" "$named"; echo "$named" >> save.txt
           done < images.txt
           xargs -a save.txt docker save -o bundle/cloudgrange-images.tar
           cp images.txt bundle/images.txt

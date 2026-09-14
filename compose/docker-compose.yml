@@ -34,8 +34,10 @@ services:
   cloudgrange-api:
     image: ghcr.io/cloudgrange/cloudgrange-api:${CLOUDGRANGE_VERSION:-latest}
     restart: always
-    ports:
-      - "8081:8080"
+    # AB#8129: no host port. Browsers and the installer reach the API only through nginx TLS on 443
+    # (edge nginx -> portal /api/, /health/ -> API); Prometheus scrapes it on the Compose network.
+    expose:
+      - "8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__Default=${CLOUDGRANGE_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudgrange};Username=${POSTGRES_USER:-cloudgrange};Password=${POSTGRES_PASSWORD}}
@@ -83,12 +85,13 @@ services:
       - cloudgrange
 
   # AB#8129 / ADR-059: the relay is a default Compose container; systemd supervises the stack.
-  # Agents on managed Hyper-V hosts connect to it over mTLS (ADR-008).
+  # Its LAN listener is plain HTTP today; agent mTLS (ADR-008) is not implemented yet, so the port is
+  # NOT published on the host (AB#8129). Only Prometheus reaches it on the Compose network.
   cloudgrange-relay:
     image: ghcr.io/cloudgrange/cloudgrange-relay:${CLOUDGRANGE_VERSION:-latest}
     restart: always
-    ports:
-      - "8443:8443"
+    expose:
+      - "8443"
     environment:
       - RELAY_PAAS_URL=http://cloudgrange-api:8080
       - RELAY_ENROLLMENT_TOKEN=${RELAY_ENROLLMENT_TOKEN}
@@ -174,8 +177,12 @@ services:
       # Bootstrap admin — only used on first run to create the initial admin account.
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-      # Substituted into cloudgrange-realm.json ("secret": "${KEYCLOAK_API_CLIENT_SECRET}") at import.
+      # Substituted into cloudgrange-realm.json at import: the API client secret, and the portal
+      # client's redirect URIs / web origins (https://<CLOUDGRANGE_HOSTNAME> only, no wildcards).
+      # The realm import creates NO users; keycloak/bootstrap-realm-admin.sh creates the first
+      # PlatformAdmin with a random password (CLOUDGRANGE_REALM_ADMIN_PASSWORD in .env).
       KEYCLOAK_API_CLIENT_SECRET: ${KEYCLOAK_API_CLIENT_SECRET}
+      CLOUDGRANGE_HOSTNAME: ${CLOUDGRANGE_HOSTNAME:?CLOUDGRANGE_HOSTNAME must be set in .env}
     volumes:
       - ./keycloak/cloudgrange-realm.json:/opt/keycloak/data/import/cloudgrange-realm.json:ro
     # No host port: browsers reach Keycloak only through nginx on 443 (AB#8129).
