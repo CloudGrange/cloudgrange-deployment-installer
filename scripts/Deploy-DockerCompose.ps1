@@ -130,6 +130,14 @@ systemctl daemon-reload
 systemctl enable cloudgrange-realm-admin.service
 systemctl restart cloudgrange-realm-admin.service
 echo "Realm administrator bootstrap complete."
+
+# --- AB#8129: in-app updater (Platform administration -> Updates installs release bundles; no reinstall) ---
+install -m 0755 $composeDir/updater/cloudgrange-updater.py /usr/local/sbin/cloudgrange-updater
+install -m 0644 $composeDir/systemd/cloudgrange-updater.service /etc/systemd/system/cloudgrange-updater.service
+systemctl daemon-reload
+systemctl enable cloudgrange-updater.service
+systemctl restart cloudgrange-updater.service
+echo "Updater service installed."
 exit 0
 "@
 

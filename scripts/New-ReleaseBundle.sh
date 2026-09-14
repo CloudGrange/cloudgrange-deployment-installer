@@ -131,7 +131,9 @@ cp "$DEBS"/*.deb "$B/docker-debs/debs/"
 cp "$PINS/docker-debs/SHA256SUMS" "$PINS/docker-debs/versions.txt" "$B/docker-debs/"
 
 log "SHA256SUMS"
-(cd "$B" && find . -type f ! -name SHA256SUMS | sort | while IFS= read -r f; do sha256sum "$f" | sed 's|  \./|  |'; done) > "$WORK/SHA256SUMS"
+# Only the top-level manifest is excluded: nested files named SHA256SUMS (docker-debs/) are bundle content and must
+# be listed, or the in-app updater's exact-set check rejects the bundle.
+(cd "$B" && find . -type f ! -path ./SHA256SUMS | sort | while IFS= read -r f; do sha256sum "$f" | sed 's|  \./|  |'; done) > "$WORK/SHA256SUMS"
 mv "$WORK/SHA256SUMS" "$B/SHA256SUMS"
 
 log "normalize modes and timestamps (SOURCE_DATE_EPOCH=$EPOCH)"
