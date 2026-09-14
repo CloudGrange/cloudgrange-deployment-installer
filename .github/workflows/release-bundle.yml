@@ -57,6 +57,8 @@ jobs:
           test -z "${CLOUDGRANGE_TEST_ALLOW_SKIP:-}"
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_install_scripts.py'
           python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
+          python3 scripts/Test-SshTransportOptions.py .
+          python3 -m unittest discover -v -s test/appliance -p 'test_ssh_transport.py'
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_kvp_writer.py'
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_operator_access.py'
 

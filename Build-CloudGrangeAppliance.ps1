@@ -85,20 +85,21 @@ if (-not $AllowUngeneralized) {
         Write-Error "CG-APPL-ERR-002: '$VmName' must be Running to generalize (state: $($vm.State))."
     }
     Write-Progress-Step "Generalizing '$VmName' (secrets, SSH keys, machine-id, cloud-init, DHCP)"
-    $sshOpts = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR', '-o', 'BatchMode=yes')
+    # AB#8129: every ssh/scp call is bounded (BatchMode, connect and keepalive timeouts, overall -TimeoutSeconds).
+    $sshOpts = Get-CloudGrangeSshOptions -KeyPath $SshKeyPath
     $stage = '/var/tmp/cloudgrange-appliance'
-    & ssh.exe @sshOpts "cloudgrange@$VmIp" "rm -rf $stage && mkdir -p $stage"
+    Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "rm -rf $stage && mkdir -p $stage")) -TimeoutSeconds 120
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: cannot reach '$VmName' over SSH at $VmIp (exit $LASTEXITCODE)." }
     foreach ($f in 'cloudgrange-generalize.sh', 'cloudgrange-firstboot.sh', 'cloudgrange-firstboot.service', 'cloudgrange-capture-secrets.sh',
                    'cloudgrange-kvp.py', 'cloudgrange-operator-access.sh', 'cloudgrange-operator-access.service') {
-        & scp.exe @sshOpts (Join-Path $PSScriptRoot "appliance\$f") "cloudgrange@${VmIp}:$stage/$f"
+        Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @((Join-Path $PSScriptRoot "appliance\$f"), "cloudgrange@${VmIp}:$stage/$f")) -TimeoutSeconds 120
         if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: upload of $f failed (exit $LASTEXITCODE)." }
     }
-    & ssh.exe @sshOpts "cloudgrange@$VmIp" "sudo sed -i 's/\r$//' $stage/*"
+    Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "sudo sed -i 's/\r$//' $stage/*")) -TimeoutSeconds 120
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: staging on '$VmName' failed (exit $LASTEXITCODE)." }
 
     # Capture the install-time secret values (memory only) for the post-export VHDX scan (step 2b).
-    $captured = @(& ssh.exe @sshOpts "cloudgrange@$VmIp" "sudo bash $stage/cloudgrange-capture-secrets.sh")
+    $captured = @(Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "sudo bash $stage/cloudgrange-capture-secrets.sh")) -CaptureOutput -TimeoutSeconds 300)
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-006: could not capture install-time secrets for the VHDX scan (exit $LASTEXITCODE)." }
     foreach ($line in $captured) {
         $i = $line.IndexOf('=')
@@ -114,7 +115,8 @@ if (-not $AllowUngeneralized) {
     }
     Write-Host "  Captured $($secretValues.Count) install-time secret values (memory only) for the VHDX scan." -ForegroundColor Gray
 
-    & ssh.exe @sshOpts "cloudgrange@$VmIp" "sudo bash $stage/cloudgrange-generalize.sh"
+    # Generalization reloads every image into a fresh container store; allow up to an hour.
+    Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "sudo bash $stage/cloudgrange-generalize.sh")) -TimeoutSeconds 3600
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-004: generalization failed inside '$VmName' (exit $LASTEXITCODE). Do not export this VM." }
     Write-Host "  Waiting for '$VmName' to power off after generalization..." -ForegroundColor Gray
     $timeout = 300; $elapsed = 0

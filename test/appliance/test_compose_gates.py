@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import uuid
 
 import gate_requirements as req
 
@@ -234,7 +235,8 @@ class ComposeGateTests(unittest.TestCase):
         server = re.search(r"(?ms)^    server \{\n        listen 8443 ssl;.*?^    \}\n", text)
         self.assertIsNotNone(server, "no TLS server on 8443")
         body = server.group(0)
-        proxied = re.findall(r"(?m)^\s*location\s+(\S+\s+)?(\S+)\s*\{(?:(?!\n\s*location).)*?proxy_pass", body, re.S)
+        # Server-level locations only (8-space indent); nested ones are checked by the hardening gate's nginx stage.
+        proxied = re.findall(r"(?m)^        location\s+(\S+\s+)?(\S+)\s*\{(?:(?!\n        (?:location|\})).)*?proxy_pass", body, re.S)
         self.assertEqual([p[1] for p in proxied], ["/lan/v1/agents/"], "8443 may only proxy the agent API")
         self.assertRegex(body, r"location / \{\s*return 404;")
         certs = os.path.join(self.tmp, "certs")
@@ -247,6 +249,135 @@ class ComposeGateTests(unittest.TestCase):
                             "--add-host", "cloudgrange-portal:127.0.0.1", "--add-host", "keycloak:127.0.0.1",
                             NGINX_IMAGE, "nginx", "-t"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    # --- nginx 8443 gate: method restriction and re-enrollment approvals ------------------------------
+    LIMIT_EXCEPT = "            limit_except GET POST { deny all; }\n"
+    APPROVALS_BLOCK = "            location ~* ^/lan/v1/agents/+reenrollment-approvals {\n                return 404;\n            }\n"
+
+    def nginx_conf(self):
+        return os.path.join(self.compose_dir, "nginx", "nginx.conf")
+
+    def plant_nginx(self, old, new):
+        with open(self.nginx_conf()) as f:
+            text = f.read()
+        self.assertIn(old, text, "nginx plant anchor missing")
+        with open(self.nginx_conf(), "w") as f:
+            f.write(text.replace(old, new, 1))
+
+    def assert_nginx_rejected(self, fragment):
+        r = self.hardening()
+        self.assertEqual(r.returncode, 1, "gate did not fail:\n" + r.stdout + r.stderr)
+        failures = [line for line in r.stderr.splitlines() if line.startswith("HARDENING-GATE FAIL (nginx): ")]
+        self.assertTrue(any(fragment in line for line in failures), "expected nginx failure %r in:\n%s" % (fragment, r.stderr))
+
+    def test_removing_limit_except_on_the_8443_agent_route_is_caught(self):
+        self.plant_nginx(self.LIMIT_EXCEPT, "")
+        self.assert_nginx_rejected("8443 /lan/v1/agents/: limit_except GET POST { deny all; } missing or changed")
+
+    def test_widening_limit_except_on_the_8443_agent_route_is_caught(self):
+        self.plant_nginx(self.LIMIT_EXCEPT, self.LIMIT_EXCEPT.replace("GET POST", "GET POST DELETE"))
+        self.assert_nginx_rejected("limit_except GET POST { deny all; } missing or changed")
+
+    def test_limit_except_that_allows_is_caught(self):
+        self.plant_nginx(self.LIMIT_EXCEPT, self.LIMIT_EXCEPT.replace("deny all", "allow all"))
+        self.assert_nginx_rejected("limit_except GET POST { deny all; } missing or changed")
+
+    def test_removing_the_reenrollment_approvals_block_is_caught(self):
+        self.plant_nginx(self.APPROVALS_BLOCK, "")
+        self.assert_nginx_rejected("8443 /lan/v1/agents/: reenrollment-approvals must return 404")
+
+    def test_case_sensitive_reenrollment_approvals_block_is_caught(self):
+        self.plant_nginx(self.APPROVALS_BLOCK, self.APPROVALS_BLOCK.replace("~*", "~"))
+        self.assert_nginx_rejected("reenrollment-approvals must return 404")
+
+    def test_reenrollment_approvals_block_that_proxies_is_caught(self):
+        self.plant_nginx(self.APPROVALS_BLOCK, self.APPROVALS_BLOCK.replace("return 404;", "proxy_pass $relay_upstream;"))
+        self.assert_nginx_rejected("reenrollment-approvals must return 404")
+
+    def test_relay_proxied_from_the_443_server_is_caught(self):
+        self.plant_nginx("        # Portal health probe passthrough\n",
+                         "        location /lan/ {\n            proxy_pass http://cloudgrange-relay:8443;\n        }\n\n        # Portal health probe passthrough\n")
+        self.assert_nginx_rejected("cloudgrange-relay referenced outside the 8443 agent location")
+
+    # --- nginx 8443 behaviour: the real nginx in front of a stub relay --------------------------------
+    PROBES = [
+        ("enroll", "POST", "/lan/v1/agents/enroll"),
+        ("jobs", "GET", "/lan/v1/agents/a1/jobs"),
+        ("delete", "DELETE", "/lan/v1/agents/enroll"),
+        ("put", "PUT", "/lan/v1/agents/a1/jobs"),
+        ("approvals", "POST", "/lan/v1/agents/reenrollment-approvals"),
+        ("approvals_get", "GET", "/lan/v1/agents/reenrollment-approvals"),
+        ("approvals_case", "POST", "/lan/v1/agents/ReEnrollment-Approvals"),
+        ("approvals_trailing_slash", "POST", "/lan/v1/agents/reenrollment-approvals/"),
+        ("approvals_encoded", "POST", "/lan/v1/agents/reenrollment%2Dapprovals"),
+        ("approvals_double_slash", "POST", "/lan/v1/agents//reenrollment-approvals"),
+        ("approvals_dot_segment", "POST", "/lan/v1/agents/./reenrollment-approvals"),
+        ("approvals_traversal", "POST", "/lan/v1/agents/a1/../reenrollment-approvals"),
+        ("metrics", "GET", "/metrics"),
+        ("root", "GET", "/"),
+    ]
+    APPROVAL_PROBES = [name for name, _, _ in PROBES if name.startswith("approvals")]
+
+    def probe_8443(self, conf):
+        """Start the gateway nginx with `conf` and a stub relay on a private network; return {probe: (code, body)}."""
+        tag = "cg8443-" + uuid.uuid4().hex[:10]
+        certs = os.path.join(self.tmp, tag + "-certs")
+        os.makedirs(certs)
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=gate",
+                        "-keyout", os.path.join(certs, "cloudgrange.key"), "-out", os.path.join(certs, "cloudgrange.crt")],
+                       check=True, capture_output=True)
+        stub = os.path.join(self.tmp, tag + "-relay.conf")
+        with open(stub, "w") as f:
+            f.write('events {}\nhttp {\n  server {\n    listen 8443;\n'
+                    '    location / { return 200 "relay:$request_method $request_uri"; }\n  }\n}\n')
+        script = ["for i in $(seq 1 60); do curl -sk -o /dev/null https://gateway:8443/ && break; sleep 0.5; done"]
+        for name, method, path in self.PROBES:
+            script.append("printf '%s ' " + name + "; curl -sk --path-as-is -X " + method +
+                          " -o /tmp/body -w '%{http_code}' 'https://gateway:8443" + path + "'; printf ' %s\\n' \"$(cat /tmp/body | tr '\\n' ' ')\"")
+        try:
+            subprocess.run(["docker", "network", "create", "--internal", tag], check=True, capture_output=True)
+            subprocess.run(["docker", "run", "-d", "--name", tag + "-relay", "--network", tag, "--network-alias", "cloudgrange-relay",
+                            "-v", stub + ":/etc/nginx/nginx.conf:ro", NGINX_IMAGE], check=True, capture_output=True)
+            subprocess.run(["docker", "run", "-d", "--name", tag + "-gateway", "--network", tag, "--network-alias", "gateway",
+                            "-v", conf + ":/etc/nginx/nginx.conf:ro", "-v", certs + ":/etc/nginx/certs:ro",
+                            "--add-host", "cloudgrange-portal:127.0.0.1", "--add-host", "keycloak:127.0.0.1",
+                            NGINX_IMAGE], check=True, capture_output=True)
+            r = subprocess.run(["docker", "run", "--rm", "--network", tag, "--entrypoint", "sh", NGINX_IMAGE, "-c", "\n".join(script)],
+                               capture_output=True, text=True, timeout=180)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        finally:
+            subprocess.run(["docker", "rm", "-f", tag + "-relay", tag + "-gateway"], capture_output=True)
+            subprocess.run(["docker", "network", "rm", tag], capture_output=True)
+        names = {name for name, _, _ in self.PROBES}
+        results = {}
+        for line in r.stdout.splitlines():
+            parts = line.split(" ", 2)
+            if len(parts) >= 2 and parts[0] in names:
+                results[parts[0]] = (parts[1], parts[2].strip() if len(parts) > 2 else "")
+        self.assertEqual(sorted(results), sorted(name for name, _, _ in self.PROBES), r.stdout)
+        return results
+
+    def test_8443_forwards_only_get_and_post_agent_calls_and_hides_reenrollment_approvals(self):
+        r = self.probe_8443(os.path.join(REPO, "compose", "nginx", "nginx.conf"))
+        self.assertEqual(r["enroll"], ("200", "relay:POST /lan/v1/agents/enroll"))
+        self.assertEqual(r["jobs"], ("200", "relay:GET /lan/v1/agents/a1/jobs"))
+        for name in ("delete", "put"):
+            self.assertEqual(r[name][0], "403", (name, r[name]))
+            self.assertNotIn("relay:", r[name][1])
+        for name in self.APPROVAL_PROBES + ["metrics", "root"]:
+            self.assertEqual(r[name][0], "404", (name, r[name]))
+            self.assertNotIn("relay:", r[name][1], name)
+
+    def test_8443_probe_sees_approvals_reach_the_relay_when_the_block_is_removed(self):
+        self.plant_nginx(self.APPROVALS_BLOCK, "")
+        r = self.probe_8443(self.nginx_conf())
+        self.assertEqual(r["approvals"], ("200", "relay:POST /lan/v1/agents/reenrollment-approvals"))
+        self.assertEqual(r["approvals_case"][0], "200")
+
+    def test_8443_probe_sees_delete_reach_the_relay_when_limit_except_is_removed(self):
+        self.plant_nginx(self.LIMIT_EXCEPT, "")
+        r = self.probe_8443(self.nginx_conf())
+        self.assertEqual(r["delete"], ("200", "relay:DELETE /lan/v1/agents/enroll"))
 
 
 if __name__ == "__main__":

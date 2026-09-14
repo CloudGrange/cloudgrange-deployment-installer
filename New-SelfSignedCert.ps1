@@ -26,6 +26,9 @@
 #   VmName      — Hyper-V VM name (used with Credential)
 #   UseWsl2     — Switch: use WSL2 instead of a Hyper-V VM
 
+# AB#8129: bounded ssh transport (Get-CloudGrangeSshOptions, Invoke-CloudGrangeSsh).
+. (Join-Path $PSScriptRoot 'scripts\CloudGrange-Common.ps1')
+
 function New-SelfSignedCert {
     [CmdletBinding()]
     param(
@@ -144,25 +147,12 @@ rm -rf "`$CERT_DIR"
             Write-Error "New-SelfSignedCert: certificate generation failed in WSL2 (exit $($p.ExitCode))."
         }
     } elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
-        $sshOpts   = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
+        $sshOpts   = Get-CloudGrangeSshOptions -KeyPath $SshKeyPath
         $sshTarget = "cloudgrange@$VmIp"
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = 'ssh.exe'
-        foreach ($arg in $sshOpts) { $psi.ArgumentList.Add($arg) }
-        $psi.ArgumentList.Add($sshTarget)
-        $psi.ArgumentList.Add('sudo')
-        $psi.ArgumentList.Add('bash')
-        $psi.ArgumentList.Add('-s')
-        $psi.RedirectStandardInput = $true
-        $psi.UseShellExecute = $false
-        $p = [System.Diagnostics.Process]::new()
-        $p.StartInfo = $psi
-        $p.Start() | Out-Null
-        $p.StandardInput.BaseStream.Write($bashBytes, 0, $bashBytes.Length)
-        $p.StandardInput.Close()
-        $p.WaitForExit()
-        if ($p.ExitCode -ne 0) {
-            Write-Error "New-SelfSignedCert: certificate generation failed via SSH (exit $($p.ExitCode))."
+        # Raw bytes on ssh stdin (no PowerShell pipeline newline conversion); bounded like every installer ssh call.
+        Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, 'sudo', 'bash', '-s')) -StandardInput $bashBytes -TimeoutSeconds 300
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "New-SelfSignedCert: certificate generation failed via SSH (exit $LASTEXITCODE)."
         }
     } else {
         if ($null -eq $Credential) {

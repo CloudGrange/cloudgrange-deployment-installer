@@ -2,6 +2,9 @@
 # Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 
+# AB#8129: bounded ssh/scp transport (Get-CloudGrangeSshOptions, Invoke-CloudGrangeSsh).
+. (Join-Path $PSScriptRoot 'CloudGrange-Common.ps1')
+
 function Deploy-DockerCompose {
     [CmdletBinding()]
     param(
@@ -147,13 +150,15 @@ exit 0
         $bashDeploy | wsl -d Ubuntu -u root -- bash -s
     } elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
         # SSH path — copy compose files then run deploy script.
-        $sshOpts = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
+        # AB#8129: every ssh/scp call is bounded (BatchMode, connect and keepalive timeouts, overall -TimeoutSeconds).
+        $sshOpts = Get-CloudGrangeSshOptions -KeyPath $SshKeyPath
         $sshTarget = "cloudgrange@$VmIp"
 
         # AB#8129: /opt/cloudgrange stays root-owned (root services execute its scripts and compose file), so the
         # unprivileged 'cloudgrange' user uploads into a staging directory and root copies the files into place.
         $uploadDir = '/var/tmp/cloudgrange-compose-upload'
-        & ssh.exe @sshOpts $sshTarget "rm -rf $uploadDir && mkdir -p $uploadDir && sudo mkdir -p $composeDir"
+        Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, "rm -rf $uploadDir && mkdir -p $uploadDir && sudo mkdir -p $composeDir")) -TimeoutSeconds 120
+        if ($LASTEXITCODE -ne 0) { Write-Error "Preparing the compose upload directory failed (exit $LASTEXITCODE)." }
 
         # Copy each compose file via scp.
         $composeFiles = Get-ChildItem -Path $composeSrc -Recurse -File
@@ -161,24 +166,25 @@ exit 0
             $rel = $f.FullName.Substring($composeSrc.Length).TrimStart('\', '/')
             $destDir = "$uploadDir/$(($rel | Split-Path -Parent) -replace '\\','/')".TrimEnd('/')
             if ($destDir -ne $uploadDir) {
-                & ssh.exe @sshOpts $sshTarget "mkdir -p $destDir"
+                Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, "mkdir -p $destDir")) -TimeoutSeconds 120
             }
-            & scp.exe @sshOpts $f.FullName "${sshTarget}:${uploadDir}/$($rel -replace '\\','/')"
+            Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @($f.FullName, "${sshTarget}:${uploadDir}/$($rel -replace '\\','/')")) -TimeoutSeconds 120
+            if ($LASTEXITCODE -ne 0) { Write-Error "Upload of compose file $rel failed (exit $LASTEXITCODE)." }
         }
-        & ssh.exe @sshOpts $sshTarget "sudo cp -r $uploadDir/. $composeDir/ && rm -rf $uploadDir && sudo chown -R root:root $composeDir && sudo chmod -R go-w $composeDir"
+        Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, "sudo cp -r $uploadDir/. $composeDir/ && rm -rf $uploadDir && sudo chown -R root:root $composeDir && sudo chmod -R go-w $composeDir")) -TimeoutSeconds 120
         if ($LASTEXITCODE -ne 0) { Write-Error "Installing the compose files into $composeDir failed (exit $LASTEXITCODE)." }
 
         # AB#1852: upload bundled image tar before deploy (bundled/offline mode)
         if (-not [string]::IsNullOrEmpty($BundledImagesPath) -and (Test-Path $BundledImagesPath)) {
             Write-Host "  Uploading bundled images tar (~$('{0:N0}' -f ((Get-Item $BundledImagesPath).Length / 1MB)) MB)..." -ForegroundColor Gray
-            & scp.exe @sshOpts $BundledImagesPath "${sshTarget}:${remoteTarPath}"
+            Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @($BundledImagesPath, "${sshTarget}:${remoteTarPath}")) -TimeoutSeconds 3600
             if ($LASTEXITCODE -ne 0) { Write-Error "Upload of bundled images failed (exit $LASTEXITCODE)." }
             Write-Host "  Loading bundled images..." -ForegroundColor Gray
-            & ssh.exe @sshOpts $sshTarget "sudo docker load -i $remoteTarPath && sudo rm -f $remoteTarPath"
+            Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, "sudo docker load -i $remoteTarPath && sudo rm -f $remoteTarPath")) -TimeoutSeconds 3600
             if ($LASTEXITCODE -ne 0) { Write-Error "docker load of bundled images failed (exit $LASTEXITCODE)." }
             # AB#8129: fail before anything could reach a registry if a pinned image does not resolve locally.
             $verifyImages = "cd $composeDir && missing=0 && for i in `$( { docker compose config --images 2>/dev/null; head -1 helper-images.txt; } | sort -u ); do sudo docker image inspect `"`$i`" >/dev/null 2>&1 || { echo `"MISSING: `$i`"; missing=1; }; done; exit `$missing"
-            & ssh.exe @sshOpts $sshTarget $verifyImages
+            Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, $verifyImages)) -TimeoutSeconds 300
             if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-013: bundled images are missing or unnamed after docker load; refusing to continue (a registry pull would be attempted)." }
             Write-Host "  All pinned images resolve locally." -ForegroundColor Green
         }
@@ -190,23 +196,9 @@ exit 0
 
         # Run the deploy script — write raw bytes to SSH stdin to prevent PowerShell
         # StreamWriter.WriteLine() from appending \r\n and corrupting the last bash command.
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = 'ssh.exe'
-        foreach ($arg in $sshOpts) { $psi.ArgumentList.Add($arg) }
-        $psi.ArgumentList.Add($sshTarget)
-        $psi.ArgumentList.Add('sudo')
-        $psi.ArgumentList.Add('bash')
-        $psi.ArgumentList.Add('-s')
-        $psi.RedirectStandardInput = $true
-        $psi.UseShellExecute = $false
-        $deployProc = [System.Diagnostics.Process]::new()
-        $deployProc.StartInfo = $psi
-        $deployProc.Start() | Out-Null
-        $deployProc.StandardInput.BaseStream.Write($deployBytes, 0, $deployBytes.Length)
-        $deployProc.StandardInput.Close()
-        $deployProc.WaitForExit()
-        if ($deployProc.ExitCode -ne 0) {
-            Write-Error "Docker Compose deploy via SSH failed (exit $($deployProc.ExitCode))."
+        Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, 'sudo', 'bash', '-s')) -StandardInput $deployBytes -TimeoutSeconds 3600
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Docker Compose deploy via SSH failed (exit $LASTEXITCODE)."
         }
     } else {
         if ($null -eq $Credential) {
