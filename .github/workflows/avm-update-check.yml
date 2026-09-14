@@ -3,9 +3,6 @@ name: AVM Version Update Check
 # Compares pinned versions in iac/ Bicep files against the MCR registry.
 # Opens a GitHub Issue listing outdated modules when newer versions are available.
 on:
-  schedule:
-    # Every Monday at 09:00 UTC
-    - cron: '0 9 * * 1'
   workflow_dispatch:
 
 permissions:
