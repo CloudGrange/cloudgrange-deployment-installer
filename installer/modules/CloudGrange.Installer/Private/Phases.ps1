@@ -1,7 +1,7 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-    Phase registry, mode table and the resumable run engine (docs/product-installer-design.md §3.3-§3.4).
+    Phase registry, mode table and the resumable run engine (docs/future-profiles/rke2-bom-installer-design.md §3.3-§3.4).
 .DESCRIPTION
     The 13 phases run in a fixed order. Each registered phase provides Pre (optional), Do and Probe
     script blocks that receive a context object. Engine rules:

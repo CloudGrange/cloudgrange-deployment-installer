@@ -3,7 +3,7 @@
 .SYNOPSIS
     CloudGrange product installer: the single customer entry point on the management node.
 .DESCRIPTION
-    docs/product-installer-design.md §1.5 and §3. Runs from the extracted, SHA-256-authenticated
+    docs/future-profiles/rke2-bom-installer-design.md §1.5 and §3. Runs from the extracted, SHA-256-authenticated
     install bundle on Ubuntu 24.04 under PowerShell 7 as root:
 
         sudo pwsh ./Install-CloudGrange.ps1 -Mode Install -SiteConfig /etc/cloudgrange/site-config.json -TrustCheckpointSha256 <hex>

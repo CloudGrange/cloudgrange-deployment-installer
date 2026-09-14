@@ -3,7 +3,7 @@
 .SYNOPSIS
     cg-install-checkpoint-v1 engine: hash-chained atomic writes and start-up recovery.
 .DESCRIPTION
-    Implements docs/product-installer-design.md §3.2 exactly.
+    Implements docs/future-profiles/rke2-bom-installer-design.md §3.2 exactly.
 
     Write order (every checkpoint):
       1. previousCheckpointSha256 = sha256(current checkpoint.json bytes) or 64 zeros; sequence = current + 1

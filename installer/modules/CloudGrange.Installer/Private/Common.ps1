@@ -5,7 +5,7 @@
     strict JSON parsing, durable file writes and the internal fault-injection hook.
 .DESCRIPTION
     Dot-sourced by CloudGrange.Installer.psm1. Nothing here touches the network or a runtime.
-    Durable writes follow docs/product-installer-design.md §3.2: write, fsync the file, rename,
+    Durable writes follow docs/future-profiles/rke2-bom-installer-design.md §3.2: write, fsync the file, rename,
     fsync the directory. Directory fsync is only possible on Linux (the supported installer
     platform); elsewhere it is skipped and reported so tests can run on developer machines.
 .NOTES
