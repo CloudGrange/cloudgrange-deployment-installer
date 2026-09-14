@@ -315,6 +315,21 @@ function Invoke-CloudGrangeInstall {
         # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
     }
 
+    # AB#8129 / AB#8894: first-run credentials. POST /api/v1/setup requires the one-use setup token
+    # the API wrote to its secrets volume; the realm administrator was created with a random temporary
+    # password. Both are read from inside the VM over SSH and shown ONLY on this console (never in a
+    # URL or a file written by the installer).
+    $setupToken = ''
+    $realmAdminPassword = ''
+    if (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
+        $credSsh = @('-i', $sshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR', '-o', 'BatchMode=yes')
+        if ($setupPending) {
+            $setupToken = ((& ssh.exe @credSsh "cloudgrange@$VmIp" 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt') -join '').Trim()
+            if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
+        }
+        $realmAdminPassword = ((& ssh.exe @credSsh "cloudgrange@$VmIp" "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2") -join '').Trim()
+    }
+
     # Clean up the ephemeral SSH key pair after successful install, unless an appliance build
     # needs it to generalize the VM (-KeepInstallerSshKey, AB#8129).
     if ($KeepInstallerSshKey -and -not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
@@ -334,8 +349,20 @@ function Invoke-CloudGrangeInstall {
         Write-Host "  First-run setup required. Navigate to:" -ForegroundColor Yellow
         Write-Host "    $portalBase/setup" -ForegroundColor White
         Write-Host "  Complete the setup wizard to configure your platform name, timezone, and admin account." -ForegroundColor Gray
+        if ($setupToken) {
+            Write-Host "  One-use setup token (required by POST /api/v1/setup, header X-CloudGrange-Setup-Token):" -ForegroundColor Yellow
+            Write-Host "    $setupToken" -ForegroundColor White
+        } else {
+            Write-Host "  Setup token: read it on the VM with" -ForegroundColor Yellow
+            Write-Host "    sudo docker compose -f /opt/cloudgrange/docker-compose.yml exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt" -ForegroundColor White
+        }
+        Write-Host "  Keep it secret: whoever presents it first completes setup. It is deleted once setup succeeds." -ForegroundColor Yellow
     } else {
         Write-Host "  Sign in at: $portalBase/login" -ForegroundColor Cyan
+    }
+    if ($realmAdminPassword) {
+        Write-Host "  Identity administrator: admin@cloudgrange.local" -ForegroundColor Cyan
+        Write-Host "    Temporary password (must be changed at first sign-in): $realmAdminPassword" -ForegroundColor White
     }
     Write-Host ""
 }
