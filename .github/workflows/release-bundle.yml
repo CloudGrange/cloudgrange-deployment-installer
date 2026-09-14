@@ -45,7 +45,17 @@ jobs:
       - name: Save container images to one tar
         run: |
           mkdir -p bundle
-          xargs -a images.txt docker save -o bundle/cloudgrange-images.tar
+          # AB#8129: save vendor images under their tag names. A digest-only `docker save` loads
+          # unnamed, and compose's "repo:tag@sha256:..." then cannot resolve without a registry.
+          : > save.txt
+          while IFS= read -r image; do
+            [ -z "$image" ] && continue
+            case "$image" in
+              ghcr.io/cloudgrange/*) echo "$image" >> save.txt ;;
+              *) named="${image%@sha256:*}"; docker tag "$image" "$named"; echo "$named" >> save.txt ;;
+            esac
+          done < images.txt
+          xargs -a save.txt docker save -o bundle/cloudgrange-images.tar
           cp images.txt bundle/images.txt
 
       - name: Copy installer files into bundle

@@ -158,6 +158,11 @@ exit 0
             Write-Host "  Loading bundled images..." -ForegroundColor Gray
             & ssh.exe @sshOpts $sshTarget "sudo docker load -i $remoteTarPath && sudo rm -f $remoteTarPath"
             if ($LASTEXITCODE -ne 0) { Write-Error "docker load of bundled images failed (exit $LASTEXITCODE)." }
+            # AB#8129: fail before anything could reach a registry if a pinned image does not resolve locally.
+            $verifyImages = "cd $composeDir && missing=0 && for i in `$( { docker compose config --images 2>/dev/null; head -1 helper-images.txt; } | sort -u ); do sudo docker image inspect `"`$i`" >/dev/null 2>&1 || { echo `"MISSING: `$i`"; missing=1; }; done; exit `$missing"
+            & ssh.exe @sshOpts $sshTarget $verifyImages
+            if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-013: bundled images are missing or unnamed after docker load; refusing to continue (a registry pull would be attempted)." }
+            Write-Host "  All pinned images resolve locally." -ForegroundColor Green
         }
 
         # AB#1593: Generate self-signed TLS cert and install into nginx_certs volume before stack starts.
