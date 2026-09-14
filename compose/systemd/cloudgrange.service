@@ -1,0 +1,20 @@
+# AB#8129 / ADR-059: systemd supervises the CloudGrange Compose stack (including the relay
+# container) so it starts on boot and restarts after a Docker daemon restart.
+# Installed by scripts/Deploy-DockerCompose.ps1 to /etc/systemd/system/cloudgrange.service.
+# Settings come from /opt/cloudgrange/.env (mode 0600, written at install time).
+[Unit]
+Description=CloudGrange Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/cloudgrange
+ExecStart=/usr/bin/docker compose --env-file /opt/cloudgrange/.env up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /opt/cloudgrange/.env down
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -75,14 +75,17 @@ try {
 
     # Step 3: Pull and save container images
     Write-Host "`n  [3/4] Pulling and saving container images..." -ForegroundColor Cyan
+    # AB#8129: keep in step with compose/docker-compose.yml (the service-list source of truth).
     $images = @(
-        "ghcr.io/cloudgrange-cloud/cloudgrange-api:$Version",
-        "ghcr.io/cloudgrange-cloud/cloudgrange-portal:$Version",
-        "ghcr.io/cloudgrange-cloud/cloudgrange-relay:$Version",
+        "ghcr.io/cloudgrange/cloudgrange-api:$Version",
+        "ghcr.io/cloudgrange/cloudgrange-portal:$Version",
+        "ghcr.io/cloudgrange/cloudgrange-relay:$Version",
         'nginx:alpine',
         'postgres:16-alpine',
+        'quay.io/keycloak/keycloak:26.6',
         'prom/prometheus:latest',
         'grafana/loki:latest',
+        'grafana/grafana:12.1.1',
         'otel/opentelemetry-collector-contrib:latest'
     )
     foreach ($img in $images) {

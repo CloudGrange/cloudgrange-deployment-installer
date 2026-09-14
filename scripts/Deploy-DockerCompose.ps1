@@ -21,8 +21,13 @@ function Deploy-DockerCompose {
 
     $composeDir = '/opt/cloudgrange'
     $composeSrc = Join-Path $PSScriptRoot '..\compose'
-    # Generate a random DB password; never written to disk on the host.
-    $dbPassword = [Convert]::ToBase64String((1..24 | ForEach-Object { [byte](Get-Random -Maximum 256) })) -replace '[^a-zA-Z0-9]','X'
+    # Generate random secrets; never written to disk on the Windows host. They are written only to
+    # /opt/cloudgrange/.env (mode 0600) inside the guest so systemd can restart the stack (AB#8129).
+    $newSecret = { [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24)).ToLowerInvariant() }
+    $dbPassword       = & $newSecret
+    $keycloakPassword = & $newSecret
+    $grafanaPassword  = & $newSecret
+    $relayToken       = & $newSecret
 
     # Bash deploy script — runs entirely inside the Linux guest via SSH sudo.
     # AB#1590: After docker compose up -d:
@@ -42,12 +47,28 @@ function Deploy-DockerCompose {
     $bashDeploy = @"
 set -euo pipefail
 mkdir -p $composeDir
-export POSTGRES_PASSWORD="$dbPassword"
-export CLOUDGRANGE_VERSION="$Version"
-export CLOUDGRANGE_API_URL="http://$VmIp:8081"
 cd $composeDir
+# AB#8129: persist settings for systemd (ADR-059). Keep existing values on re-run so
+# PostgreSQL and Keycloak credentials stay in step with their data volumes.
+if [ ! -f .env ]; then
+    umask 077
+    cat > .env <<ENVEOF
+POSTGRES_PASSWORD=$dbPassword
+KEYCLOAK_ADMIN_USER=admin
+KEYCLOAK_ADMIN_PASSWORD=$keycloakPassword
+GRAFANA_ADMIN_PASSWORD=$grafanaPassword
+RELAY_ENROLLMENT_TOKEN=$relayToken
+CLOUDGRANGE_API_URL=http://${VmIp}:8081
+CLOUDGRANGE_HOSTNAME=$VmIp
+ENVEOF
+fi
+sed -i '/^CLOUDGRANGE_VERSION=/d' .env && echo "CLOUDGRANGE_VERSION=$Version" >> .env
+chmod 600 .env
 $pullOrLoad
-docker compose up -d
+install -m 0644 $composeDir/systemd/cloudgrange.service /etc/systemd/system/cloudgrange.service
+systemctl daemon-reload
+systemctl enable cloudgrange.service
+systemctl restart cloudgrange.service
 
 # --- AB#1590 Step 1: Wait up to 60s for all services to be running ---
 echo "Verifying all services are running (timeout: 60s)..."
@@ -96,7 +117,7 @@ exit 0
     if ($UseWsl2) {
         $wslPath = "/opt/cloudgrange"
         wsl -d Ubuntu -u root -- mkdir -p $wslPath
-        wsl -d Ubuntu -u root -- bash -c "cp /mnt/$(($composeSrc -replace '\\','/' -replace ':','').ToLower())/* $wslPath/"
+        wsl -d Ubuntu -u root -- bash -c "cp -r /mnt/$(($composeSrc -replace '\\','/' -replace ':','').ToLower())/* $wslPath/"
 
         # AB#1593: Generate self-signed TLS cert and install into nginx_certs volume before stack starts.
         Write-Host "  Generating TLS certificate for nginx..." -ForegroundColor Gray

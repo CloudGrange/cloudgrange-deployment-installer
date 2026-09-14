@@ -1,27 +1,33 @@
-# CloudGrange standalone six-container stack (ADR-029)
-# Six default services: api, portal, postgres, prometheus, loki, otel-collector
-# Optional profiles:
-#   --profile keycloak  — enable when using Keycloak as external IdP (ADR-047)
-#   --profile relay     — enable when running a local relay alongside the control plane
+# CloudGrange on-premises Docker Compose stack (one Ubuntu VM; HA later via Hyper-V failover clustering)
 #
-# Required environment variables (set in .env or export):
-#   POSTGRES_PASSWORD        — PostgreSQL superuser password
-#   CLOUDGRANGE_API_URL       — Public URL of the API (e.g. https://cloudgrange.example.com)
+# This file is the source of truth for the service list (AB#8129). Default services:
+#   First-party: cloudgrange-api, cloudgrange-portal, cloudgrange-relay
+#   Platform:    nginx (ingress/TLS), postgres, keycloak (ADR-008)
+#   Observability (ADR-016): otel-collector -> prometheus + loki, grafana
+# Secrets use the PostgreSQL-encrypted provider by default (ADR-009); OpenBao is optional and not
+# part of this stack. Entra ID is optional and not bundled. The relay runs as a Compose container and
+# the whole stack is supervised by systemd (systemd/cloudgrange.service, ADR-059).
+# The runtime agent is a Windows host service, not a container; it is not part of this file.
+#
+# Required environment variables (set in .env; Deploy-DockerCompose writes /opt/cloudgrange/.env):
+#   POSTGRES_PASSWORD         — PostgreSQL superuser password
+#   KEYCLOAK_ADMIN_USER       — Keycloak bootstrap admin username
+#   KEYCLOAK_ADMIN_PASSWORD   — Keycloak bootstrap admin password
+#   GRAFANA_ADMIN_PASSWORD    — Grafana admin password
+#   RELAY_ENROLLMENT_TOKEN    — Shared token agents use to enroll with the relay
 #
 # Optional environment variables:
-#   CLOUDGRANGE_VERSION       — Container image tag (default: latest)
+#   CLOUDGRANGE_VERSION       — First-party image tag (default: latest)
+#   CLOUDGRANGE_API_URL       — Public URL of the API (e.g. https://cloudgrange.example.com)
 #   CLOUDGRANGE_DB_CONNECTION — Full connection string (overrides auto-generated from POSTGRES_* vars)
 #   CLOUDGRANGE_OTLP_ENDPOINT — OTel collector gRPC endpoint (default: http://otel-collector:4317)
-#   KEYCLOAK_HOSTNAME        — Keycloak external hostname (keycloak profile only)
-#   KEYCLOAK_ADMIN_USER      — Keycloak admin username (keycloak profile only)
-#   KEYCLOAK_ADMIN_PASSWORD  — Keycloak admin password (keycloak profile only)
-#   RELAY_ENROLLMENT_TOKEN   — Enrollment token for relay (relay profile only)
+#   CLOUDGRANGE_HOSTNAME      — Keycloak external hostname (default: localhost)
 
 name: cloudgrange
 
 services:
   cloudgrange-api:
-    image: ghcr.io/cloudgrange-cloud/cloudgrange-api:${CLOUDGRANGE_VERSION:-latest}
+    image: ghcr.io/cloudgrange/cloudgrange-api:${CLOUDGRANGE_VERSION:-latest}
     restart: always
     ports:
       - "8081:8080"
@@ -46,7 +52,7 @@ services:
       - cloudgrange
 
   cloudgrange-portal:
-    image: ghcr.io/cloudgrange-cloud/cloudgrange-portal:${CLOUDGRANGE_VERSION:-latest}
+    image: ghcr.io/cloudgrange/cloudgrange-portal:${CLOUDGRANGE_VERSION:-latest}
     restart: always
     # AB#1593: port 443 is now handled by the nginx TLS terminator.
     # Port 80 is internal only (not exposed on the host); nginx proxies to it.
@@ -57,6 +63,36 @@ services:
     depends_on:
       cloudgrange-api:
         condition: service_healthy
+    networks:
+      - cloudgrange
+
+  # AB#8129 / ADR-059: the relay is a default Compose container; systemd supervises the stack.
+  # Agents on managed Hyper-V hosts connect to it over mTLS (ADR-008).
+  cloudgrange-relay:
+    image: ghcr.io/cloudgrange/cloudgrange-relay:${CLOUDGRANGE_VERSION:-latest}
+    restart: always
+    ports:
+      - "8443:8443"
+    environment:
+      - RELAY_PAAS_URL=http://cloudgrange-api:8080
+      - RELAY_ENROLLMENT_TOKEN=${RELAY_ENROLLMENT_TOKEN}
+      - RELAY_DISPLAY_NAME=${RELAY_DISPLAY_NAME:-site-relay}
+      - RELAY_CLUSTER_ID=${RELAY_CLUSTER_ID:-default}
+      - RELAY_LISTEN_PORT=8443
+      - RELAY_IDENTITY_DIR=/var/lib/cloudgrange-relay/identity
+      - Logging__LogLevel__Default=Information
+    volumes:
+      # The image declares this path as a volume; name it so the enrolled identity survives upgrades.
+      - relay_identity:/var/lib/cloudgrange-relay/identity
+    depends_on:
+      cloudgrange-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8443) 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - cloudgrange
 
@@ -95,55 +131,17 @@ services:
     networks:
       - cloudgrange
 
-  prometheus:
-    image: prom/prometheus:latest
-    restart: always
-    volumes:
-      - prometheus_data:/prometheus
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=15d
-    networks:
-      - cloudgrange
-
-  loki:
-    image: grafana/loki:latest
-    restart: always
-    volumes:
-      - loki_data:/loki
-      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
-    command: -config.file=/etc/loki/local-config.yaml
-    networks:
-      - cloudgrange
-
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
-    restart: always
-    volumes:
-      - ./otel-collector.yml:/etc/otel/config.yaml:ro
-    command: ["--config=/etc/otel/config.yaml"]
-    networks:
-      - cloudgrange
-
-  # --- Optional: Keycloak (--profile keycloak) ---
-  # AB#1592: Production-mode Keycloak using PostgreSQL backend.
-  # Enable when using Keycloak as the external IdP. Not required for first-run setup;
-  # the CloudGrange first-run wizard can configure Keycloak as an IdP after initial setup.
+  # AB#8129 / ADR-008: local Keycloak is a default service (previously the optional "keycloak" profile).
+  # AB#1592: production start (not start-dev) with realm import on first boot, PostgreSQL backend.
   keycloak:
-    profiles: ["keycloak"]
     image: quay.io/keycloak/keycloak:26.6
-    # AB#1592: production start (not start-dev) with realm import on first boot.
     command: start --import-realm
     restart: always
     environment:
-      # AB#1592: use PostgreSQL — not dev-file in-process DB.
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-cloudgrange}
       KC_DB_USERNAME: ${POSTGRES_USER:-cloudgrange}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      # AB#1592: configurable hostname; defaults to localhost for standalone installs.
       KC_HOSTNAME: ${CLOUDGRANGE_HOSTNAME:-localhost}
       KC_HTTP_PORT: "8080"
       # KC_HTTP_ENABLED required in production mode when TLS termination is handled externally.
@@ -167,32 +165,58 @@ services:
     networks:
       - cloudgrange
 
-  # --- Optional: Local relay (--profile relay) ---
-  # Enable when running a relay alongside the control plane on the same host.
-  # Production deployments typically run the relay on each managed Hyper-V host.
-  cloudgrange-relay:
-    profiles: ["relay"]
-    image: ghcr.io/cloudgrange-cloud/cloudgrange-relay:${CLOUDGRANGE_VERSION:-latest}
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
     restart: always
-    ports:
-      - "8443:8443"
+    volumes:
+      - ./otel-collector.yml:/etc/otel/config.yaml:ro
+    command: ["--config=/etc/otel/config.yaml"]
+    networks:
+      - cloudgrange
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      # The OTel collector exports metrics with prometheusremotewrite (otel-collector.yml).
+      - --web.enable-remote-write-receiver
+    networks:
+      - cloudgrange
+
+  loki:
+    image: grafana/loki:latest
+    restart: always
+    volumes:
+      - loki_data:/loki
+      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - cloudgrange
+
+  # AB#8129 / ADR-016: Grafana over Prometheus (metrics) and Loki (logs). Internal only;
+  # reach it through an SSH tunnel or add an nginx route when operators need it.
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: always
     environment:
-      - RELAY_PAAS_URL=http://cloudgrange-api:8080
-      - RELAY_ENROLLMENT_TOKEN=${RELAY_ENROLLMENT_TOKEN}
-      - RELAY_DISPLAY_NAME=${RELAY_DISPLAY_NAME:-site-relay}
-      - RELAY_CLUSTER_ID=${RELAY_CLUSTER_ID:-default}
-      - RELAY_LISTEN_PORT=8443
-      - RELAY_IDENTITY_DIR=/var/lib/cloudgrange-relay/identity
-      - Logging__LogLevel__Default=Information
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    expose:
+      - "3000"
     depends_on:
-      cloudgrange-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8443) 2>/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      - prometheus
+      - loki
     networks:
       - cloudgrange
 
@@ -200,6 +224,8 @@ volumes:
   postgres_data:
   prometheus_data:
   loki_data:
+  grafana_data:
+  relay_identity:
   # AB#1593: TLS certs for nginx. Populated by New-SelfSignedCert.ps1 at install time.
   # Replace with CA-signed certs for production use.
   nginx_certs:

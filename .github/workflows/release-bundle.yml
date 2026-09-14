@@ -1,7 +1,10 @@
 name: Release Bundle
-# Builds the air-gap bundled distribution ZIP on v*.*.* tag push (AB#1586, AB#1587).
-# The bundle contains all container images as .tar files, cloud-init templates,
-# and Install-CloudGrange.ps1 — sufficient to install CloudGrange with no internet access.
+# Builds the air-gap bundled distribution ZIP on v*.*.* tag push (AB#1586, AB#1587, AB#8129).
+# The bundle contains every image in compose/docker-compose.yml saved to one
+# cloudgrange-images.tar (the file Install-CloudGrange.ps1 -Mode Bundled loads), the compose
+# files, the systemd unit, and Install-CloudGrange.ps1. The image list is read from the compose
+# file, which is the source of truth for the service list.
+# The bundle is NOT signed: SHA256SUMS is an integrity check only, not an authenticity check.
 on:
   push:
     tags:
@@ -13,10 +16,7 @@ jobs:
   build-bundle:
     runs-on: ubuntu-latest
     env:
-      IMAGES: |
-        ghcr.io/cloudgrange-cloud/cloudgrange-api:latest
-        ghcr.io/cloudgrange-cloud/cloudgrange-portal:latest
-        ghcr.io/cloudgrange-cloud/cloudgrange-relay:latest
+      CLOUDGRANGE_VERSION: latest
     steps:
       - uses: actions/checkout@v4
 
@@ -27,29 +27,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve image list from compose
+        run: |
+          docker compose -f compose/docker-compose.yml config --images | sort -u > images.txt
+          echo "Images:"; cat images.txt
+
       - name: Pull container images
         run: |
           while IFS= read -r image; do
             [ -z "$image" ] && continue
             echo "Pulling $image..."
             docker pull "$image"
-          done <<< "$IMAGES"
+          done < images.txt
 
-      - name: Save container images as .tar files
+      - name: Save container images to one tar
         run: |
-          mkdir -p bundle/images
-          while IFS= read -r image; do
-            [ -z "$image" ] && continue
-            # Derive a safe filename from the image reference
-            safe=$(echo "$image" | tr '/:' '_')
-            echo "Saving $image -> bundle/images/${safe}.tar"
-            docker save "$image" -o "bundle/images/${safe}.tar"
-          done <<< "$IMAGES"
+          mkdir -p bundle
+          xargs -a images.txt docker save -o bundle/cloudgrange-images.tar
+          cp images.txt bundle/images.txt
 
       - name: Copy installer files into bundle
         run: |
           cp Install-CloudGrange.ps1   bundle/
           cp verify-bundle.ps1        bundle/
+          cp New-SelfSignedCert.ps1   bundle/
           cp Uninstall-CloudGrange.ps1 bundle/ 2>/dev/null || true
           cp Update-CloudGrange.ps1    bundle/ 2>/dev/null || true
           cp -r scripts/              bundle/scripts/
@@ -67,7 +68,6 @@ jobs:
 
       - name: Create bundle ZIP
         run: |
-          VERSION="${GITHUB_REF_NAME}"
           ZIP_NAME="Install-CloudGrange-Bundled.zip"
           cd bundle
           zip -r "../${ZIP_NAME}" .
