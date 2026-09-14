@@ -19,8 +19,9 @@
 #   - file set and content come only from the source tree and the verified inputs;
 #   - every file and directory gets mode u=rwX,go=rX and mtime SOURCE_DATE_EPOCH (release/SOURCE_DATE_EPOCH);
 #   - the zip is written in C-locale sorted order with no extra attributes (zip -X -D) and TZ=UTC;
-#   - `docker save` output is already deterministic (epoch mtimes, content-addressed blobs) for the same images
-#     saved in the same (sorted) order; SHA256SUMS and images.txt are sorted.
+#   - `docker save` blobs are content-addressed with epoch mtimes, but its manifest.json/index.json list the
+#     images in random (map) order, so both are sorted and the image tar is repacked with GNU tar (sorted names,
+#     0/0 owners, fixed modes, SOURCE_DATE_EPOCH mtimes); SHA256SUMS and images.txt are sorted.
 set -euo pipefail
 
 usage() { sed -n '5,23p' "$0" >&2; exit 2; }
@@ -87,7 +88,32 @@ while IFS= read -r ref; do
 done < "$WORK/images.txt"
 sort -u -o "$WORK/save.txt" "$WORK/save.txt"
 # shellcheck disable=SC2046
-docker save -o "$B/cloudgrange-images.tar" $(cat "$WORK/save.txt")
+docker save -o "$WORK/images-raw.tar" $(cat "$WORK/save.txt")
+# `docker save` writes the blobs deterministically, but lists the images in manifest.json (and index.json) in
+# map order, which changes between runs. Sort both and repack with fixed order, owners, modes and mtimes.
+IMG="$WORK/images"
+mkdir -p "$IMG"
+tar -xf "$WORK/images-raw.tar" -C "$IMG"
+rm -f "$WORK/images-raw.tar"
+python3 - "$IMG" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+path = os.path.join(d, "manifest.json")
+entries = json.load(open(path))
+entries.sort(key=lambda e: ((e.get("RepoTags") or [""])[0], e.get("Config", "")))
+with open(path, "w") as f:
+    json.dump(entries, f, separators=(",", ":"))
+path = os.path.join(d, "index.json")
+if os.path.exists(path):
+    index = json.load(open(path))
+    index.get("manifests", []).sort(key=lambda m: ((m.get("annotations") or {}).get("io.containerd.image.name", ""), m.get("digest", "")))
+    with open(path, "w") as f:
+        json.dump(index, f, separators=(",", ":"))
+PY
+# shellcheck disable=SC2046
+tar --sort=name --format=gnu --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' --mtime="@$EPOCH" \
+    -cf "$B/cloudgrange-images.tar" -C "$IMG" $(cd "$IMG" && ls -A | sort)
+rm -rf "$IMG"
 cp "$WORK/images.txt" "$B/images.txt"
 
 log "Ubuntu cloud image (pinned SHA-256)"

@@ -28,7 +28,7 @@ A first-party version tag is expected to be immutable once published. If a tag i
 
 ### What makes the zip deterministic
 
-- `docker save` writes content-addressed blobs with fixed (epoch) timestamps and root ownership. Saving the same images by name in sorted order gives the same tar.
+- `docker save` writes content-addressed blobs with fixed (epoch) timestamps and root ownership, but it lists the images in `manifest.json` and `index.json` in a random order that changes between runs. That alone made two otherwise identical builds differ. The build sorts both files and repacks `cloudgrange-images.tar` with GNU tar: sorted names, owner 0/0, fixed modes, and `SOURCE_DATE_EPOCH` mtimes.
 - Every file and directory in the bundle gets mode `u=rwX,go=rX` and mtime `SOURCE_DATE_EPOCH`, so the umask, checkout time and filesystem don't matter.
 - `SHA256SUMS` and `images.txt` are sorted in the C locale.
 - The zip is written with `TZ=UTC`, in sorted order, and with `zip -X -D`: no extra attributes (uid/gid, extended timestamps) and no directory entries.
