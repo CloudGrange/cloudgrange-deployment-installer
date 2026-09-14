@@ -84,6 +84,10 @@ rm -f /etc/ssh/ssh_host_*
 find /root /home -name authorized_keys -type f -delete 2>/dev/null || true
 
 echo "[generalize] removing per-machine keys (fwupd client key)"
+# fwupd regenerates its client key whenever the daemon (D-Bus activated) or fwupd-refresh runs, so
+# stop and runtime-mask them first (the runtime mask is gone after the next boot). Re-checked below.
+systemctl stop fwupd-refresh.timer fwupd-refresh.service fwupd.service 2>/dev/null || true
+systemctl mask --runtime fwupd.service fwupd-refresh.service fwupd-refresh.timer >/dev/null 2>&1 || true
 rm -f /var/lib/fwupd/pki/secret.key /var/lib/fwupd/pki/client.pem
 
 echo "[generalize] cleaning cloud-init, machine-id, temp files, logs and history"
@@ -102,6 +106,13 @@ find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -de
 # Truncate every remaining log: syslog, auth.log, kern.log, cloud-init, dpkg/apt, wtmp/btmp/lastlog.
 find /var/log -type f -exec truncate -s 0 {} +
 rm -f /root/.bash_history /home/*/.bash_history /root/.lesshst /home/*/.lesshst
+
+# Per-machine fwupd key must still be absent right before the free-space overwrite.
+rm -f /var/lib/fwupd/pki/secret.key /var/lib/fwupd/pki/client.pem
+if [ -e /var/lib/fwupd/pki/secret.key ]; then
+    echo "[generalize] ERROR: /var/lib/fwupd/pki/secret.key reappeared" >&2
+    exit 1
+fi
 
 echo "[generalize] overwriting free space (deleted secrets must not survive in freed blocks)"
 sync

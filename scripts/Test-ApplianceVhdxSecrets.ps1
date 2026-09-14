@@ -24,7 +24,11 @@ function Test-ApplianceVhdxSecrets {
 
     $literals = @($Values.GetEnumerator() | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Value) -and ([string]$_.Value).Length -ge 16 } |
         ForEach-Object { [pscustomobject]@{ Label = [string]$_.Key; Value = [string]$_.Value; Count = [long]0 } })
-    $pattern = [regex]::new('[A-Z_]*(?:PASSWORD|TOKEN|SECRET)=[0-9a-f]{48}(?![0-9a-f])', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    # Pattern check without a regex: .NET regex has no literal prefix to vectorize on binary image data
+    # (~6-10 MB/s observed on a 7 GB VHDX). Ordinal IndexOf on each marker is vectorized; the 48 hex
+    # characters after a marker are then checked by hand. The marker suffix matches any <NAME>PASSWORD=.
+    $markers = @('PASSWORD=', 'TOKEN=', 'SECRET=')
+    $isHex = { param([int]$c) ($c -ge 48 -and $c -le 57) -or ($c -ge 97 -and $c -le 102) }
     $patternCount = [long]0
 
     $maxLen = [Math]::Max(80, (@($literals | ForEach-Object { $_.Value.Length }) + 0 | Measure-Object -Maximum).Maximum)
@@ -47,8 +51,21 @@ function Test-ApplianceVhdxSecrets {
                     $pos++
                 }
             }
-            foreach ($m in $pattern.Matches($text)) {
-                if ($m.Index -lt $limit) { $patternCount++ }
+            foreach ($mk in $markers) {
+                $pos = 0
+                while (($pos = $text.IndexOf($mk, $pos, [StringComparison]::Ordinal)) -ge 0) {
+                    $start = $pos + $mk.Length
+                    if ($pos -lt $limit -and ($start + 48) -le $len) {
+                        $ok = $true
+                        for ($j = 0; $j -lt 48; $j++) {
+                            if (-not (& $isHex ([int]$text[$start + $j]))) { $ok = $false; break }
+                        }
+                        # exactly 48: the next character must not be another hex digit
+                        if ($ok -and ($start + 48) -lt $len -and (& $isHex ([int]$text[$start + 48]))) { $ok = $false }
+                        if ($ok) { $patternCount++ }
+                    }
+                    $pos++
+                }
             }
             $carry = [Math]::Min($maxLen - 1, $len)
             [Array]::Copy($buf, $len - $carry, $buf, 0, $carry)

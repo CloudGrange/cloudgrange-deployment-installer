@@ -16,5 +16,8 @@ for vol in api_secrets relay_identity; do
     docker run --rm --network none -v "cloudgrange_$vol:/v:ro" "$HELPER_IMAGE" sh -c \
         'find /v -type f -size -65k | while read -r f; do printf "'"$vol"':%s=%s\n" "${f#/v/}" "$(base64 -w0 < "$f")"; done'
 done
+if [ -s /var/lib/fwupd/pki/secret.key ]; then
+    printf 'fwupd:secret.key=%s\n' "$(base64 -w0 < /var/lib/fwupd/pki/secret.key)"
+fi
 docker run --rm --network none -v cloudgrange_nginx_certs:/c:ro "$HELPER_IMAGE" sh -c \
     'printf "tls:private-key-line2=%s\n" "$(sed -n 2p /c/cloudgrange.key | tr -d "\n" | base64 -w0)"'
