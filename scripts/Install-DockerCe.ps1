@@ -17,9 +17,14 @@ function Install-DockerCe {
         # SSH is the preferred path for Linux guests (Ubuntu does not ship PowerShell).
         [string]$SshKeyPath = '',
         # VM IP address used for SSH connections. Required when $SshKeyPath is provided.
-        [string]$VmIp = '192.168.100.10'
+        [string]$VmIp = '192.168.100.10',
+        # AB#8129: Bundled mode. Local directory holding the pinned Docker CE .deb set
+        # (debs/, SHA256SUMS, versions.txt). When set, packages are uploaded and installed
+        # with no network access in the guest.
+        [string]$OfflinePackagesPath = ''
         # ProxyPassword is never passed to this function — it is written inside the VM only, never logged here
     )
+    $remoteDebDir = '/var/tmp/cloudgrange-docker-debs'
 
     # Bash payload executed inside the Linux guest (Ubuntu). Kept as a single-quoted PowerShell
     # here-string so PowerShell never tries to parse '$' or backticks — bash receives the script
@@ -36,22 +41,33 @@ echo "Waiting for cloud-init to complete..."
 sudo cloud-init status --wait --long 2>/dev/null || true
 echo "cloud-init done: $(sudo cloud-init status 2>/dev/null || echo unknown)"
 
-echo "Starting Docker CE installation..."
-apt-get update -qq
-# jq is used by Deploy-DockerCompose's service-state check (AB#1590); without it the check passes vacuously.
-apt-get install -y -qq ca-certificates curl gnupg jq
+OFFLINE_DIR='__OFFLINE_DIR__'
+if [ -n "$OFFLINE_DIR" ]; then
+    # AB#8129 Bundled mode: install the pinned .deb set shipped in the bundle. No network access.
+    echo "Installing Docker CE from bundled packages in $OFFLINE_DIR (offline)..."
+    cd "$OFFLINE_DIR"
+    sha256sum -c --quiet SHA256SUMS
+    cat versions.txt
+    apt-get install -y -qq --no-download --allow-downgrades ./debs/*.deb
+    cd /
+else
+    echo "Starting Docker CE installation..."
+    apt-get update -qq
+    # jq is used by Deploy-DockerCompose's service-state check (AB#1590); without it the check passes vacuously.
+    apt-get install -y -qq ca-certificates curl gnupg jq
 
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
 
-ARCH=$(dpkg --print-architecture)
-. /etc/os-release
-REPO="deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable"
-echo "$REPO" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    ARCH=$(dpkg --print-architecture)
+    . /etc/os-release
+    REPO="deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable"
+    echo "$REPO" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-apt-get update -qq
-apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    apt-get update -qq
+    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
 
 systemctl enable docker
 systemctl start docker
@@ -74,6 +90,8 @@ exit 0
 
     # Substitute the proxy placeholder safely (single-quoted in bash, so no shell expansion risk).
     $bashScript = $bashTemplate.Replace('__PROXY__', ($Proxy -replace "'", "'\''"))
+    $offlineDir = if (-not [string]::IsNullOrEmpty($OfflinePackagesPath)) { $remoteDebDir } else { '' }
+    $bashScript = $bashScript.Replace('__OFFLINE_DIR__', $offlineDir)
     # Normalize line endings to LF — byte-level strip to handle any CRLF combination.
     # PowerShell here-strings on Windows embed CRLF; bash rejects \r in pipefail option names.
     $bashBytes  = [System.Text.Encoding]::UTF8.GetBytes($bashScript)
@@ -102,6 +120,16 @@ exit 0
             "cloudgrange@$VmIp",
             'sudo', 'bash', '-s'
         )
+        if (-not [string]::IsNullOrEmpty($OfflinePackagesPath)) {
+            if (-not (Test-Path (Join-Path $OfflinePackagesPath 'SHA256SUMS'))) {
+                Write-Error "CG-INST-ERR-011: bundled Docker CE packages are incomplete at $OfflinePackagesPath (SHA256SUMS missing)."
+            }
+            Write-Host "  Uploading bundled Docker CE packages..." -ForegroundColor Gray
+            $sshOnly = $sshArgs[0..($sshArgs.Count - 4)]
+            & ssh.exe @sshOnly "cloudgrange@$VmIp" "rm -rf $remoteDebDir && mkdir -p $remoteDebDir"
+            & scp.exe -r @sshOnly (Join-Path $OfflinePackagesPath '*') "cloudgrange@${VmIp}:$remoteDebDir/"
+            if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-011: upload of bundled Docker CE packages failed (exit $LASTEXITCODE)." }
+        }
         # Write raw bytes directly to SSH stdin — PowerShell's string pipeline appends
         # \r\n (Windows [Environment]::NewLine) which corrupts the last bash command.
         $psi = [System.Diagnostics.ProcessStartInfo]::new()

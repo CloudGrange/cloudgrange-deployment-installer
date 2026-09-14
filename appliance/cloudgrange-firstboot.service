@@ -1,0 +1,18 @@
+# AB#8129 — re-key an imported CloudGrange appliance on its first boot, before the stack starts.
+[Unit]
+Description=CloudGrange appliance first-boot re-keying
+ConditionPathExists=/etc/cloudgrange/firstboot-pending
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+Before=cloudgrange.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cloudgrange-firstboot.sh
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=cloudgrange.service

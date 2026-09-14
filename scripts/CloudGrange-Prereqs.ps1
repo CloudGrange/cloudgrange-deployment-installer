@@ -18,55 +18,74 @@ Set-StrictMode -Version Latest
 function Initialize-CloudGrangePrereqs {
     <#
     .SYNOPSIS
-        Verifies installer-side prerequisites and auto-installs the missing ones.
+        Verifies installer-side prerequisites. Fails closed when qemu-img is missing.
     .DESCRIPTION
         PowerShell 7+ is enforced by the #requires directive in Install-CloudGrange.ps1.
         Hyper-V is checked in the main installer.
-        This function handles the two prerequisites the installer needs at image-conversion
-        and seed-ISO-build time:
-          1. qemu-img.exe — auto-installed from the upstream Windows build if missing.
+          1. qemu-img — REQUIRED on PATH (AB#8129). The installer never silently downloads or
+             installs software. Install QEMU for Windows yourself (see docs/prerequisites.md),
+             or pass -InstallPinnedQemu to install the one pinned, SHA-512-verified build below.
           2. ISO writer — handled by IMAPI2 COM (built into Windows); no install needed.
+    .PARAMETER InstallPinnedQemu
+        Explicit operator opt-in: download the pinned QEMU build, verify its SHA-512 before
+        execution, and install it. Any mismatch aborts before the file is run.
     #>
     [CmdletBinding()]
-    param()
+    param(
+        [switch]$InstallPinnedQemu
+    )
 
     Write-Host "  Verifying installer prerequisites..." -ForegroundColor Gray
 
     # qemu-img is required to convert the Ubuntu cloud .img to a Hyper-V Gen2 .vhdx.
-    if (-not (Get-Command qemu-img.exe -ErrorAction SilentlyContinue)) {
-        Write-Host "  qemu-img not found - installing QEMU for Windows..."
-        Install-CloudGrangeQemu
-    } else {
-        Write-Host "  qemu-img: available" -ForegroundColor Green
+    if (Get-Command qemu-img -ErrorAction SilentlyContinue) {
+        Write-Host "  qemu-img: available ($((Get-Command qemu-img).Source))" -ForegroundColor Green
+        return
     }
+    if ($InstallPinnedQemu) {
+        Write-Host "  qemu-img not found - installing the pinned QEMU build (-InstallPinnedQemu)..."
+        Install-CloudGrangeQemu
+        return
+    }
+    Write-Host "  CG-INST-ERR-004: qemu-img was not found on PATH." -ForegroundColor Red
+    Write-Host "  Install QEMU for Windows (qemu-img.exe) and add it to PATH, then re-run." -ForegroundColor Yellow
+    Write-Host "  See docs/prerequisites.md for the supported build and its SHA-512," -ForegroundColor Yellow
+    Write-Host "  or re-run with -InstallPinnedQemu to install that verified build." -ForegroundColor Yellow
+    Write-Error "CG-INST-ERR-004: qemu-img is required and was not found. Nothing was installed."
 }
+
+# Pinned QEMU for Windows build (AB#8129). SHA-512 matches upstream qemu-w64-setup-20260811.sha512,
+# observed 2026-09-14. Update the version and hash together, never independently.
+$script:CloudGrangeQemuVersion  = '20260811'
+$script:CloudGrangeQemuSha512   = '5bcf9eed634e8575a37b74f445af41a2fe4106da512d0c30c368301d4c105037fdfab40a5287367a28a957624cddebbc8c07e16c88ab6634f554cdf3d16bf543'
 
 function Install-CloudGrangeQemu {
     <#
     .SYNOPSIS
-        Downloads and silently installs the latest QEMU for Windows build.
+        Downloads the pinned QEMU for Windows build, verifies its SHA-512, then installs it.
     .DESCRIPTION
-        Source: https://qemu.weilnetz.de/w64/ — the official upstream Windows build feed
-        (referenced by qemu.org). The directory contains qemu-w64-setup-YYYYMMDD.exe
-        files; we pick the newest one by date.
+        Source: https://qemu.weilnetz.de/w64/ (upstream Windows build feed referenced by qemu.org).
+        Only the pinned file name is fetched; the hash is checked before execution and a mismatch
+        deletes the download and aborts (fail closed). Called only with -InstallPinnedQemu.
     #>
     [CmdletBinding()]
     param(
         [string]$InstallDir = 'C:\Program Files\qemu'
     )
 
-    $indexUrl = 'https://qemu.weilnetz.de/w64/'
-    $listing = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing
-    $matches = [regex]::Matches($listing.Content, 'qemu-w64-setup-(\d{8})\.exe')
-    if (-not $matches.Count) {
-        Write-Error "Could not locate a QEMU for Windows installer at $indexUrl. Install QEMU manually and re-run."
-    }
-    $latest = $matches | Sort-Object { [int]$_.Groups[1].Value } -Descending | Select-Object -First 1
-    $setupUrl = "$indexUrl$($latest.Value)"
-    $setupExe = Join-Path $env:TEMP $latest.Value
+    $fileName = "qemu-w64-setup-$($script:CloudGrangeQemuVersion).exe"
+    $setupUrl = "https://qemu.weilnetz.de/w64/$fileName"
+    $setupExe = Join-Path $env:TEMP $fileName
 
-    Write-Host "  Downloading $($latest.Value)..."
+    Write-Host "  Downloading $fileName..."
     Invoke-WebRequest -Uri $setupUrl -OutFile $setupExe -UseBasicParsing
+
+    $actual = (Get-FileHash -Path $setupExe -Algorithm SHA512).Hash
+    if ($actual -ine $script:CloudGrangeQemuSha512) {
+        Remove-Item -LiteralPath $setupExe -Force -ErrorAction SilentlyContinue
+        Write-Error "CG-INST-ERR-005: $fileName SHA-512 mismatch (expected $($script:CloudGrangeQemuSha512), got $actual). The file was deleted and not executed."
+    }
+    Write-Host "  SHA-512 verified for $fileName" -ForegroundColor Green
 
     Write-Host "  Installing QEMU silently (NSIS /S)..."
     $proc = Start-Process -FilePath $setupExe -ArgumentList '/S' -Wait -PassThru

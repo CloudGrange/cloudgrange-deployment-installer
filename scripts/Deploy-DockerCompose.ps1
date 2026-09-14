@@ -42,10 +42,12 @@ function Deploy-DockerCompose {
     # scp runs as the unprivileged 'cloudgrange' user, which cannot write to /opt (AB#8129).
     $remoteTarPath = '/var/tmp/cloudgrange-images.tar'
 
+    # AB#8129: in Bundled mode the image tar is loaded right after upload, BEFORE the TLS-cert
+    # helper runs, so no image is ever pulled. Online mode pulls in the deploy script.
     $pullOrLoad = if (-not [string]::IsNullOrEmpty($BundledImagesPath)) {
-        "docker load -i $remoteTarPath && rm -f $remoteTarPath"
+        "echo 'Images already loaded from bundle'"
     } else {
-        "docker compose pull"
+        "docker compose pull && docker pull `$(head -1 $composeDir/helper-images.txt)"
     }
 
     $bashDeploy = @"
@@ -152,6 +154,10 @@ exit 0
         if (-not [string]::IsNullOrEmpty($BundledImagesPath) -and (Test-Path $BundledImagesPath)) {
             Write-Host "  Uploading bundled images tar (~$('{0:N0}' -f ((Get-Item $BundledImagesPath).Length / 1MB)) MB)..." -ForegroundColor Gray
             & scp.exe @sshOpts $BundledImagesPath "${sshTarget}:${remoteTarPath}"
+            if ($LASTEXITCODE -ne 0) { Write-Error "Upload of bundled images failed (exit $LASTEXITCODE)." }
+            Write-Host "  Loading bundled images..." -ForegroundColor Gray
+            & ssh.exe @sshOpts $sshTarget "sudo docker load -i $remoteTarPath && sudo rm -f $remoteTarPath"
+            if ($LASTEXITCODE -ne 0) { Write-Error "docker load of bundled images failed (exit $LASTEXITCODE)." }
         }
 
         # AB#1593: Generate self-signed TLS cert and install into nginx_certs volume before stack starts.

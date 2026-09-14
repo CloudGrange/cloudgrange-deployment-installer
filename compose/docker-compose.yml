@@ -23,6 +23,11 @@
 #   CLOUDGRANGE_OTLP_ENDPOINT — OTel collector gRPC endpoint (default: http://otel-collector:4317)
 #   CLOUDGRANGE_HOSTNAME      — Keycloak external hostname (default: localhost)
 
+# Vendor images are digest-pinned (AB#8129). The tag is informational; the @sha256 digest is what
+# Docker resolves. Digests are the multi-arch index digests observed 2026-09-14. To update, pull the
+# new tag, take `docker image inspect --format '{{index .RepoDigests 0}}'`, and rebuild the bundle.
+# The TLS-cert helper image used outside Compose is pinned in helper-images.txt.
+
 name: cloudgrange
 
 services:
@@ -111,7 +116,7 @@ services:
   # Self-signed cert is generated at install time; mounted from the nginx_certs named volume.
   # To use a CA-signed cert, replace the contents of the nginx_certs volume with your cert files.
   nginx:
-    image: nginx:alpine
+    image: nginx:1.31.5-alpine@sha256:72ba65eb42c10344912a84ff42408db7d34f2feb642204570ab8fc5ffd29f1d3
     restart: always
     ports:
       - "443:443"
@@ -126,7 +131,7 @@ services:
 
   postgres:
     # PostgreSQL 17 per docs/product-installer-design.md.
-    image: postgres:17-alpine
+    image: postgres:17.11-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     restart: always
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-cloudgrange}
@@ -146,7 +151,7 @@ services:
   # AB#8129 / ADR-008: local Keycloak is a default service (previously the optional "keycloak" profile).
   # AB#1592: production start (not start-dev) with realm import on first boot, PostgreSQL backend.
   keycloak:
-    image: quay.io/keycloak/keycloak:26.6
+    image: quay.io/keycloak/keycloak:26.6.4@sha256:0aae0de7fca85525f727d3354df17896092de8bb26ae4c12d89c77e5df8cbce4
     command: start --import-realm
     restart: always
     environment:
@@ -154,7 +159,15 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-cloudgrange}
       KC_DB_USERNAME: ${POSTGRES_USER:-cloudgrange}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      KC_HOSTNAME: ${CLOUDGRANGE_HOSTNAME:-localhost}
+      # AB#8129: one public issuer for browsers, tokens and the API. Keycloak is published through
+      # nginx at https://<CLOUDGRANGE_HOSTNAME>/realms/ (hostname v2 full URL), so every token's
+      # "iss" is https://<host>/realms/cloudgrange. Backchannel requests from the API to
+      # http://keycloak:8080 get in-network token/jwks URLs (KC_HOSTNAME_BACKCHANNEL_DYNAMIC) while
+      # the discovery document still advertises that same public issuer, so the API's JwtBearer
+      # issuer check (issuer taken from discovery) matches browser-issued tokens.
+      KC_HOSTNAME: https://${CLOUDGRANGE_HOSTNAME:-localhost}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_PROXY_HEADERS: xforwarded
       KC_HTTP_PORT: "8080"
       # KC_HTTP_ENABLED required in production mode when TLS termination is handled externally.
       KC_HTTP_ENABLED: "true"
@@ -165,8 +178,9 @@ services:
       KEYCLOAK_API_CLIENT_SECRET: ${KEYCLOAK_API_CLIENT_SECRET}
     volumes:
       - ./keycloak/cloudgrange-realm.json:/opt/keycloak/data/import/cloudgrange-realm.json:ro
-    ports:
-      - "8080:8080"
+    # No host port: browsers reach Keycloak only through nginx on 443 (AB#8129).
+    expose:
+      - "8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -180,7 +194,7 @@ services:
       - cloudgrange
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.160.0@sha256:799dc6cf12c96192af37b5bdba804da8c10b3bc563b43cb90c3f3c58d9572ad6
     restart: always
     volumes:
       - ./otel-collector.yml:/etc/otel/config.yaml:ro
@@ -189,7 +203,7 @@ services:
       - cloudgrange
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
     restart: always
     volumes:
       - prometheus_data:/prometheus
@@ -204,7 +218,7 @@ services:
       - cloudgrange
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.7.7@sha256:d70e4659623f3e109af669cae76fe2a5dd5be54e2298fe8aed380d982fbc2500
     restart: always
     volumes:
       - loki_data:/loki
@@ -216,7 +230,7 @@ services:
   # AB#8129 / ADR-016: Grafana over Prometheus (metrics) and Loki (logs). Internal only;
   # reach it through an SSH tunnel or add an nginx route when operators need it.
   grafana:
-    image: grafana/grafana:12.1.1
+    image: grafana/grafana:12.1.1@sha256:a1701c2180249361737a99a01bc770db39381640e4d631825d38ff4535efa47d
     restart: always
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}

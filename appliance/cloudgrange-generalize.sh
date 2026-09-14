@@ -1,0 +1,85 @@
+#!/bin/bash
+# Copyright 2026 CloudGrange Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# AB#8129 — Generalize the cloudgrange-docker VM before it is exported as an appliance VHDX.
+# Run as root inside the VM by Build-CloudGrangeAppliance.ps1. Removes every install-time secret
+# and identity so each imported appliance re-keys itself on first boot
+# (cloudgrange-firstboot.service):
+#   - Compose stack stopped; all cloudgrange_* volumes removed (Postgres/Keycloak data, API master
+#     key, relay identity, TLS certs, Grafana/Prometheus/Loki data); /opt/cloudgrange/.env removed
+#   - SSH host keys and every authorized_keys file removed
+#   - machine-id, cloud-init instance state, seed, and logs cleaned
+#   - static netplan config replaced with DHCP
+#   - free blocks discarded (fstrim) so deleted data is not carried in the exported VHDX
+# Container images stay loaded, so the appliance needs no registry access.
+# The VM powers itself off a few seconds after this script returns.
+set -euo pipefail
+
+STAGE_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE_DIR=/opt/cloudgrange
+
+echo "[generalize] stopping stack and removing data volumes"
+cd "$COMPOSE_DIR"
+VERSION=$(grep -E '^CLOUDGRANGE_VERSION=' .env 2>/dev/null | cut -d= -f2 || true)
+systemctl stop cloudgrange.service || true
+if [ -f .env ]; then
+    docker compose --env-file .env down --volumes --remove-orphans
+else
+    docker compose down --volumes --remove-orphans || true
+fi
+docker volume ls -q | grep '^cloudgrange_' | xargs -r docker volume rm
+docker container prune -f >/dev/null
+docker network prune -f >/dev/null
+docker builder prune -af >/dev/null 2>&1 || true
+
+echo "[generalize] removing install-time settings and secrets"
+if [ -f .env ]; then shred -u .env; fi
+printf 'CLOUDGRANGE_VERSION=%s\n' "${VERSION:-latest}" > .env.appliance
+chmod 644 .env.appliance
+
+echo "[generalize] installing first-boot re-keying"
+install -m 0755 "$STAGE_DIR/cloudgrange-firstboot.sh" /usr/local/sbin/cloudgrange-firstboot.sh
+install -m 0644 "$STAGE_DIR/cloudgrange-firstboot.service" /etc/systemd/system/cloudgrange-firstboot.service
+systemctl daemon-reload
+systemctl enable cloudgrange-firstboot.service
+mkdir -p /etc/cloudgrange
+touch /etc/cloudgrange/firstboot-pending
+
+echo "[generalize] networking -> DHCP"
+rm -f /etc/netplan/*.yaml /usr/local/bin/cloudgrange-net-setup.sh
+cat > /etc/netplan/01-cloudgrange-dhcp.yaml <<'NETPLAN'
+# AB#8129: appliance default. A NoCloud seed network-config using the same id overrides this.
+network:
+  version: 2
+  ethernets:
+    cloudgrange-eth:
+      match:
+        name: "e*"
+      set-name: eth0
+      dhcp4: true
+NETPLAN
+chmod 600 /etc/netplan/01-cloudgrange-dhcp.yaml
+
+echo "[generalize] removing SSH host keys and authorized keys"
+rm -f /etc/ssh/ssh_host_*
+find /root /home -name authorized_keys -type f -delete 2>/dev/null || true
+
+echo "[generalize] cleaning cloud-init, machine-id, logs and history"
+cloud-init clean --logs --seed --machine-id
+rm -f /var/lib/dbus/machine-id
+rm -rf /var/lib/cloud/instances/* /var/tmp/cloudgrange-* /tmp/cloudgrange-*
+rm -f /var/log/cloudgrange-init.log /var/log/cloudgrange-firstboot.log
+journalctl --rotate >/dev/null 2>&1 || true
+journalctl --vacuum-time=1s >/dev/null 2>&1 || true
+find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' \) -delete
+find /var/log -type f -name '*.log' -exec truncate -s 0 {} +
+rm -f /root/.bash_history /home/*/.bash_history
+
+echo "[generalize] discarding free blocks"
+sync
+fstrim -av || true
+
+echo "[generalize] complete; powering off in 5 seconds"
+rm -rf "$STAGE_DIR"
+systemd-run --on-active=5 /bin/systemctl poweroff >/dev/null

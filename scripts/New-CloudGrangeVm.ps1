@@ -21,7 +21,8 @@ param(
     # powershell.exe -File to avoid argument-splitting on the space inside the key string.
     [string]$SshPublicKeyFile = '',
     [string]$SwitchName       = 'cloudgrange-internal',
-    [switch]$SkipHostPortForward
+    [switch]$SkipHostPortForward,
+    [switch]$NoDefaultGateway
 )
 
 function New-CloudGrangeVm {
@@ -41,7 +42,10 @@ function New-CloudGrangeVm {
         # AB#8129: an existing switch is used as-is (no host IP or NAT changes).
         [string]$SwitchName = 'cloudgrange-internal',
         # AB#8129: skip the host-wide inbound 443 firewall rule and netsh portproxy.
-        [switch]$SkipHostPortForward
+        [switch]$SkipHostPortForward,
+        # AB#8129: air-gapped VM. No default route or public DNS in cloud-init network-config;
+        # the VM reaches only its own /24 (the host). Used for Bundled installs with no egress.
+        [switch]$NoDefaultGateway
     )
 
     $ErrorActionPreference = 'Stop'
@@ -253,21 +257,21 @@ if ! ip addr show "$IFACE" | grep -q "VMIP_PLACEHOLDER"; then
   ip addr flush dev "$IFACE" 2>/dev/null || true
   ip addr add VMIP_PLACEHOLDER/24 dev "$IFACE"
   ip link set "$IFACE" up
-  ip route add default via GWIP_PLACEHOLDER dev "$IFACE" 2>/dev/null || true
-  printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+  if [ "NOGW_PLACEHOLDER" != "1" ]; then
+    ip route add default via GWIP_PLACEHOLDER dev "$IFACE" 2>/dev/null || true
+    printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+  fi
   echo "IP set manually on $IFACE" >> $LOG
 else
   echo "IP already present (netplan)" >> $LOG
 fi
-# Install packages
-apt-get update -q >> $LOG 2>&1
-DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server qemu-guest-agent >> $LOG 2>&1
-systemctl enable --now ssh >> $LOG 2>&1
-systemctl enable --now qemu-guest-agent >> $LOG 2>&1
+# AB#8129: openssh-server ships in the Ubuntu cloud image; no package install here, so an
+# air-gapped VM (no default route) completes runcmd. qemu-guest-agent is not used on Hyper-V.
+systemctl enable --now ssh >> $LOG 2>&1 || true
 echo "cloudgrange-runcmd-done $(date)" >> $LOG
 '@
     # Substitute the actual IP/gateway into the script
-    $netSetupScript = $netSetupScript -replace 'VMIP_PLACEHOLDER', $VmIp -replace 'GWIP_PLACEHOLDER', $vmGateway4
+    $netSetupScript = $netSetupScript -replace 'VMIP_PLACEHOLDER', $VmIp -replace 'GWIP_PLACEHOLDER', $vmGateway4 -replace 'NOGW_PLACEHOLDER', $(if ($NoDefaultGateway) { '1' } else { '0' })
 
     # Pre-compute indented script block outside here-string to avoid PS5.1 parse issues
     # with complex ForEach-Object scriptblocks inside $(...)  in double-quoted strings.
@@ -293,8 +297,9 @@ runcmd:
   - /usr/local/bin/cloudgrange-net-setup.sh
 "@
 
+    # AB#8129: unique instance-id per provisioning so cloud-init per-instance state is never reused.
     $metaData = @"
-instance-id: cloudgrange-docker
+instance-id: cloudgrange-docker-$([guid]::NewGuid().ToString('N'))
 local-hostname: cloudgrange-docker
 "@
 
@@ -311,12 +316,17 @@ ethernets:
     set-name: eth0
     dhcp4: false
     addresses: [$VmIp/24]
+"@
+    if (-not $NoDefaultGateway) {
+        $networkConfig += @"
+
     routes:
       - to: default
         via: $vmGateway4
     nameservers:
       addresses: [8.8.8.8, 1.1.1.1]
 "@
+    }
 
     # PS5.1 Set-Content -Encoding UTF8 emits a UTF-8 BOM (0xEF 0xBB 0xBF). Cloud-init
     # checks whether user-data starts with the literal bytes '#cloud-config'; a BOM
@@ -410,5 +420,5 @@ if ($MyInvocation.InvocationName -ne '.') {
     . "$PSScriptRoot\CloudGrange-Common.ps1"
     New-CloudGrangeVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
         -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath `
-        -SwitchName $SwitchName -SkipHostPortForward:$SkipHostPortForward
+        -SwitchName $SwitchName -SkipHostPortForward:$SkipHostPortForward -NoDefaultGateway:$NoDefaultGateway
 }

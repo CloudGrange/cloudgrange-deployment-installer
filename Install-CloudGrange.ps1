@@ -27,7 +27,15 @@ param(
     # NAT changes are made.
     [string]$SwitchName = 'cloudgrange-internal',
     # AB#8129: skip the host-wide inbound 443 firewall rule and netsh portproxy to the VM.
-    [switch]$SkipHostPortForward
+    [switch]$SkipHostPortForward,
+    # AB#8129: air-gapped VM — no default route in cloud-init network-config (Bundled mode only).
+    [switch]$NoDefaultGateway,
+    # AB#8129: explicit opt-in to install the pinned, SHA-512-verified QEMU build when qemu-img
+    # is missing. Without it the installer fails closed (see docs/prerequisites.md).
+    [switch]$InstallPinnedQemu,
+    # AB#8129: keep the ephemeral installer SSH key (path printed) so Build-CloudGrangeAppliance.ps1
+    # can generalize the VM before export. Default: the key is deleted after install.
+    [switch]$KeepInstallerSshKey
 )
 
 Set-StrictMode -Version Latest
@@ -161,7 +169,10 @@ function Invoke-CloudGrangeInstall {
 
     if (-not $useWsl2) {
         Write-Progress-Step "Bootstrapping installer prerequisites (qemu-img, ISO writer)"
-        Initialize-CloudGrangePrereqs
+        Initialize-CloudGrangePrereqs -InstallPinnedQemu:$InstallPinnedQemu
+        if ($NoDefaultGateway -and $Mode -ne 'Bundled') {
+            Write-Error "CG-INST-ERR-012: -NoDefaultGateway requires -Mode Bundled (Online mode needs registry access)."
+        }
 
         # Generate an ephemeral SSH key pair for this install session.
         # The private key is written to a temp file (mode 600) and deleted after install.
@@ -213,6 +224,7 @@ function Invoke-CloudGrangeInstall {
             '-SwitchName', $SwitchName
         )
         if ($SkipHostPortForward) { $vmArgs += '-SkipHostPortForward' }
+        if ($NoDefaultGateway)    { $vmArgs += '-NoDefaultGateway' }
         & powershell.exe @vmArgs
         if ($LASTEXITCODE -ne 0) {
             Write-Error "CG-INST-ERR-010: VM provisioning failed (exit $LASTEXITCODE). Check Hyper-V event log for details."
@@ -241,6 +253,15 @@ function Invoke-CloudGrangeInstall {
         $dockerCeArgs['SshKeyPath'] = $sshKeyPath
     } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
         $dockerCeArgs['Credential'] = $vmGuestCred
+    }
+    # AB#8129: Bundled mode installs Docker CE from the pinned .deb set in the bundle (no network).
+    if ($Mode -eq 'Bundled') {
+        $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
+        $bundledDebs = Join-Path $bundleRoot 'docker-debs'
+        if (-not (Test-Path (Join-Path $bundledDebs 'SHA256SUMS'))) {
+            Write-Error "CG-INST-ERR-011: Bundled mode requires docker-debs/ in the bundle ($bundledDebs)."
+        }
+        $dockerCeArgs['OfflinePackagesPath'] = $bundledDebs
     }
     Install-DockerCe @dockerCeArgs @proxyArgs
 
@@ -296,8 +317,12 @@ function Invoke-CloudGrangeInstall {
         # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
     }
 
-    # Clean up the ephemeral SSH key pair after successful install.
-    if (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
+    # Clean up the ephemeral SSH key pair after successful install, unless an appliance build
+    # needs it to generalize the VM (-KeepInstallerSshKey, AB#8129).
+    if ($KeepInstallerSshKey -and -not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
+        Write-Host "  Installer SSH key kept for appliance build: $sshKeyPath" -ForegroundColor Yellow
+        Write-Host "  Build-CloudGrangeAppliance.ps1 removes its authorized_keys entry; delete this key afterwards." -ForegroundColor Yellow
+    } elseif (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
         Remove-Item -LiteralPath $sshKeyPath, "$sshKeyPath.pub" -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $sshKeyDir -Force -Recurse -ErrorAction SilentlyContinue
     }
