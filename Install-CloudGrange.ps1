@@ -346,17 +346,14 @@ function Invoke-CloudGrangeInstall {
     Write-Host "  Note: The portal uses a self-signed certificate. Your browser will show a security warning." -ForegroundColor Yellow
     Write-Host "        Replace /etc/nginx/certs/ in the nginx_certs volume with a CA-signed cert for production." -ForegroundColor Gray
     if ($setupPending) {
-        Write-Host "  First-run setup required. Navigate to:" -ForegroundColor Yellow
-        Write-Host "    $portalBase/setup" -ForegroundColor White
+        Write-Host "  First-run setup: open $portalBase in a browser; the setup wizard starts on the first visit." -ForegroundColor Yellow
         Write-Host "  Complete the setup wizard to configure your platform name, timezone, and admin account." -ForegroundColor Gray
         if ($setupToken) {
+            # Only when the platform was configured to require the one-use token (CLOUDGRANGE_REQUIRE_SETUP_TOKEN=true).
             Write-Host "  One-use setup token (required by POST /api/v1/setup, header X-CloudGrange-Setup-Token):" -ForegroundColor Yellow
             Write-Host "    $setupToken" -ForegroundColor White
-        } else {
-            Write-Host "  Setup token: read it on the VM with" -ForegroundColor Yellow
-            Write-Host "    sudo docker compose -f /opt/cloudgrange/docker-compose.yml exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt" -ForegroundColor White
+            Write-Host "  Keep it secret: whoever presents it first completes setup. It is deleted once setup succeeds." -ForegroundColor Yellow
         }
-        Write-Host "  Keep it secret: whoever presents it first completes setup. It is deleted once setup succeeds." -ForegroundColor Yellow
     } else {
         Write-Host "  Sign in at: $portalBase/login" -ForegroundColor Cyan
     }
