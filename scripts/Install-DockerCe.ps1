@@ -45,10 +45,16 @@ OFFLINE_DIR='__OFFLINE_DIR__'
 if [ -n "$OFFLINE_DIR" ]; then
     # AB#8129 Bundled mode: install the pinned .deb set shipped in the bundle. No network access.
     echo "Installing Docker CE from bundled packages in $OFFLINE_DIR (offline)..."
-    cd "$OFFLINE_DIR"
-    sha256sum -c --quiet SHA256SUMS
-    cat versions.txt
-    apt-get install -y -qq --no-download --allow-downgrades ./debs/*.deb
+    # SHA256SUMS lists bare .deb file names relative to debs/ (as produced by the bundle build).
+    cat "$OFFLINE_DIR/versions.txt"
+    cd "$OFFLINE_DIR/debs"
+    sha256sum -c --quiet ../SHA256SUMS
+    echo "Bundled Docker CE packages verified: $(ls *.deb | wc -l)"
+    # Absolute paths to local .deb files. No --no-download: with it apt hands dpkg cache-relative
+    # names and fails ("Pathname to install is not absolute"). Nothing is fetched because every
+    # dependency is satisfied by the listed files or the base image; with no network any fetch
+    # attempt would fail the install rather than silently succeed.
+    apt-get install -y -qq --allow-downgrades "$OFFLINE_DIR"/debs/*.deb
     cd /
 else
     echo "Starting Docker CE installation..."
@@ -125,10 +131,16 @@ exit 0
                 Write-Error "CG-INST-ERR-011: bundled Docker CE packages are incomplete at $OfflinePackagesPath (SHA256SUMS missing)."
             }
             Write-Host "  Uploading bundled Docker CE packages..." -ForegroundColor Gray
-            $sshOnly = $sshArgs[0..($sshArgs.Count - 4)]
-            & ssh.exe @sshOnly "cloudgrange@$VmIp" "rm -rf $remoteDebDir && mkdir -p $remoteDebDir"
-            & scp.exe -r @sshOnly (Join-Path $OfflinePackagesPath '*') "cloudgrange@${VmIp}:$remoteDebDir/"
+            $sshOnly = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
+            $stageParent = '/var/tmp/cloudgrange-docker-debs-stage'
+            & ssh.exe @sshOnly "cloudgrange@$VmIp" "rm -rf $stageParent $remoteDebDir && mkdir -p $stageParent"
+            if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-011: cannot prepare package upload directory (exit $LASTEXITCODE)." }
+            # Copy the directory itself (no local wildcard expansion), then move it into place.
+            & scp.exe -r @sshOnly ((Resolve-Path $OfflinePackagesPath).Path) "cloudgrange@${VmIp}:$stageParent/"
             if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-011: upload of bundled Docker CE packages failed (exit $LASTEXITCODE)." }
+            $leaf = Split-Path -Leaf ((Resolve-Path $OfflinePackagesPath).Path)
+            & ssh.exe @sshOnly "cloudgrange@$VmIp" "mv $stageParent/$leaf $remoteDebDir && rmdir $stageParent"
+            if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-011: staging of bundled Docker CE packages failed (exit $LASTEXITCODE)." }
         }
         # Write raw bytes directly to SSH stdin — PowerShell's string pipeline appends
         # \r\n (Windows [Environment]::NewLine) which corrupts the last bash command.
