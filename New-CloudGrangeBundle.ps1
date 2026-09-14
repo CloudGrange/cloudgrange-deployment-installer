@@ -7,10 +7,11 @@
 # ghcr.io/cloudgrange/*:latest, ...) into an offline bundle. That breaks the rule that every package
 # version is exact and immutable, so it now refuses to run.
 #
-# Bundles are built by .github/workflows/release-bundle.yml, which:
+# Bundles are built reproducibly by scripts/New-ReleaseBundle.sh, run on demand from one main commit by
+# .github/workflows/release-bundle.yml (docs/releases/reproducible-build.md). The build:
 #   - stamps first-party images as <repo>:<version>@sha256:<digest> (scripts/Set-FirstPartyImagePins.sh),
 #   - fails unless EVERY image is digest-pinned (scripts/Test-ComposeImagePins.sh),
-#   - adds the pinned Docker CE packages and the verified Ubuntu cloud image.
+#   - adds the Docker CE packages and Ubuntu cloud image, verified against the pins in release/.
 
 [CmdletBinding()]
 param(
@@ -20,4 +21,4 @@ param(
 )
 
 Write-Error ("CG-BUNDLE-ERR-001: New-CloudGrangeBundle.ps1 is retired because it produced bundles with unpinned images. " +
-    "Build bundles with .github/workflows/release-bundle.yml (digest-pinned images, pinned Docker CE packages).") -ErrorAction Stop
+    "Build bundles with scripts/New-ReleaseBundle.sh or the on-demand .github/workflows/release-bundle.yml (see docs/releases/reproducible-build.md).") -ErrorAction Stop

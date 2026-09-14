@@ -43,6 +43,7 @@ jobs:
           if ('${{ inputs.bundle_run_id }}' -notmatch '^\d+$') { throw 'invalid run id' }
 
       - name: Download and verify the release bundle
+        id: bundle
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path '${{ env.BUNDLE_DIR }}' | Out-Null
@@ -52,6 +53,8 @@ jobs:
           $zip = Join-Path '${{ env.BUNDLE_DIR }}' 'Install-CloudGrange-Bundled.zip'
           $expected = $record.artifacts.'Install-CloudGrange-Bundled.zip'.sha256
           if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected.ToUpperInvariant()) { throw 'Bundle SHA-256 mismatch' }
+          if ($record.sourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'release-record.json has no source commit' }
+          "commit=$($record.sourceCommit)" >> $env:GITHUB_OUTPUT
           "source commit: $($record.sourceCommit)  bundle sha256: $expected"
           Expand-Archive -Path $zip -DestinationPath (Join-Path '${{ env.BUNDLE_DIR }}' 'bundle') -Force
 
@@ -62,8 +65,10 @@ jobs:
           & (Join-Path $bundle 'Install-CloudGrange.ps1') -Mode Bundled -BundlePath $bundle -VmIp '${{ env.VM_IP }}' `
             -Version '${{ inputs.version }}' -AcceptDefaults -InstallPinnedQemu -KeepInstallerSshKey
 
+      # Build and generalize with the same commit the bundle was built from, not the dispatching branch.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ steps.bundle.outputs.commit }}
           path: src
 
       - name: Generalize, export and secret-scan the appliance VHDX
