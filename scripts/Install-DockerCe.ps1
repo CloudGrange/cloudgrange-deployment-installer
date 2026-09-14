@@ -73,10 +73,15 @@ else
 
     apt-get update -qq
     apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    # AB#8129: Hyper-V KVP daemon (appliance operator access). Must match the running kernel.
+    apt-get install -y -qq "linux-cloud-tools-$(uname -r)" linux-cloud-tools-common \
+        || echo "WARNING: linux-cloud-tools-$(uname -r) is not available; the appliance operator-access KVP channel will not work"
 fi
 
 systemctl enable docker
 systemctl start docker
+# AB#8129: Hyper-V KVP daemon for appliance operator access (bundled debs or the online install above).
+systemctl enable --now hv-kvp-daemon.service 2>/dev/null || echo "WARNING: hv-kvp-daemon.service is not available"
 
 PROXY='__PROXY__'
 if [ -n "$PROXY" ]; then

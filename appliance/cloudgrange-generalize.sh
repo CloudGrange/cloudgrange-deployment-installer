@@ -64,6 +64,19 @@ systemctl enable cloudgrange-firstboot.service
 mkdir -p /etc/cloudgrange
 touch /etc/cloudgrange/firstboot-pending
 
+echo "[generalize] installing operator access (Hyper-V KVP + local console until setup completes)"
+install -d -m 0755 /usr/local/lib/cloudgrange
+install -m 0755 "$STAGE_DIR/cloudgrange-kvp.py" /usr/local/lib/cloudgrange/cloudgrange-kvp.py
+install -m 0755 "$STAGE_DIR/cloudgrange-operator-access.sh" /usr/local/sbin/cloudgrange-operator-access.sh
+install -m 0644 "$STAGE_DIR/cloudgrange-operator-access.service" /etc/systemd/system/cloudgrange-operator-access.service
+systemctl daemon-reload
+systemctl enable cloudgrange-operator-access.service
+systemctl enable hv-kvp-daemon.service 2>/dev/null || { echo "[generalize] ERROR: hv-kvp-daemon (linux-cloud-tools) is not installed" >&2; exit 1; }
+# No KVP values, console banner or "done" marker from the build VM may ship.
+systemctl stop cloudgrange-operator-access.service hv-kvp-daemon.service 2>/dev/null || true
+rm -f /var/lib/hyperv/.kvp_pool_* /etc/issue.d/90-cloudgrange.issue /etc/cloudgrange/operator-access-cleared
+rm -rf /run/cloudgrange-operator
+
 echo "[generalize] networking -> DHCP"
 rm -f /etc/netplan/*.yaml /usr/local/bin/cloudgrange-net-setup.sh
 cat > /etc/netplan/01-cloudgrange-dhcp.yaml <<'NETPLAN'

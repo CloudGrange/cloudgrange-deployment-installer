@@ -26,6 +26,17 @@ if [ ! -s /etc/machine-id ] || grep -q uninitialized /etc/machine-id; then
 fi
 systemctl try-restart ssh.service ssh.socket 2>/dev/null || true
 
+echo "[firstboot] operator SSH key (the private key leaves the VM only over Hyper-V KVP)"
+install -d -m 0700 /run/cloudgrange-operator
+rm -f /run/cloudgrange-operator/operator_ed25519 /run/cloudgrange-operator/operator_ed25519.pub
+ssh-keygen -q -t ed25519 -N '' -C "cloudgrange-operator@$(hostname)" -f /run/cloudgrange-operator/operator_ed25519
+install -d -m 0700 -o cloudgrange -g cloudgrange /home/cloudgrange/.ssh
+cat /run/cloudgrange-operator/operator_ed25519.pub >> /home/cloudgrange/.ssh/authorized_keys
+chown cloudgrange:cloudgrange /home/cloudgrange/.ssh/authorized_keys
+chmod 600 /home/cloudgrange/.ssh/authorized_keys
+rm -f /run/cloudgrange-operator/operator_ed25519.pub
+systemctl enable --now hv-kvp-daemon.service 2>/dev/null || echo "[firstboot] WARNING: hv-kvp-daemon is not available; use the local console banner"
+
 echo "[firstboot] waiting for an IPv4 address"
 IP=''
 for _ in $(seq 1 150); do

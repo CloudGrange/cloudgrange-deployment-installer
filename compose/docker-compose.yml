@@ -4,36 +4,60 @@
 #   First-party: cloudgrange-api, cloudgrange-portal, cloudgrange-relay
 #   Platform:    nginx (ingress/TLS), postgres, keycloak (ADR-008)
 #   Observability (ADR-016): otel-collector -> prometheus + loki, grafana
+#   Helper:      healthcheck-tools (one-shot; see below)
 # Secrets use the PostgreSQL-encrypted provider by default (ADR-009); OpenBao is optional and not
 # part of this stack. Entra ID is optional and not bundled. The relay runs as a Compose container and
 # the whole stack is supervised by systemd (systemd/cloudgrange.service, ADR-059).
 # The runtime agent is a Windows host service, not a container; it is not part of this file.
 #
 # Required environment variables (set in .env; Deploy-DockerCompose writes /opt/cloudgrange/.env):
-#   POSTGRES_PASSWORD         — PostgreSQL superuser password
-#   KEYCLOAK_ADMIN_USER       — Keycloak bootstrap admin username
-#   KEYCLOAK_ADMIN_PASSWORD   — Keycloak bootstrap admin password
-#   GRAFANA_ADMIN_PASSWORD    — Grafana admin password
-#   RELAY_ENROLLMENT_TOKEN    — Shared token agents use to enroll with the relay
+#   POSTGRES_PASSWORD, KEYCLOAK_ADMIN_USER, KEYCLOAK_ADMIN_PASSWORD, GRAFANA_ADMIN_PASSWORD,
+#   RELAY_ENROLLMENT_TOKEN, KEYCLOAK_API_CLIENT_SECRET, CLOUDGRANGE_REALM_ADMIN_PASSWORD,
+#   CLOUDGRANGE_HOSTNAME
 #
 # Optional environment variables:
-#   CLOUDGRANGE_VERSION       — First-party image tag (default: latest)
-#   CLOUDGRANGE_API_URL       — Public URL of the API (e.g. https://cloudgrange.example.com)
+#   CLOUDGRANGE_VERSION       — First-party image tag (release bundles stamp <version>@sha256 digests)
 #   CLOUDGRANGE_DB_CONNECTION — Full connection string (overrides auto-generated from POSTGRES_* vars)
 #   CLOUDGRANGE_OTLP_ENDPOINT — OTel collector gRPC endpoint (default: http://otel-collector:4317)
-#   CLOUDGRANGE_HOSTNAME      — Keycloak external hostname (default: localhost)
-
-# Vendor images are digest-pinned (AB#8129). The tag is informational; the @sha256 digest is what
-# Docker resolves. Digests are the multi-arch index digests observed 2026-09-14. To update, pull the
-# new tag, take `docker image inspect --format '{{index .RepoDigests 0}}'`, and rebuild the bundle.
-# The TLS-cert helper image used outside Compose is pinned in helper-images.txt.
+#
+# Every image is digest-pinned (AB#8129); scripts/Test-ComposeImagePins.sh gates it at release.
+#
+# Container hardening (AB#8129): every service drops ALL Linux capabilities and adds back only what
+# its entrypoint needs, runs with no-new-privileges, and has a healthcheck. Root filesystems are
+# read-only with tmpfs for writable paths, except where the image rewrites itself at start:
+#   - cloudgrange-portal: its entrypoint injects runtime config into index.html and the nginx conf
+#   - keycloak: `start` re-augments the server into /opt/keycloak/lib on first start
+# The only published host ports are nginx 443 (TLS) and 80 (redirect).
 
 name: cloudgrange
 
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
+  # One-shot: the loki and otel-collector images contain no shell or HTTP client. Copy busybox and the
+  # musl loader from the pinned helper image into a volume so their healthchecks can run
+  # `ld-musl busybox wget` against the service's own readiness endpoint. No network, read-only root.
+  healthcheck-tools:
+    image: alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+    <<: *hardening
+    restart: "no"
+    read_only: true
+    network_mode: none
+    command: ["sh", "-c", "rm -f /hc/busybox /hc/ld-musl-x86_64.so.1 && cp /bin/busybox /lib/ld-musl-x86_64.so.1 /hc/ && chmod 0555 /hc/busybox /hc/ld-musl-x86_64.so.1"]
+    volumes:
+      - healthcheck_tools:/hc
+
   cloudgrange-api:
     image: ghcr.io/cloudgrange/cloudgrange-api:${CLOUDGRANGE_VERSION:-latest}
+    <<: *hardening
     restart: always
+    read_only: true
+    tmpfs:
+      - /tmp
     # AB#8129: no host port. Browsers and the installer reach the API only through nginx TLS on 443
     # (edge nginx -> portal /api/, /health/ -> API); Prometheus scrapes it on the Compose network.
     expose:
@@ -43,8 +67,7 @@ services:
       - ConnectionStrings__Default=${CLOUDGRANGE_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudgrange};Username=${POSTGRES_USER:-cloudgrange};Password=${POSTGRES_PASSWORD}}
       - OpenTelemetry__Endpoint=${CLOUDGRANGE_OTLP_ENDPOINT:-http://otel-collector:4317}
       # AB#2348 / BUG-4: default portal URL so the API health monitor can probe portal:80
-      # over the internal Docker network. Without this, the probe logs "invalid request URI"
-      # every cycle. Override CLOUDGRANGE_PORTAL_URL only if the portal runs out-of-stack.
+      # over the internal Docker network. Override CLOUDGRANGE_PORTAL_URL only if the portal runs out-of-stack.
       - CLOUDGRANGE_PORTAL_URL=${CLOUDGRANGE_PORTAL_URL:-http://cloudgrange-portal:80}
       # AB#8129 / ADR-008: local Keycloak. Authority uses the in-network service name.
       - Keycloak__Authority=${CLOUDGRANGE_KEYCLOAK_AUTHORITY:-http://keycloak:8080/realms/cloudgrange}
@@ -52,13 +75,13 @@ services:
       - Keycloak__ClientSecret=${KEYCLOAK_API_CLIENT_SECRET}
       - Keycloak__RequireHttpsMetadata=false
     volumes:
-      # ADR-009: the PostgreSQL-encrypted secrets provider's master key (/etc/cloudgrange/secrets.key).
+      # ADR-009: the PostgreSQL-encrypted secrets provider's master key and the one-use setup token.
       - api_secrets:/etc/cloudgrange
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health/ready"]
+      test: ["CMD", "curl", "-sf", "-o", "/dev/null", "http://localhost:8080/health/ready"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -68,9 +91,18 @@ services:
 
   cloudgrange-portal:
     image: ghcr.io/cloudgrange/cloudgrange-portal:${CLOUDGRANGE_VERSION:-latest}
+    <<: *hardening
     restart: always
-    # AB#1593: port 443 is now handled by the nginx TLS terminator.
-    # Port 80 is internal only (not exposed on the host); nginx proxies to it.
+    # Writable root: the entrypoint injects runtime config into index.html and the nginx conf at start.
+    # nginx master (root) binds :80 and switches its workers to the nginx user.
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    tmpfs:
+      - /tmp
+    # AB#1593: port 443 is handled by the nginx TLS terminator; port 80 is internal only.
     expose:
       - "80"
     environment:
@@ -81,6 +113,12 @@ services:
     depends_on:
       cloudgrange-api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "-o", "/dev/null", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - cloudgrange
 
@@ -89,7 +127,11 @@ services:
   # NOT published on the host (AB#8129). Only Prometheus reaches it on the Compose network.
   cloudgrange-relay:
     image: ghcr.io/cloudgrange/cloudgrange-relay:${CLOUDGRANGE_VERSION:-latest}
+    <<: *hardening
     restart: always
+    read_only: true
+    tmpfs:
+      - /tmp
     expose:
       - "8443"
     environment:
@@ -107,7 +149,8 @@ services:
       cloudgrange-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "bash", "-c", "(echo > /dev/tcp/localhost/8443) 2>/dev/null || exit 1"]
+      # No curl in the image: plain HTTP GET /metrics over bash /dev/tcp, expecting 200.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8443 && printf 'GET /metrics HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -120,7 +163,19 @@ services:
   # To use a CA-signed cert, replace the contents of the nginx_certs volume with your cert files.
   nginx:
     image: nginx:1.31.5-alpine@sha256:72ba65eb42c10344912a84ff42408db7d34f2feb642204570ab8fc5ffd29f1d3
+    <<: *hardening
     restart: always
+    read_only: true
+    # nginx master (root) binds 80/443 and switches its workers to the nginx user.
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    tmpfs:
+      - /var/cache/nginx
+      - /run
+      - /tmp
     ports:
       - "443:443"
       - "80:80"
@@ -128,14 +183,34 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx_certs:/etc/nginx/certs:ro
     depends_on:
-      - cloudgrange-portal
+      cloudgrange-portal:
+        condition: service_healthy
+    healthcheck:
+      # :80 answers with the 301 redirect; :443 must complete a TLS handshake and answer.
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://127.0.0.1/ && curl -sk -o /dev/null https://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - cloudgrange
 
   postgres:
     # PostgreSQL 17 per docs/product-installer-design.md.
     image: postgres:17.11-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    <<: *hardening
     restart: always
+    read_only: true
+    # The entrypoint (root) prepares the data and socket directories, then drops to the postgres user.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-cloudgrange}
       - POSTGRES_USER=${POSTGRES_USER:-cloudgrange}
@@ -155,25 +230,30 @@ services:
   # AB#1592: production start (not start-dev) with realm import on first boot, PostgreSQL backend.
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.4@sha256:0aae0de7fca85525f727d3354df17896092de8bb26ae4c12d89c77e5df8cbce4
+    <<: *hardening
     command: start --import-realm
     restart: always
+    # Writable root: `start` re-augments the server into /opt/keycloak/lib on first start. Runs as uid 1000.
+    tmpfs:
+      - /tmp
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-cloudgrange}
       KC_DB_USERNAME: ${POSTGRES_USER:-cloudgrange}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
       # AB#8129: one public issuer for browsers, tokens and the API. Keycloak is published through
-      # nginx at https://<CLOUDGRANGE_HOSTNAME>/realms/ (hostname v2 full URL), so every token's
-      # "iss" is https://<host>/realms/cloudgrange. Backchannel requests from the API to
+      # nginx at https://<CLOUDGRANGE_HOSTNAME>/realms/cloudgrange (hostname v2 full URL), so every
+      # token's "iss" is https://<host>/realms/cloudgrange. Backchannel requests from the API to
       # http://keycloak:8080 get in-network token/jwks URLs (KC_HOSTNAME_BACKCHANNEL_DYNAMIC) while
-      # the discovery document still advertises that same public issuer, so the API's JwtBearer
-      # issuer check (issuer taken from discovery) matches browser-issued tokens.
+      # the discovery document still advertises that same public issuer.
       KC_HOSTNAME: https://${CLOUDGRANGE_HOSTNAME:-localhost}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_PORT: "8080"
       # KC_HTTP_ENABLED required in production mode when TLS termination is handled externally.
       KC_HTTP_ENABLED: "true"
+      # Readiness on the management port (9000, internal only) for the healthcheck.
+      KC_HEALTH_ENABLED: "true"
       # Bootstrap admin — only used on first run to create the initial admin account.
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
@@ -192,26 +272,40 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "(echo >/dev/tcp/localhost/8080) 2>/dev/null"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
       interval: 15s
       timeout: 5s
       retries: 10
-      start_period: 60s
+      start_period: 90s
     networks:
       - cloudgrange
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.160.0@sha256:799dc6cf12c96192af37b5bdba804da8c10b3bc563b43cb90c3f3c58d9572ad6
+    <<: *hardening
     restart: always
+    read_only: true
     volumes:
       - ./otel-collector.yml:/etc/otel/config.yaml:ro
+      - healthcheck_tools:/hc:ro
     command: ["--config=/etc/otel/config.yaml"]
+    depends_on:
+      healthcheck-tools:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/hc/ld-musl-x86_64.so.1", "/hc/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:13133/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - cloudgrange
 
   prometheus:
     image: prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+    <<: *hardening
     restart: always
+    read_only: true
     volumes:
       - prometheus_data:/prometheus
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -221,16 +315,36 @@ services:
       - --storage.tsdb.retention.time=15d
       # The OTel collector exports metrics with prometheusremotewrite (otel-collector.yml).
       - --web.enable-remote-write-receiver
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - cloudgrange
 
   loki:
     image: grafana/loki:3.7.7@sha256:d70e4659623f3e109af669cae76fe2a5dd5be54e2298fe8aed380d982fbc2500
+    <<: *hardening
     restart: always
+    read_only: true
+    tmpfs:
+      - /tmp
     volumes:
       - loki_data:/loki
       - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+      - healthcheck_tools:/hc:ro
     command: -config.file=/etc/loki/local-config.yaml
+    depends_on:
+      healthcheck-tools:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/hc/ld-musl-x86_64.so.1", "/hc/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     networks:
       - cloudgrange
 
@@ -238,7 +352,12 @@ services:
   # reach it through an SSH tunnel or add an nginx route when operators need it.
   grafana:
     image: grafana/grafana:12.1.1@sha256:a1701c2180249361737a99a01bc770db39381640e4d631825d38ff4535efa47d
+    <<: *hardening
     restart: always
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/log/grafana:uid=472,gid=0,mode=0770
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
@@ -252,6 +371,12 @@ services:
     depends_on:
       - prometheus
       - loki
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - cloudgrange
 
@@ -262,6 +387,7 @@ volumes:
   grafana_data:
   relay_identity:
   api_secrets:
+  healthcheck_tools:
   # AB#1593: TLS certs for nginx. Populated by New-SelfSignedCert.ps1 at install time.
   # Replace with CA-signed certs for production use.
   nginx_certs:

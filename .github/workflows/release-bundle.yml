@@ -70,13 +70,15 @@ jobs:
           cp Update-CloudGrange.ps1    bundle/ 2>/dev/null || true
           cp -r scripts/              bundle/scripts/
           cp -r compose/              bundle/compose/
-          mkdir -p bundle/docs && cp docs/prerequisites.md docs/product-installer-design.md bundle/docs/
+          mkdir -p bundle/docs && cp docs/prerequisites.md docs/product-installer-design.md docs/appliance-operator-access.md bundle/docs/
           # Install-CloudGrange.ps1 refuses to run without this integrity file beside it.
           sha256sum Install-CloudGrange.ps1 | awk '{print toupper($1)"  Install-CloudGrange.ps1"}' > bundle/cloudgrange-installer.sha256
 
       - name: Add verified Ubuntu noble cloud image (required by -Mode Bundled)
         run: |
-          base=https://cloud-images.ubuntu.com/noble/current
+          # AB#8129: pinned image serial (kernel 6.8.0-139-generic). The bundled linux-cloud-tools debs
+          # below must match this kernel; update both together.
+          base=https://cloud-images.ubuntu.com/noble/20260911
           curl -fsSL "$base/SHA256SUMS" -o ubuntu-SHA256SUMS
           curl -fsSL "$base/noble-server-cloudimg-amd64.img" -o noble-server-cloudimg-amd64.img
           grep ' \*\?noble-server-cloudimg-amd64.img$' ubuntu-SHA256SUMS | sha256sum -c
@@ -98,8 +100,12 @@ jobs:
               docker-ce=5:29.8.0-1~ubuntu.24.04~noble docker-ce-cli=5:29.8.0-1~ubuntu.24.04~noble \
               containerd.io=2.3.5-1~ubuntu.24.04~noble docker-buildx-plugin=0.37.1-1~ubuntu.24.04~noble \
               docker-compose-plugin=5.5.1-1~ubuntu.24.04~noble jq=1.7.1-3ubuntu0.24.04.2 >/dev/null
+            # Hyper-V KVP daemon for appliance operator access; must match the pinned image kernel above.
+            apt-get install -y -qq --download-only --no-install-recommends \
+              linux-cloud-tools-6.8.0-139-generic=6.8.0-139.139 linux-cloud-tools-6.8.0-139=6.8.0-139.139 \
+              linux-cloud-tools-common=6.8.0-139.139 >/dev/null
             cp /var/cache/apt/archives/*.deb /out/docker-debs/debs/
-            printf "%s\n" docker-ce=5:29.8.0-1~ubuntu.24.04~noble docker-ce-cli=5:29.8.0-1~ubuntu.24.04~noble containerd.io=2.3.5-1~ubuntu.24.04~noble docker-buildx-plugin=0.37.1-1~ubuntu.24.04~noble docker-compose-plugin=5.5.1-1~ubuntu.24.04~noble jq=1.7.1-3ubuntu0.24.04.2 > /out/docker-debs/versions.txt
+            printf "%s\n" docker-ce=5:29.8.0-1~ubuntu.24.04~noble docker-ce-cli=5:29.8.0-1~ubuntu.24.04~noble containerd.io=2.3.5-1~ubuntu.24.04~noble docker-buildx-plugin=0.37.1-1~ubuntu.24.04~noble docker-compose-plugin=5.5.1-1~ubuntu.24.04~noble jq=1.7.1-3ubuntu0.24.04.2 linux-cloud-tools-6.8.0-139-generic=6.8.0-139.139 linux-cloud-tools-6.8.0-139=6.8.0-139.139 linux-cloud-tools-common=6.8.0-139.139 > /out/docker-debs/versions.txt
           '
           (cd bundle/docker-debs/debs && sha256sum *.deb > ../SHA256SUMS)
 

@@ -88,7 +88,8 @@ if (-not $AllowUngeneralized) {
     $stage = '/var/tmp/cloudgrange-appliance'
     & ssh.exe @sshOpts "cloudgrange@$VmIp" "rm -rf $stage && mkdir -p $stage"
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: cannot reach '$VmName' over SSH at $VmIp (exit $LASTEXITCODE)." }
-    foreach ($f in 'cloudgrange-generalize.sh', 'cloudgrange-firstboot.sh', 'cloudgrange-firstboot.service', 'cloudgrange-capture-secrets.sh') {
+    foreach ($f in 'cloudgrange-generalize.sh', 'cloudgrange-firstboot.sh', 'cloudgrange-firstboot.service', 'cloudgrange-capture-secrets.sh',
+                   'cloudgrange-kvp.py', 'cloudgrange-operator-access.sh', 'cloudgrange-operator-access.service') {
         & scp.exe @sshOpts (Join-Path $PSScriptRoot "appliance\$f") "cloudgrange@${VmIp}:$stage/$f"
         if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPL-ERR-003: upload of $f failed (exit $LASTEXITCODE)." }
     }
