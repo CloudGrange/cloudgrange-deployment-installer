@@ -25,9 +25,9 @@ $script:CgBomPhaseOrder = @('preflight', 'retrieve', 'runtime', 'storage', 'post
 $script:CgOciReferencePattern = '^(?<repository>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+)@sha256:(?<digest>[0-9a-f]{64})$'
 # Structural match only (scheme, dotted host, optional port, path characters); canonical path rules follow.
 $script:CgHttpsUriPattern = '^https://(?<host>(?<hostname>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)(:[0-9]{1,5})?)(?<path>/[A-Za-z0-9._~%/+-]*)\z'
-# Canonical path, identical to the schema httpsUri pattern: non-empty segments; a percent escape only for
-# characters that must be escaped (never letters, digits, '-', '.', '_', '~', '/', '\', '%' or space).
-$script:CgHttpsCanonicalPathPattern = '^(/([A-Za-z0-9._~+-]|%(2[1-46-9A-Ca-c]|3[A-Fa-f]|40|5[BbDdEe]|60|7[B-Db-d]|[89A-Fa-f][0-9A-Fa-f]))+)+\z'
+# Escape rules shared with the schema httpsUri and cg-trust ReleaseBomVerifier.Https.
+$script:CgHttpsMalformedEscapePattern = '%(?![0-9A-Fa-f]{2})'
+$script:CgHttpsForbiddenEscapePattern = '%(2[5EeFf]|5[Cc])'
 # Same grammar as the schema logicalPath: relative, '/'-separated, every segment starts alphanumeric
 # (so '.', '..', empty segments, a leading '/', '\' and '%' are all impossible).
 $script:CgLogicalPathPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9][A-Za-z0-9._-]{0,127})*\z'
@@ -83,8 +83,8 @@ $script:CgBomRuleCatalog = [ordered]@{
     'vendor-image-outside-mirror-namespace' = 'A vendor-oci-image is not retrieved from ghcr.io/cloudgrange/vendor/.'
     'first-party-image-outside-namespace' = 'An oci-image is not retrieved from ghcr.io/cloudgrange/ (outside vendor/).'
     'mirror-of-cloudgrange-namespace' = 'retrieval.mirrorOf names a ghcr.io/cloudgrange/ repository instead of the upstream it mirrors.'
-    'https-uri-invalid' = 'An https locator has a non-https scheme, userinfo, query, fragment, an undotted or IP-literal host, an empty or dot path segment, or a percent escape of a character that needs none (letters, digits, "-", ".", "_", "~") or of "/", "\", "%" or space.'
-    'floating-locator' = 'A locator contains a floating "latest" path segment (any letter case, after percent-decoding, split on "/" and "\").'
+    'https-uri-invalid' = 'An https locator has a non-https scheme, userinfo, query, fragment, an undotted or IP-literal host, a malformed percent escape, an escaped "/", "\", "." or "%" (including double encoding), or an empty, "." or ".." path segment.'
+    'floating-locator' = 'A locator contains a floating "latest" path segment (any letter case, after decoding escaped unreserved characters).'
     'bundled-path-invalid' = 'A bundled path is not a relative logical path (absolute, backslash, percent, empty, "." or ".." segment).'
     'release-asset-tag-invalid' = 'A release-asset tag is not an exact release tag.'
     'release-asset-foreign-release' = 'A release asset is not attached to this composition release (product.releaseRepository at product.releaseTag).'
@@ -132,33 +132,38 @@ function Test-CgHttpsLocator {
     .SYNOPSIS
         Returns 'ok', 'https-uri-invalid' or 'floating-locator'.
     .DESCRIPTION
-        1. Floating first: the path is percent-decoded BEFORE it is split, level by level (up to four
-           levels, so latest%2Fdownload, releases%2Flatest, %6Catest and latest%252Fdownload are all
-           seen), split on '/' and '\', and any segment equal to 'latest' in any letter case is
-           floating-locator. Empty and dot segments around it change nothing.
-        2. Then canonical form (same grammar as the schema httpsUri): no IP-literal host (all-numeric
-           final label), non-empty segments, no '.' or '..' segment, and percent escapes only for
-           characters that must be escaped, so an encoded '/', '\', '.', '%' (double encoding),
-           letter or digit is https-uri-invalid.
+        Same order and rules as cg-trust ReleaseBomVerifier.Https (and the schema httpsUri):
+        1. structural grammar (scheme, dotted host, port, path characters; a literal '\' fails here);
+        2. escapes are checked BEFORE anything is decoded or split: a malformed escape, or an escape of
+           '/', '\', '.' or '%' (%2F, %2f, %5C, %5c, %2E, %2e, %25, so no double encoding) is
+           https-uri-invalid;
+        3. escaped unreserved characters (letters, digits, '-', '_', '~') are decoded, other escapes
+           such as %2B stay opaque; the decoded path is split into segments;
+        4. an empty, '.' or '..' segment is https-uri-invalid (a single trailing '/' is allowed; the
+           trailing-slash question is open with cg-trust);
+        5. a 'latest' segment in any letter case is floating-locator (cg-trust refuses it after
+           'releases'; the installer refuses it anywhere).
+        Installer-only: an IP-literal host (all-numeric final label) is https-uri-invalid.
     #>
     param([AllowNull()]$Uri)
     if ($Uri -isnot [string] -or $Uri.Length -gt 1024) { return 'https-uri-invalid' }
     $match = [regex]::Match($Uri, $script:CgHttpsUriPattern)
     if (-not $match.Success) { return 'https-uri-invalid' }
-    $rawPath = $match.Groups['path'].Value
-    $level = $rawPath
-    for ($depth = 0; $depth -lt 4; $depth++) {
-        foreach ($segment in $level.Split([char[]]@('/', '\'))) {
-            if ($segment.Trim() -ieq 'latest') { return 'floating-locator' }
-        }
-        $next = [Uri]::UnescapeDataString($level)
-        if ($next -ceq $level) { break }
-        $level = $next
-    }
     if ($match.Groups['hostname'].Value.Split('.')[-1] -cmatch '^[0-9]+\z') { return 'https-uri-invalid' }
-    if (-not [regex]::IsMatch($rawPath, $script:CgHttpsCanonicalPathPattern)) { return 'https-uri-invalid' }
-    foreach ($segment in $rawPath.Substring(1).Split('/')) {
-        if ($segment -ceq '.' -or $segment -ceq '..') { return 'https-uri-invalid' }
+    $rawPath = $match.Groups['path'].Value
+    if ([regex]::IsMatch($rawPath, $script:CgHttpsMalformedEscapePattern) -or [regex]::IsMatch($rawPath, $script:CgHttpsForbiddenEscapePattern)) { return 'https-uri-invalid' }
+    $decoded = [regex]::Replace($rawPath, '%([0-9A-Fa-f]{2})', {
+            param($escape)
+            $character = [char][Convert]::ToInt32($escape.Groups[1].Value, 16)
+            if ([char]::IsAsciiLetterOrDigit($character) -or $character -eq '-' -or $character -eq '_' -or $character -eq '~') { [string]$character } else { $escape.Value }
+        })
+    $segments = [Collections.Generic.List[string]]::new([string[]]$decoded.Substring(1).Split('/'))
+    if ($decoded.EndsWith('/')) { $segments.RemoveAt($segments.Count - 1) }
+    foreach ($segment in $segments) {
+        if ($segment.Length -eq 0 -or $segment -ceq '.' -or $segment -ceq '..') { return 'https-uri-invalid' }
+    }
+    foreach ($segment in $segments) {
+        if ([string]::Equals($segment, 'latest', [StringComparison]::OrdinalIgnoreCase)) { return 'floating-locator' }
     }
     return 'ok'
 }

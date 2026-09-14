@@ -231,12 +231,12 @@
       "maxLength": 512
     },
     "httpsUri": {
-      "description": "Canonical https locator: dotted DNS host (no IP literal), no userinfo, query, fragment or whitespace; a path of one or more non-empty segments where a percent escape is allowed only for characters that must be escaped (escapes of letters, digits, '-', '.', '_', '~', '/', '\\', '%' and space are refused, so neither a separator nor 'latest' can hide behind an escape or double escape); no '.' or '..' segment; and no 'latest' segment in any letter case (a floating identity). The validator rule layer applies the same grammar and additionally reports any locator whose decoded form floats as floating-locator.",
+      "description": "Canonical https locator (same rules as cg-trust ReleaseBomVerifier.Https): dotted host, no userinfo, query, fragment or whitespace; every percent escape is two hex digits and never encodes '/', '\\', '.' or '%' (so no encoded separator, dot or double encoding); no empty, '.' or '..' segment (a single trailing '/' is allowed); and no 'latest' segment in any letter case, including one spelled with escaped letters. Installer-only additions: IP-literal hosts are refused, and 'latest' is refused as any segment, not only after 'releases'.",
       "type": "string",
-      "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/([A-Za-z0-9._~+-]|%(2[1-46-9A-Ca-c]|3[A-Fa-f]|40|5[BbDdEe]|60|7[B-Db-d]|[89A-Fa-f][0-9A-Fa-f]))+)+$",
+      "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/|(/([A-Za-z0-9._~+-]|%(2[0-46-9A-Da-d]|5[0-9ABabD-Fd-f]|[013-46-9A-Fa-f][0-9A-Fa-f]))+)+/?)$",
       "not": {
         "anyOf": [
-          { "pattern": "/[Ll][Aa][Tt][Ee][Ss][Tt](/|$)" },
+          { "pattern": "/([Ll]|%[46][Cc])([Aa]|%[46]1)([Tt]|%[57]4)([Ee]|%[46]5)([Ss]|%[57]3)([Tt]|%[57]4)(/|$)" },
           { "pattern": "/\\.\\.?(/|$)" },
           { "pattern": "^https://([a-z0-9-]+\\.)+[0-9]+(:[0-9]{1,5})?/" }
         ]

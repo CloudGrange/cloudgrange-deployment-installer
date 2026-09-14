@@ -146,6 +146,21 @@ Describe 'Semantic fixture cases' {
     }
 }
 
+Describe 'Canonical https locators that stay accepted (schema and rule layer agree)' {
+    It 'accepts <Name>' -ForEach @(
+        @{ Name = 'an escaped unreserved digit, which is decoded'; Path = '/members/0/retrieval/uri'; Value = 'https://github.com/rancher/rke2/releases/download/v1.36.4%2Brke2r%31/rke2.linux-amd64.tar.gz' }
+        @{ Name = 'an opaque escape such as %2B or %20'; Path = '/members/0/retrieval/uri'; Value = 'https://github.com/rancher/rke2/releases/download/v1.36.4%2Brke2r1/rke2%20linux-amd64.tar.gz' }
+        @{ Name = 'a repository root with a trailing slash (trailing-slash rule still open with cg-trust)'; Path = '/members/0/vendor/upstreamSource'; Value = 'https://github.com/rancher/rke2/' }
+        @{ Name = 'a bare host root'; Path = '/members/0/vendor/upstreamSource'; Value = 'https://get.rke2.io/' }
+        @{ Name = 'a segment that only contains latest'; Path = '/members/0/retrieval/uri'; Value = 'https://github.com/rancher/rke2/releases/download/v1.36.4%2Brke2r1/latest-notes.tar.gz' }
+    ) {
+        $case = @{ id = 'accepted'; patches = @(@{ op = 'set'; path = $Path; value = $Value }) }
+        $result = Test-BomText -Json (Get-PatchedFixtureJson -ValidText $validText -Case $case)
+        $result.passed | Should -BeTrue -Because ($result.codes -join ',')
+        $result.schemaAccepted | Should -BeTrue
+    }
+}
+
 Describe 'Rule catalog coverage' {
     It 'exercises every rule code through a semantic fixture case or a unit test in this file' {
         $cases = @(ConvertFrom-Json (Get-Content -LiteralPath $semanticCasesPath -Raw) -AsHashtable -Depth 32)
