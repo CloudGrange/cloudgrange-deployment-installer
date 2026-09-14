@@ -36,7 +36,8 @@ DOCKER_STUB = textwrap.dedent(r"""
         exit 0 ;;
       *"cloudgrange-api curl -sf http://localhost:8080/health/ready"*) exit 0 ;;
       *"cloudgrange-api curl -sf http://localhost:8080/api/v1/setup/status"*)
-        if [ -f "$F/complete" ]; then echo '{"setupComplete":true}'; else echo '{"setupComplete":false}'; fi; exit 0 ;;
+        if [ -f "$F/token_required" ]; then req=true; else req=false; fi
+        if [ -f "$F/complete" ]; then echo '{"setupComplete":true,"setupTokenRequired":false}'; else echo "{\"setupComplete\":false,\"setupTokenRequired\":$req}"; fi; exit 0 ;;
       *"cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt"*)
         [ -f "$F/token" ] && cat "$F/token"; exit 0 ;;
       *"cloudgrange-api stat -c %Y /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt"*)
@@ -108,6 +109,8 @@ class OperatorAccessTests(unittest.TestCase):
         self.password = secrets.token_hex(24)
         with open(j("token"), "w") as f:
             f.write(self.token)
+        # Most tests model a platform configured to require the token; the default (no token) has its own tests.
+        open(j("token_required"), "w").close()
         with open(j("compose", ".env"), "w") as f:
             f.write("KEYCLOAK_ADMIN_USER=admin\nKEYCLOAK_ADMIN_PASSWORD=%s\nCLOUDGRANGE_REALM_ADMIN_PASSWORD=%s\nCLOUDGRANGE_HOSTNAME=10.0.0.5\n"
                     % (secrets.token_hex(24), self.password))
@@ -234,6 +237,23 @@ class OperatorAccessTests(unittest.TestCase):
         self.wait_for(lambda: self.banner_contains(new), what="re-published banner")
         self.assertEqual(stat.S_IMODE(os.stat(self.issue).st_mode), 0o600)
         self.token = new
+        self.assert_cleared(self.finish())
+
+    # --- default platform: no setup token ---------------------------------------------------------
+    def test_without_a_required_token_publishes_the_url_only_and_never_restarts_the_api(self):
+        os.remove(self.j("token_required"))
+        os.remove(self.j("token"))
+        self.start()
+        self.wait_for(lambda: read_pool(self.pool).get("CloudGrange.State") == b"setup-pending" and os.path.exists(self.issue), what="publication")
+        items = read_pool(self.pool)
+        self.assertNotIn("CloudGrange.SetupToken", items)
+        self.assertEqual(items.get("CloudGrange.SetupUrl"), b"https://10.0.0.5/setup")
+        with open(self.issue) as f:
+            banner = f.read()
+        self.assertIn("https://10.0.0.5/setup", banner)
+        self.assertNotIn("setup token", banner.lower())
+        time.sleep(3)  # several poll cycles
+        self.assertNotIn("restart cloudgrange-api", self.calls())
         self.assert_cleared(self.finish())
 
     # --- token freshness ---------------------------------------------------------------------------

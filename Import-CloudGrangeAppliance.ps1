@@ -325,12 +325,13 @@ if ($kvpItems['CloudGrange.State'] -eq 'setup-pending') {
         $result.OperatorKeyPath = $OperatorKeyPath
     }
     # Security: never put the token in a URL (browser history, logs, Referer). Console only, once.
-    Write-Host "  First-run setup: open $portalUrl/setup and enter the one-use setup token when prompted." -ForegroundColor Cyan
     if ($kvpItems['CloudGrange.SetupToken']) {
+        # Only when the platform was configured to require the one-use token (CLOUDGRANGE_REQUIRE_SETUP_TOKEN).
+        Write-Host "  First-run setup: open $portalUrl/setup and enter the one-use setup token when prompted." -ForegroundColor Cyan
         Write-Host "    Setup token:              $($kvpItems['CloudGrange.SetupToken'])" -ForegroundColor White
     } else {
-        # The appliance never publishes an expired token; a new one is being issued.
-        Write-Host "    Setup token:              (being re-issued by the appliance; run this read again in a few minutes)" -ForegroundColor Yellow
+        # Default: no token. The first visit to the portal starts the setup wizard.
+        Write-Host "  First-run setup: open $portalUrl in a browser; the setup wizard starts on the first visit." -ForegroundColor Cyan
     }
     Write-Host "    Identity administrator:   $($kvpItems['CloudGrange.RealmAdminUser'])" -ForegroundColor White
     if ($kvpItems['CloudGrange.RealmAdminPassword']) {
