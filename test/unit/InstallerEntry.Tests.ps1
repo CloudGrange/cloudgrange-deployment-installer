@@ -249,6 +249,33 @@ Describe 'Entry composition pin from protected state (Get-CgProtectedComposition
 
     It 'returns nothing when the node has no installer state' {
         Get-CgProtectedCompositionPin -StateRoot (New-TestDirectory -Prefix 'cg-pin') | Should -BeNullOrEmpty
+        Get-CgProtectedCompositionPin -StateRoot (Join-Path (New-TestDirectory -Prefix 'cg-pin') 'absent') | Should -BeNullOrEmpty
+    }
+
+    It 'returns nothing when only install.lock and install.owner exist (crash before the first checkpoint)' {
+        $state = New-TestDirectory -Prefix 'cg-pin'
+        Set-Content -LiteralPath (Join-Path $state 'install.lock') -Value ''
+        Set-Content -LiteralPath (Join-Path $state 'install.owner') -Value '4242'
+        Get-CgProtectedCompositionPin -StateRoot $state | Should -BeNullOrEmpty
+    }
+
+    It 'refuses when installer state <Name> exists but no pin source does (fail closed)' -ForEach @(
+        @{ Name = 'evidence/'; Directory = 'evidence' }
+        @{ Name = 'keys/node.key'; Directory = 'keys'; File = 'keys/node.key' }
+        @{ Name = 'trust/ without the accepted record'; Directory = 'trust' }
+        @{ Name = 'an unknown file'; File = 'releases.json' }
+    ) {
+        $state = New-TestDirectory -Prefix 'cg-pin'
+        Set-Content -LiteralPath (Join-Path $state 'install.lock') -Value ''
+        if ($_.ContainsKey('Directory')) { $null = New-Item -ItemType Directory -Path (Join-Path $state $_['Directory']) }
+        if ($_.ContainsKey('File')) { Set-Content -LiteralPath (Join-Path $state $_['File']) -Value 'x' }
+        { Get-CgProtectedCompositionPin -StateRoot $state } | Should -Throw '*composition-pin-unavailable*'
+    }
+
+    It 'refuses when the state root is a file' {
+        $parent = New-TestDirectory -Prefix 'cg-pin'
+        Set-Content -LiteralPath (Join-Path $parent 'state') -Value 'x'
+        { Get-CgProtectedCompositionPin -StateRoot (Join-Path $parent 'state') } | Should -Throw '*composition-pin-unavailable*'
     }
 
     It 'prefers the accepted-composition record' {
@@ -309,13 +336,32 @@ function Get-CgErrorReason { param($ErrorObject) 'unexpected-error' }
         }
 
         function Invoke-Entry {
-            param([Parameter(Mandatory)][string]$Root, [string[]]$Extra = @(), [switch]$Sudo)
+            <#
+            Runs the copied entry script as a child. -StateRoot is passed through CG_INSTALLER_TEST_STATE_ROOT
+            (honoured only for non-root); by default a fresh empty directory, so no test depends on host state.
+            #>
+            param([Parameter(Mandatory)][string]$Root, [string[]]$Extra = @(), [switch]$Sudo, [string]$StateRoot)
+            if (-not $StateRoot) { $StateRoot = New-TestDirectory -Prefix 'cg-entry-state' }
             $arguments = @('-Mode', 'Plan', '-SiteConfig', (Join-Path $Root 'site.json'), '-TrustCheckpointSha256', ('f' * 64)) + $Extra
-            $child = Invoke-ChildPwsh -ScriptPath (Join-Path $Root 'Install-CloudGrange.ps1') -Arguments $arguments -Sudo:$Sudo
+            $previous = $env:CG_INSTALLER_TEST_STATE_ROOT
+            try {
+                $env:CG_INSTALLER_TEST_STATE_ROOT = $StateRoot
+                $child = Invoke-ChildPwsh -ScriptPath (Join-Path $Root 'Install-CloudGrange.ps1') -Arguments $arguments -Sudo:$Sudo
+            } finally {
+                $env:CG_INSTALLER_TEST_STATE_ROOT = $previous
+            }
             return [pscustomobject]@{ ExitCode = $child.ExitCode; Result = (ConvertFrom-LastJsonLine $child.Output); Output = $child.Output }
         }
+
+        function New-PinnedState {
+            <# A state directory holding a real engine checkpoint; its compositionSha256 is 'e' * 64. #>
+            $state = New-TestDirectory -Prefix 'cg-entry-state'
+            $null = Write-CgCheckpoint -StateDirectory $state -State (New-TestCheckpointState -InstallId ([guid]::NewGuid().ToString()))
+            return $state
+        }
         $isRoot = ((& id -u) | Out-String).Trim() -eq '0'
-        $hostHasInstallerState = Test-Path -LiteralPath '/var/lib/cloudgrange/state'
+        $sudoAvailable = $isRoot
+        if (-not $isRoot) { & sudo -n true 2>$null; $sudoAvailable = ($LASTEXITCODE -eq 0) }
     }
 
     It 'refuses verifier-missing before importing any module' {
@@ -326,13 +372,67 @@ function Get-CgErrorReason { param($ErrorObject) 'unexpected-error' }
         Test-Path -LiteralPath (Join-Path $root 'imported.marker') | Should -BeFalse
     }
 
-    It 'runs verify-tree with the exact manifest and root, and refuses without importing when it fails' {
-        if ($hostHasInstallerState) { Set-ItResult -Skipped -Because 'this host has installer state, which adds a composition pin'; return }
+    It 'runs verify-tree unpinned with the exact manifest and root on a node without installer state, and refuses without importing when it fails' {
+        if ($isRoot) { Set-ItResult -Skipped -Because 'the state-root test seam is ignored for root'; return }
         $root = New-EntryBundle -VerifierExit 1
-        $run = Invoke-Entry -Root $root
+        $state = New-TestDirectory -Prefix 'cg-entry-state'
+        Set-Content -LiteralPath (Join-Path $state 'install.lock') -Value ''
+        $run = Invoke-Entry -Root $root -StateRoot $state
         $run.ExitCode | Should -Be 2 -Because $run.Output
         $run.Result.reasonCode | Should -Be 'tree-verification-failed'
         Test-Path -LiteralPath (Join-Path $root 'imported.marker') | Should -BeFalse
+        @(Get-Content -LiteralPath (Join-Path $root 'verifier-args.txt')) | Should -Be @('verify-tree', '--manifest', (Join-Path $root 'release/composition-manifest.json'), '--root', $root)
+    }
+
+    It 'pins verify-tree with --composition-sha256 from the protected checkpoint on resume' {
+        if ($isRoot) { Set-ItResult -Skipped -Because 'the state-root test seam is ignored for root'; return }
+        $root = New-EntryBundle -VerifierExit 1
+        $run = Invoke-Entry -Root $root -StateRoot (New-PinnedState)
+        $run.ExitCode | Should -Be 2 -Because $run.Output
+        $run.Result.reasonCode | Should -Be 'tree-verification-failed'
+        Test-Path -LiteralPath (Join-Path $root 'imported.marker') | Should -BeFalse
+        @(Get-Content -LiteralPath (Join-Path $root 'verifier-args.txt')) |
+            Should -Be @('verify-tree', '--manifest', (Join-Path $root 'release/composition-manifest.json'), '--root', $root, '--composition-sha256', ('e' * 64))
+    }
+
+    It 'pins verify-tree from trust/accepted-composition.json and passes to the next start-up step when it succeeds' {
+        if ($isRoot) { Set-ItResult -Skipped -Because 'the state-root test seam is ignored for root'; return }
+        $root = New-EntryBundle
+        $state = New-TestDirectory -Prefix 'cg-entry-state'
+        $null = New-Item -ItemType Directory -Path (Join-Path $state 'trust')
+        Set-Content -LiteralPath (Join-Path $state 'trust/accepted-composition.json') -Value ('{"compositionSha256":"' + ('a1' * 32) + '"}')
+        $run = Invoke-Entry -Root $root -StateRoot $state
+        $run.ExitCode | Should -Be 2 -Because $run.Output
+        $run.Result.reasonCode | Should -Be 'root-required'
+        @(Get-Content -LiteralPath (Join-Path $root 'verifier-args.txt'))[-2..-1] | Should -Be @('--composition-sha256', ('a1' * 32))
+        Test-Path -LiteralPath (Join-Path $root 'imported.marker') | Should -BeFalse
+    }
+
+    It 'refuses composition-pin-unavailable before verify-tree when installer state exists without a pin' {
+        if ($isRoot) { Set-ItResult -Skipped -Because 'the state-root test seam is ignored for root'; return }
+        $root = New-EntryBundle
+        $state = New-TestDirectory -Prefix 'cg-entry-state'
+        $null = New-Item -ItemType Directory -Path (Join-Path $state 'evidence')
+        $run = Invoke-Entry -Root $root -StateRoot $state
+        $run.ExitCode | Should -Be 2 -Because $run.Output
+        $run.Result.reasonCode | Should -Be 'composition-pin-unavailable'
+        Test-Path -LiteralPath (Join-Path $root 'verifier-args.txt') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $root 'imported.marker') | Should -BeFalse
+    }
+
+    It 'ignores the state-root test seam when running as root' {
+        if (-not $sudoAvailable) { Set-ItResult -Skipped -Because 'passwordless sudo is not available'; return }
+        if (Test-Path -LiteralPath '/var/lib/cloudgrange/state') { Set-ItResult -Skipped -Because 'this host has real installer state'; return }
+        $root = New-EntryBundle
+        $state = New-TestDirectory -Prefix 'cg-entry-state'
+        $null = New-Item -ItemType Directory -Path (Join-Path $state 'evidence')
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $root 'Install-CloudGrange.ps1'), '-Mode', 'Plan', '-SiteConfig', (Join-Path $root 'site.json'), '-TrustCheckpointSha256', ('f' * 64))
+        $envArgument = 'CG_INSTALLER_TEST_STATE_ROOT=' + $state
+        $output = if ($isRoot) { & env $envArgument (Get-PwshPath) @arguments 2>&1 } else { & sudo -n env $envArgument (Get-PwshPath) @arguments 2>&1 }
+        $exit = $LASTEXITCODE
+        $text = (@($output | ForEach-Object { [string]$_ }) -join "`n")
+        $exit | Should -Be 0 -Because $text
+        (ConvertFrom-LastJsonLine $text).terminal | Should -Be 'plan-ok'
         @(Get-Content -LiteralPath (Join-Path $root 'verifier-args.txt')) | Should -Be @('verify-tree', '--manifest', (Join-Path $root 'release/composition-manifest.json'), '--root', $root)
     }
 
@@ -356,8 +456,6 @@ function Get-CgErrorReason { param($ErrorObject) 'unexpected-error' }
     }
 
     It 'imports the installer module only after verify-tree passes (as root)' {
-        $sudoAvailable = $isRoot
-        if (-not $isRoot) { & sudo -n true 2>$null; $sudoAvailable = ($LASTEXITCODE -eq 0) }
         if (-not $sudoAvailable) { Set-ItResult -Skipped -Because 'passwordless sudo is not available'; return }
         $root = New-EntryBundle
         $run = Invoke-Entry -Root $root -Sudo:(-not $isRoot)
@@ -367,12 +465,16 @@ function Get-CgErrorReason { param($ErrorObject) 'unexpected-error' }
     }
 }
 
-Describe 'Install-CloudGrange.ps1 on a non-Linux platform' -Skip:$IsLinux {
-    It 'refuses unsupported-platform before anything else' {
-        $root = New-TestDirectory -Prefix 'cg-entry'
-        Copy-Item -LiteralPath (Join-Path $RepoRoot 'installer/Install-CloudGrange.ps1') -Destination $root
-        $child = Invoke-ChildPwsh -ScriptPath (Join-Path $root 'Install-CloudGrange.ps1') -Arguments @('-Mode', 'Plan', '-SiteConfig', 'site.json')
-        $child.ExitCode | Should -Be 2
-        (ConvertFrom-LastJsonLine $child.Output).reasonCode | Should -Be 'unsupported-platform'
+# Discovered only off Linux: a -Skip here would be reported as a skipped test and fail the Linux CI
+# no-skip gate. The file body runs at discovery, so on Linux this Describe does not exist at all.
+if (-not $IsLinux) {
+    Describe 'Install-CloudGrange.ps1 on a non-Linux platform' {
+        It 'refuses unsupported-platform before anything else' {
+            $root = New-TestDirectory -Prefix 'cg-entry'
+            Copy-Item -LiteralPath (Join-Path $RepoRoot 'installer/Install-CloudGrange.ps1') -Destination $root
+            $child = Invoke-ChildPwsh -ScriptPath (Join-Path $root 'Install-CloudGrange.ps1') -Arguments @('-Mode', 'Plan', '-SiteConfig', 'site.json')
+            $child.ExitCode | Should -Be 2
+            (ConvertFrom-LastJsonLine $child.Output).reasonCode | Should -Be 'unsupported-platform'
+        }
     }
 }

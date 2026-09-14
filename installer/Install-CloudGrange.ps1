@@ -11,7 +11,8 @@
     Start-up order, before any installer module is imported:
       1. platform check (Linux only)
       2. composition pin from protected state OUTSIDE the bundle (/var/lib/cloudgrange/state): the accepted
-         record, else the checkpoint chain. A node with installer state that yields no pin is refused.
+         record, else the checkpoint chain. A node with installer state (anything beyond install.lock and
+         install.owner) that yields no pin is refused with composition-pin-unavailable.
       3. bin/cg-trust verify-tree --manifest <bundle>/release/composition-manifest.json --root <bundle>
          [--composition-sha256 <pin>] (every mode, every resume; any difference or extra file refuses)
       4. parameters that later work packages implement are refused rather than ignored
@@ -83,15 +84,23 @@ function Get-CgProtectedCompositionPin {
     .DESCRIPTION
         Order: trust/accepted-composition.json (written at acceptance), then checkpoint.json,
         checkpoint.prev, checkpoint.tmp (compositionSha256 is the same across one installation's chain).
-        Returns $null when no installer state exists (first extraction: the bundle digest from the
-        independent channel covers the manifest). Throws composition-pin-unavailable when state exists
-        but no file yields a digest, so a consistent rewrite of the manifest and a module cannot pass
-        verify-tree on resume.
+        Returns $null only when no installer state exists: the state directory is absent, empty, or holds
+        nothing but install.lock / install.owner (the engine takes the lock before its first checkpoint,
+        so a crash in that window leaves exactly these). The bundle digest from the independent channel
+        then covers the manifest. Throws composition-pin-unavailable when any other installer state
+        exists (evidence, keys, trust records, a checkpoint file) but no file yields a digest, so a
+        consistent rewrite of the manifest and a module cannot pass verify-tree unpinned (fail closed).
     #>
     param([Parameter(Mandatory)][string]$StateRoot)
     $candidates = @('trust/accepted-composition.json', 'checkpoint.json', 'checkpoint.prev', 'checkpoint.tmp') | ForEach-Object { Join-Path $StateRoot $_ }
     $present = @($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-    if ($present.Count -eq 0) { return $null }
+    if ($present.Count -eq 0) {
+        if (-not (Test-Path -LiteralPath $StateRoot)) { return $null }
+        if (-not (Test-Path -LiteralPath $StateRoot -PathType Container)) { throw 'composition-pin-unavailable' }
+        $installerState = @(Get-ChildItem -LiteralPath $StateRoot -Force -ErrorAction Stop | Where-Object { @('install.lock', 'install.owner') -cnotcontains $_.Name })
+        if ($installerState.Count -eq 0) { return $null }
+        throw 'composition-pin-unavailable'
+    }
     foreach ($path in $present) {
         try {
             if ((Get-Item -LiteralPath $path).Length -gt 4194304) { continue }
@@ -107,6 +116,14 @@ function Get-CgProtectedCompositionPin {
 if (-not $IsLinux) {
     Complete-CgEntry -Terminal 'refused' -ReasonCode 'unsupported-platform' -Message 'The management-node installer runs on Linux (Ubuntu 24.04) only.' -ExitCode 2
 }
+
+# Effective uid, read once; the root refusal itself stays after tree verification (start-up step 5).
+$userId = (& id -u 2>$null | Out-String).Trim()
+$isRoot = ($LASTEXITCODE -eq 0 -and $userId -ceq '0')
+# Test seam for the composition pin: a NON-root process may point the pin reader at a disposable state
+# directory. It is ignored for root, and a non-root process is always refused root-required before the
+# module is imported, so the override can never reach an installation.
+if (-not $isRoot -and $env:CG_INSTALLER_TEST_STATE_ROOT) { $stateRoot = $env:CG_INSTALLER_TEST_STATE_ROOT }
 
 # Bind the running tree to the composition manifest before importing anything from it.
 $verifier = Join-Path (Join-Path $bundleRoot 'bin') 'cg-trust'
@@ -139,8 +156,7 @@ if (@($notImplemented).Count -gt 0) {
     Complete-CgEntry -Terminal 'not-implemented' -ReasonCode 'parameter-not-implemented' -Message ('Not implemented in this installer build: -' + (@($notImplemented) -join ', -')) -ExitCode 4
 }
 
-$userId = (& id -u 2>$null | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $userId -cne '0') {
+if (-not $isRoot) {
     Complete-CgEntry -Terminal 'refused' -ReasonCode 'root-required' -Message 'Run the installer as root (sudo pwsh ./Install-CloudGrange.ps1 ...).' -ExitCode 2
 }
 

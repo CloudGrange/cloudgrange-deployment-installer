@@ -7,8 +7,9 @@
       1. strict JSON (UTF-8, no BOM, no duplicate or case-colliding keys, 1 MiB bound);
       2. schemas/release-bom.schema.json (closed structural schema);
       3. Get-CgReleaseBomViolation: rules JSON Schema cannot express, plus independent re-checks of
-         the security-relevant structural rules (digest pinning, floating locators, per-kind
-         retrieval, vendor exclusivity, SBOM obligations, site-config binding) so a schema engine
+         the security-relevant structural rules (digest pinning, floating locators and encoded path
+         separators, IP-literal hosts, bundled path traversal, per-kind retrieval, vendor exclusivity
+         and upstream mirror provenance, SBOM obligations, site-config binding) so a schema engine
          defect cannot silently admit them.
     Rule codes are listed by Get-CgReleaseBomRuleCatalog; every code is exercised by
     schemas/fixtures/release-bom.semantic-cases.json or test/unit/ReleaseBom.Tests.ps1.
@@ -22,7 +23,14 @@ Set-StrictMode -Version Latest
 $script:CgSiteConfigSchemaUri = 'https://cloudgrange.cloud/schemas/cg-site-config-v1.schema.json'
 $script:CgBomPhaseOrder = @('preflight', 'retrieve', 'runtime', 'storage', 'postgres', 'vault', 'identity', 'migrate', 'api', 'portal', 'gateway', 'module', 'handoff')
 $script:CgOciReferencePattern = '^(?<repository>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+)@sha256:(?<digest>[0-9a-f]{64})$'
-$script:CgHttpsUriPattern = '^https://(?<host>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?)(?<path>/[A-Za-z0-9._~%/+-]*)$'
+# Structural match only (scheme, dotted host, optional port, path characters); canonical path rules follow.
+$script:CgHttpsUriPattern = '^https://(?<host>(?<hostname>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)(:[0-9]{1,5})?)(?<path>/[A-Za-z0-9._~%/+-]*)\z'
+# Canonical path, identical to the schema httpsUri pattern: non-empty segments; a percent escape only for
+# characters that must be escaped (never letters, digits, '-', '.', '_', '~', '/', '\', '%' or space).
+$script:CgHttpsCanonicalPathPattern = '^(/([A-Za-z0-9._~+-]|%(2[1-46-9A-Ca-c]|3[A-Fa-f]|40|5[BbDdEe]|60|7[B-Db-d]|[89A-Fa-f][0-9A-Fa-f]))+)+\z'
+# Same grammar as the schema logicalPath: relative, '/'-separated, every segment starts alphanumeric
+# (so '.', '..', empty segments, a leading '/', '\' and '%' are all impossible).
+$script:CgLogicalPathPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9][A-Za-z0-9._-]{0,127})*\z'
 $script:CgReleaseTagPattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+(\.[0-9a-z]+)*)?$'
 $script:CgKindRetrieval = @{
     'oci-image' = @('oci'); 'vendor-oci-image' = @('oci')
@@ -74,8 +82,10 @@ $script:CgBomRuleCatalog = [ordered]@{
     'vendor-image-not-mirrored' = 'A vendor-oci-image has no mirrorOf upstream reference.'
     'vendor-image-outside-mirror-namespace' = 'A vendor-oci-image is not retrieved from ghcr.io/cloudgrange/vendor/.'
     'first-party-image-outside-namespace' = 'An oci-image is not retrieved from ghcr.io/cloudgrange/ (outside vendor/).'
-    'https-uri-invalid' = 'An https locator has a non-https scheme, userinfo, query, fragment or an undotted host.'
-    'floating-locator' = 'A locator contains a floating "latest" path segment.'
+    'mirror-of-cloudgrange-namespace' = 'retrieval.mirrorOf names a ghcr.io/cloudgrange/ repository instead of the upstream it mirrors.'
+    'https-uri-invalid' = 'An https locator has a non-https scheme, userinfo, query, fragment, an undotted or IP-literal host, an empty or dot path segment, or a percent escape of a character that needs none (letters, digits, "-", ".", "_", "~") or of "/", "\", "%" or space.'
+    'floating-locator' = 'A locator contains a floating "latest" path segment (any letter case, after percent-decoding, split on "/" and "\").'
+    'bundled-path-invalid' = 'A bundled path is not a relative logical path (absolute, backslash, percent, empty, "." or ".." segment).'
     'release-asset-tag-invalid' = 'A release-asset tag is not an exact release tag.'
     'release-asset-foreign-release' = 'A release asset is not attached to this composition release (product.releaseRepository at product.releaseTag).'
     'chart-bundle-path-mismatch' = 'A chart is not bundled at charts/<name>-<version>.tgz.'
@@ -118,15 +128,37 @@ function Get-CgOciReferenceParts {
 }
 
 function Test-CgHttpsLocator {
-    <# Returns 'ok', 'https-uri-invalid' or 'floating-locator'. #>
+    <#
+    .SYNOPSIS
+        Returns 'ok', 'https-uri-invalid' or 'floating-locator'.
+    .DESCRIPTION
+        1. Floating first: the path is percent-decoded BEFORE it is split, level by level (up to four
+           levels, so latest%2Fdownload, releases%2Flatest, %6Catest and latest%252Fdownload are all
+           seen), split on '/' and '\', and any segment equal to 'latest' in any letter case is
+           floating-locator. Empty and dot segments around it change nothing.
+        2. Then canonical form (same grammar as the schema httpsUri): no IP-literal host (all-numeric
+           final label), non-empty segments, no '.' or '..' segment, and percent escapes only for
+           characters that must be escaped, so an encoded '/', '\', '.', '%' (double encoding),
+           letter or digit is https-uri-invalid.
+    #>
     param([AllowNull()]$Uri)
     if ($Uri -isnot [string] -or $Uri.Length -gt 1024) { return 'https-uri-invalid' }
     $match = [regex]::Match($Uri, $script:CgHttpsUriPattern)
     if (-not $match.Success) { return 'https-uri-invalid' }
-    foreach ($segment in $match.Groups['path'].Value.Split('/')) {
-        $decoded = $segment
-        try { $decoded = [Uri]::UnescapeDataString($segment) } catch { return 'https-uri-invalid' }
-        if ($decoded.Trim() -ieq 'latest') { return 'floating-locator' }
+    $rawPath = $match.Groups['path'].Value
+    $level = $rawPath
+    for ($depth = 0; $depth -lt 4; $depth++) {
+        foreach ($segment in $level.Split([char[]]@('/', '\'))) {
+            if ($segment.Trim() -ieq 'latest') { return 'floating-locator' }
+        }
+        $next = [Uri]::UnescapeDataString($level)
+        if ($next -ceq $level) { break }
+        $level = $next
+    }
+    if ($match.Groups['hostname'].Value.Split('.')[-1] -cmatch '^[0-9]+\z') { return 'https-uri-invalid' }
+    if (-not [regex]::IsMatch($rawPath, $script:CgHttpsCanonicalPathPattern)) { return 'https-uri-invalid' }
+    foreach ($segment in $rawPath.Substring(1).Split('/')) {
+        if ($segment -ceq '.' -or $segment -ceq '..') { return 'https-uri-invalid' }
     }
     return 'ok'
 }
@@ -282,7 +314,11 @@ function Get-CgReleaseBomViolation {
                     if ($retrieval.Contains('mirrorOf')) {
                         $mirror = Get-CgOciReferenceParts (Get-CgMapValue $retrieval @('mirrorOf'))
                         if ($null -eq $mirror) { & $add 'oci-reference-not-digest-pinned' ($p + '/retrieval/mirrorOf') }
-                        elseif ($mirror.Digest -cne $sha) { & $add 'mirror-digest-mismatch' ($p + '/retrieval/mirrorOf') }
+                        else {
+                            if ($mirror.Digest -cne $sha) { & $add 'mirror-digest-mismatch' ($p + '/retrieval/mirrorOf') }
+                            # A mirror of the CloudGrange namespace records no upstream provenance.
+                            if ($mirror.Repository.StartsWith('ghcr.io/cloudgrange/', [StringComparison]::Ordinal)) { & $add 'mirror-of-cloudgrange-namespace' ($p + '/retrieval/mirrorOf') }
+                        }
                     } elseif ($kind -ceq 'vendor-oci-image') {
                         & $add 'vendor-image-not-mirrored' ($p + '/retrieval/mirrorOf')
                     }
@@ -302,6 +338,9 @@ function Get-CgReleaseBomViolation {
                 }
                 'bundled' {
                     $bundlePath = Get-CgMapValue $retrieval @('path')
+                    if (-not (Test-CgStringMatch -Value $bundlePath -Pattern $script:CgLogicalPathPattern) -or $bundlePath.Length -gt 240) {
+                        & $add 'bundled-path-invalid' ($p + '/retrieval/path')
+                    }
                     if (-not $locations.Add('bundled:' + $bundlePath)) { & $add 'duplicate-retrieval-location' ($p + '/retrieval/path') }
                     if (@('helm-chart', 'vendor-helm-chart') -ccontains $kind -and $bundlePath -cne ('charts/' + $name + '-' + $memberVersion + '.tgz')) {
                         & $add 'chart-bundle-path-mismatch' ($p + '/retrieval/path')

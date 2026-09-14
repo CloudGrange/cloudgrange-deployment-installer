@@ -231,10 +231,16 @@
       "maxLength": 512
     },
     "httpsUri": {
-      "description": "https URI with a dotted host, no userinfo, no query, no fragment and no whitespace. GitHub 'releases/latest' locators are rejected because their identity floats.",
+      "description": "Canonical https locator: dotted DNS host (no IP literal), no userinfo, query, fragment or whitespace; a path of one or more non-empty segments where a percent escape is allowed only for characters that must be escaped (escapes of letters, digits, '-', '.', '_', '~', '/', '\\', '%' and space are refused, so neither a separator nor 'latest' can hide behind an escape or double escape); no '.' or '..' segment; and no 'latest' segment in any letter case (a floating identity). The validator rule layer applies the same grammar and additionally reports any locator whose decoded form floats as floating-locator.",
       "type": "string",
-      "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?/[A-Za-z0-9._~%/+-]*$",
-      "not": { "pattern": "/releases/latest/" },
+      "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/([A-Za-z0-9._~+-]|%(2[1-46-9A-Ca-c]|3[A-Fa-f]|40|5[BbDdEe]|60|7[B-Db-d]|[89A-Fa-f][0-9A-Fa-f]))+)+$",
+      "not": {
+        "anyOf": [
+          { "pattern": "/[Ll][Aa][Tt][Ee][Ss][Tt](/|$)" },
+          { "pattern": "/\\.\\.?(/|$)" },
+          { "pattern": "^https://([a-z0-9-]+\\.)+[0-9]+(:[0-9]{1,5})?/" }
+        ]
+      },
       "maxLength": 1024
     },
     "compositionRef": {
