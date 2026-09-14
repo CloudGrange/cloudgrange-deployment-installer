@@ -38,7 +38,8 @@ echo "cloud-init done: $(sudo cloud-init status 2>/dev/null || echo unknown)"
 
 echo "Starting Docker CE installation..."
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg
+# jq is used by Deploy-DockerCompose's service-state check (AB#1590); without it the check passes vacuously.
+apt-get install -y -qq ca-certificates curl gnupg jq
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc

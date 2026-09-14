@@ -19,7 +19,9 @@ param(
     [string]$SshPublicKey     = '',
     # Path to the SSH public key file. Preferred over -SshPublicKey when invoking via
     # powershell.exe -File to avoid argument-splitting on the space inside the key string.
-    [string]$SshPublicKeyFile = ''
+    [string]$SshPublicKeyFile = '',
+    [string]$SwitchName       = 'cloudgrange-internal',
+    [switch]$SkipHostPortForward
 )
 
 function New-CloudGrangeVm {
@@ -35,15 +37,21 @@ function New-CloudGrangeVm {
         # SSH public key (openssh format: "ssh-ed25519 AAAA... comment") to add to
         # the cloudgrange user's authorized_keys via cloud-init. When provided, the
         # installer uses SSH (not Hyper-V PowerShell Direct) to run guest commands.
-        [string]$SshPublicKey = ''
+        [string]$SshPublicKey = '',
+        # AB#8129: an existing switch is used as-is (no host IP or NAT changes).
+        [string]$SwitchName = 'cloudgrange-internal',
+        # AB#8129: skip the host-wide inbound 443 firewall rule and netsh portproxy.
+        [switch]$SkipHostPortForward
     )
 
     $ErrorActionPreference = 'Stop'
 
     $vmName     = 'cloudgrange-docker'
-    $switchName = 'cloudgrange-internal'
-    $hostIp     = '192.168.100.1'
-    $vmGateway  = '192.168.100.1'
+    $switchName = $SwitchName
+    # Gateway/host IP and NAT prefix derive from the VM IP (/24) instead of a fixed 192.168.100.x.
+    $subnetBase = $VmIp -replace '\.\d+$', ''
+    $hostIp     = "$subnetBase.1"
+    $natPrefix  = "$subnetBase.0/24"
     $natName    = 'CloudGrangeNAT'
 
     # Import Hyper-V module — required in PS5.1 subprocess context (PS7 cannot load it).
@@ -77,13 +85,21 @@ function New-CloudGrangeVm {
     # Hyper-V internal switch + WinNAT so the cloudgrange-docker VM has internet access.
     # An Internal switch provides a private network; WinNAT adds outbound NAT so the
     # nested VM can pull images from ghcr.io, update packages, etc.
+    # AB#8129: an existing switch (e.g. one already backed by WinNAT) is used unchanged. WinNAT
+    # supports only one NAT network per host, so creating a second switch + NAT fails on hosts
+    # that already run one (Docker Desktop, WSL, lab NATs).
+    $createdSwitch = $false
     if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
         Write-Host "  Creating Hyper-V internal switch: $switchName"
         New-VMSwitch -Name $switchName -SwitchType Internal | Out-Null
+        $createdSwitch = $true
+    } else {
+        Write-Host "  Using existing Hyper-V switch: $switchName (no host IP or NAT changes)"
     }
     # Assign the host-side IP on the switch NIC (gateway for the nested VM).
     # The adapter may take a moment to appear after New-VMSwitch; retry up to 10 seconds.
     $hostNic = $null
+    if ($createdSwitch) {
     for ($i = 0; $i -lt 10; $i++) {
         $hostNic = Get-NetAdapter | Where-Object { $_.Name -eq "vEthernet ($switchName)" }
         if ($hostNic) { break }
@@ -109,10 +125,15 @@ function New-CloudGrangeVm {
     } else {
         Write-Warning "  vEthernet ($switchName) adapter not found after 10s - host IP not assigned."
     }
-    # Create WinNAT for outbound internet from the nested VM's subnet.
-    if (-not (Get-NetNat -Name $natName -ErrorAction SilentlyContinue)) {
-        Write-Host "  Creating WinNAT: $natName (192.168.100.0/24)"
-        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix '192.168.100.0/24' | Out-Null
+    }
+    # Create WinNAT for outbound internet from the nested VM's subnet, unless a NAT already
+    # covers that prefix (WinNAT allows one NAT network per host).
+    $coveringNat = Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.InternalIPInterfaceAddressPrefix -eq $natPrefix }
+    if ($coveringNat) {
+        Write-Host "  Outbound NAT already provided by: $($coveringNat.Name) ($natPrefix)"
+    } elseif ($createdSwitch -and -not (Get-NetNat -Name $natName -ErrorAction SilentlyContinue)) {
+        Write-Host "  Creating WinNAT: $natName ($natPrefix)"
+        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $natPrefix | Out-Null
     }
 
     # Ensure VHDX directory exists
@@ -351,7 +372,9 @@ ethernets:
 
     # Windows Firewall — forward port 443 from management NIC to VM
     $fwRuleName = 'CloudGrange-Portal-443'
-    if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
+    if ($SkipHostPortForward) {
+        Write-Host "  Skipping host 443 firewall rule and portproxy (-SkipHostPortForward)"
+    } elseif (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
         # Port forwarding via netsh portproxy (management NIC → VM IP)
         netsh interface portproxy add v4tov4 listenport=443 connectaddress=$VmIp connectport=443 | Out-Null
@@ -386,5 +409,6 @@ if ($MyInvocation.InvocationName -ne '.') {
 
     . "$PSScriptRoot\CloudGrange-Common.ps1"
     New-CloudGrangeVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
-        -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath
+        -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath `
+        -SwitchName $SwitchName -SkipHostPortForward:$SkipHostPortForward
 }

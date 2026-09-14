@@ -28,6 +28,7 @@ function Deploy-DockerCompose {
     $keycloakPassword = & $newSecret
     $grafanaPassword  = & $newSecret
     $relayToken       = & $newSecret
+    $kcClientSecret   = & $newSecret
 
     # Bash deploy script — runs entirely inside the Linux guest via SSH sudo.
     # AB#1590: After docker compose up -d:
@@ -58,7 +59,7 @@ KEYCLOAK_ADMIN_USER=admin
 KEYCLOAK_ADMIN_PASSWORD=$keycloakPassword
 GRAFANA_ADMIN_PASSWORD=$grafanaPassword
 RELAY_ENROLLMENT_TOKEN=$relayToken
-CLOUDGRANGE_API_URL=http://${VmIp}:8081
+KEYCLOAK_API_CLIENT_SECRET=$kcClientSecret
 CLOUDGRANGE_HOSTNAME=$VmIp
 ENVEOF
 fi

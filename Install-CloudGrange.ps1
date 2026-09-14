@@ -21,7 +21,13 @@ param(
     # When not specified and Mode=Bundled, the installer looks in $PSScriptRoot for bundle files.
     [string]$BundlePath = '',
     [switch]$AcceptDefaults,
-    [switch]$Force
+    [switch]$Force,
+    # AB#8129: Hyper-V switch for the VM. When it already exists (for example a switch that
+    # already has WinNAT, which allows only one NAT per host), it is used as-is: no host IP or
+    # NAT changes are made.
+    [string]$SwitchName = 'cloudgrange-internal',
+    # AB#8129: skip the host-wide inbound 443 firewall rule and netsh portproxy to the VM.
+    [switch]$SkipHostPortForward
 )
 
 Set-StrictMode -Version Latest
@@ -196,13 +202,18 @@ function Invoke-CloudGrangeInstall {
         # New-CloudGrangeVm.ps1 uses Hyper-V cmdlets that require Windows PowerShell (PS5.1).
         # Invoke via powershell.exe so the Hyper-V module loads correctly while the main
         # installer continues to run under PS7.
-        & powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass `
-            -File "$PSScriptRoot\scripts\New-CloudGrangeVm.ps1" `
-            -VmIp $VmIp `
-            -VhdxPath $VhdxPath `
-            -Mode $Mode `
-            -SshPublicKeyFile "$sshKeyPath.pub" `
-            -BundledImagePath $bundledUbuntuPath
+        $vmArgs = @(
+            '-NonInteractive', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', "$PSScriptRoot\scripts\New-CloudGrangeVm.ps1",
+            '-VmIp', $VmIp,
+            '-VhdxPath', $VhdxPath,
+            '-Mode', $Mode,
+            '-SshPublicKeyFile', "$sshKeyPath.pub",
+            '-BundledImagePath', $bundledUbuntuPath,
+            '-SwitchName', $SwitchName
+        )
+        if ($SkipHostPortForward) { $vmArgs += '-SkipHostPortForward' }
+        & powershell.exe @vmArgs
         if ($LASTEXITCODE -ne 0) {
             Write-Error "CG-INST-ERR-010: VM provisioning failed (exit $LASTEXITCODE). Check Hyper-V event log for details."
         }
@@ -234,7 +245,7 @@ function Invoke-CloudGrangeInstall {
     Install-DockerCe @dockerCeArgs @proxyArgs
 
     # Step 6: Deploy Docker Compose stack
-    Write-Progress-Step "Deploying CloudGrange stack (6 containers)"
+    Write-Progress-Step "Deploying CloudGrange Docker Compose stack"
     . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
     $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
     if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
@@ -259,7 +270,8 @@ function Invoke-CloudGrangeInstall {
     # The API is directly on port 8081 (not routed through nginx).
     # Portal URL uses HTTPS via nginx; API health check uses the direct API port.
     Write-Progress-Step "Waiting for CloudGrange API to become healthy"
-    $apiHealthBase = "http://$VmIp:8081"
+    # ${VmIp} braces: "$VmIp:8081" parses as a drive-qualified variable and yields an empty host.
+    $apiHealthBase = "http://${VmIp}:8081"
     $portalBase    = "https://$VmIp"
     $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/health/ready" -TimeoutSeconds 600
     if (-not $healthOk) {
@@ -277,8 +289,9 @@ function Invoke-CloudGrangeInstall {
     # Check setup state — print first-run URL if setup is still pending
     $setupPending = $false
     try {
-        $statusResp = Invoke-RestMethod -Uri "$apiHealthBase/api/v1/platform/setup-status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
-        $setupPending = ($statusResp.setupState -eq 'pending')
+        # AB#8129: the API route is /api/v1/setup/status and returns { setupComplete, platformName, publicUrl }.
+        $statusResp = Invoke-RestMethod -Uri "$apiHealthBase/api/v1/setup/status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
+        $setupPending = -not [bool]$statusResp.setupComplete
     } catch {
         # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
     }

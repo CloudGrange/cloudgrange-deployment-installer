@@ -55,6 +55,16 @@ jobs:
           cp Update-CloudGrange.ps1    bundle/ 2>/dev/null || true
           cp -r scripts/              bundle/scripts/
           cp -r compose/              bundle/compose/
+          # Install-CloudGrange.ps1 refuses to run without this integrity file beside it.
+          sha256sum Install-CloudGrange.ps1 | awk '{print toupper($1)"  Install-CloudGrange.ps1"}' > bundle/cloudgrange-installer.sha256
+
+      - name: Add verified Ubuntu noble cloud image (required by -Mode Bundled)
+        run: |
+          base=https://cloud-images.ubuntu.com/noble/current
+          curl -fsSL "$base/SHA256SUMS" -o ubuntu-SHA256SUMS
+          curl -fsSL "$base/noble-server-cloudimg-amd64.img" -o noble-server-cloudimg-amd64.img
+          grep ' \*\?noble-server-cloudimg-amd64.img$' ubuntu-SHA256SUMS | sha256sum -c
+          mv noble-server-cloudimg-amd64.img bundle/ubuntu-24.04-cloudimg.img
 
       - name: Generate SHA-256 manifest
         run: |

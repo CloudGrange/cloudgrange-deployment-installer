@@ -39,6 +39,14 @@ services:
       # over the internal Docker network. Without this, the probe logs "invalid request URI"
       # every cycle. Override CLOUDGRANGE_PORTAL_URL only if the portal runs out-of-stack.
       - CLOUDGRANGE_PORTAL_URL=${CLOUDGRANGE_PORTAL_URL:-http://cloudgrange-portal:80}
+      # AB#8129 / ADR-008: local Keycloak. Authority uses the in-network service name.
+      - Keycloak__Authority=${CLOUDGRANGE_KEYCLOAK_AUTHORITY:-http://keycloak:8080/realms/cloudgrange}
+      - Keycloak__ClientId=${CLOUDGRANGE_KEYCLOAK_CLIENT_ID:-cloudgrange-api}
+      - Keycloak__ClientSecret=${KEYCLOAK_API_CLIENT_SECRET}
+      - Keycloak__RequireHttpsMetadata=false
+    volumes:
+      # ADR-009: the PostgreSQL-encrypted secrets provider's master key (/etc/cloudgrange/secrets.key).
+      - api_secrets:/etc/cloudgrange
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,7 +67,10 @@ services:
     expose:
       - "80"
     environment:
-      - CLOUDGRANGE_API_URL=${CLOUDGRANGE_API_URL:-http://localhost:8081}
+      # Required by the portal entrypoint: nginx reverse-proxies /api/, /hubs/, /health/ here.
+      - CLOUDGRANGE_API_UPSTREAM=http://cloudgrange-api:8080
+      # Empty apiUrl = same-origin relative calls through the portal proxy (no https->http mixed content).
+      - CLOUDGRANGE_API_URL=${CLOUDGRANGE_PORTAL_API_URL:-}
     depends_on:
       cloudgrange-api:
         condition: service_healthy
@@ -114,7 +125,8 @@ services:
       - cloudgrange
 
   postgres:
-    image: postgres:16-alpine
+    # PostgreSQL 17 per docs/product-installer-design.md.
+    image: postgres:17-alpine
     restart: always
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-cloudgrange}
@@ -149,6 +161,8 @@ services:
       # Bootstrap admin — only used on first run to create the initial admin account.
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # Substituted into cloudgrange-realm.json ("secret": "${KEYCLOAK_API_CLIENT_SECRET}") at import.
+      KEYCLOAK_API_CLIENT_SECRET: ${KEYCLOAK_API_CLIENT_SECRET}
     volumes:
       - ./keycloak/cloudgrange-realm.json:/opt/keycloak/data/import/cloudgrange-realm.json:ro
     ports:
@@ -226,6 +240,7 @@ volumes:
   loki_data:
   grafana_data:
   relay_identity:
+  api_secrets:
   # AB#1593: TLS certs for nginx. Populated by New-SelfSignedCert.ps1 at install time.
   # Replace with CA-signed certs for production use.
   nginx_certs:
