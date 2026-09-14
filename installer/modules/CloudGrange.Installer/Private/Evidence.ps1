@@ -1,7 +1,7 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-    Redacted evidence writer (docs/product-installer-design.md §3.5).
+    Redacted evidence writer (docs/future-profiles/rke2-bom-installer-design.md §3.5).
 .DESCRIPTION
     Evidence lands under <state>/evidence/<installId>/<attempt>/<phase>/<name>. Every text is passed
     through a redactor before it is written; there is no unredacted path. In the installed product

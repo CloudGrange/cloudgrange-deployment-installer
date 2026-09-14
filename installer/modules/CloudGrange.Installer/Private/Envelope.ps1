@@ -1,7 +1,7 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-    Node key and node-local envelopes (docs/product-installer-design.md §3.1).
+    Node key and node-local envelopes (docs/future-profiles/rke2-bom-installer-design.md §3.1).
 .DESCRIPTION
     state/keys/node.key is 32 random bytes generated once at the first Install (never in Plan),
     root-only (0400). Envelopes are AES-256-GCM under that key with AAD "installId|purpose".

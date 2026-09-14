@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cloudgrange.cloud/schemas/install-checkpoint/v1.json",
   "title": "CloudGrange installer checkpoint v1",
-  "description": "Closed schema for cg-install-checkpoint-v1 (docs/product-installer-design.md §3.2). The installer validates its own checkpoint.json, checkpoint.prev and checkpoint.tmp on every read; a file that fails this schema is treated as unparsable by the recovery table. Checkpoints carry identities, digests, accessors and paths only, never secrets. previousCheckpointSha256 is 64 zeros exactly when sequence is 1 (enforced by the installer).",
+  "description": "Closed schema for cg-install-checkpoint-v1 (docs/future-profiles/rke2-bom-installer-design.md §3.2). The installer validates its own checkpoint.json, checkpoint.prev and checkpoint.tmp on every read; a file that fails this schema is treated as unparsable by the recovery table. Checkpoints carry identities, digests, accessors and paths only, never secrets. previousCheckpointSha256 is 64 zeros exactly when sequence is 1 (enforced by the installer).",
   "type": "object",
   "additionalProperties": false,
   "required": [

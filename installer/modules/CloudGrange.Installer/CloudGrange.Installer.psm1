@@ -4,7 +4,7 @@
     CloudGrange product installer module (phase engine, checkpoint chain, lock, envelopes, evidence,
     release BOM validation).
 .DESCRIPTION
-    Implements docs/product-installer-design.md §3 (WP-01) and the §2.3 BOM validator (WP-02).
+    Implements docs/future-profiles/rke2-bom-installer-design.md §3 (WP-01) and the §2.3 BOM validator (WP-02).
     Phase implementations arrive in later work packages; until then Install fails closed.
 .NOTES
     TaskReference: AB#8129 AB#9015 AB#9016
