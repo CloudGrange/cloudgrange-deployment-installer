@@ -28,10 +28,28 @@ if [ -f .env ]; then
 else
     docker compose down --volumes --remove-orphans || true
 fi
-docker volume ls -q | grep '^cloudgrange_' | xargs -r docker volume rm
+{ docker volume ls -q | grep '^cloudgrange_' || true; } | xargs -r docker volume rm
 docker container prune -f >/dev/null
 docker network prune -f >/dev/null
 docker builder prune -af >/dev/null 2>&1 || true
+
+# containerd's bolt metadata DB keeps deleted container specs (including their environment, i.e.
+# the install-time secrets) in free pages, so removing containers is not enough. Rebuild the whole
+# image store: save the images, wipe containerd/docker state, and load them into a fresh store.
+echo "[generalize] rebuilding container metadata store"
+mapfile -t IMAGES < <({ docker compose --env-file .env config --images; head -1 helper-images.txt; } | sort -u)
+mapfile -t TAGS < <(printf '%s\n' "${IMAGES[@]}" | sed 's/@sha256:.*//' | sort -u)
+IMAGE_TAR=/var/tmp/cloudgrange-generalize-images.tar
+docker save -o "$IMAGE_TAR" "${TAGS[@]}"
+systemctl stop docker.socket docker.service containerd.service
+rm -rf /var/lib/containerd /var/lib/docker
+systemctl start containerd.service docker.service
+docker load -i "$IMAGE_TAR" >/dev/null
+rm -f "$IMAGE_TAR"
+for image in "${IMAGES[@]}"; do
+    docker image inspect "$image" >/dev/null || { echo "[generalize] ERROR: $image missing after reload" >&2; exit 1; }
+done
+echo "[generalize] ${#IMAGES[@]} images reloaded into a fresh store"
 
 echo "[generalize] removing install-time settings and secrets"
 if [ -f .env ]; then shred -u .env; fi
@@ -76,8 +94,13 @@ find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' \) -delete
 find /var/log -type f -name '*.log' -exec truncate -s 0 {} +
 rm -f /root/.bash_history /home/*/.bash_history
 
-echo "[generalize] discarding free blocks"
+echo "[generalize] overwriting free space (deleted secrets must not survive in freed blocks)"
 sync
+dd if=/dev/zero of=/var/cloudgrange-zerofill bs=16M status=none 2>/dev/null || true
+sync
+rm -f /var/cloudgrange-zerofill
+sync
+echo "[generalize] discarding free blocks"
 fstrim -av || true
 
 echo "[generalize] complete; powering off in 5 seconds"
