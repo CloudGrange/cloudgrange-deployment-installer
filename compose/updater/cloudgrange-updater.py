@@ -140,7 +140,7 @@ class Updater:
         self.poll = float(e("CLOUDGRANGE_UPDATER_POLL", "3"))
         # End-to-end probes through nginx TLS after the containers report healthy (portal, then the API behind it).
         self.probe_urls = e("CLOUDGRANGE_UPDATE_PROBE_URLS",
-                            "https://127.0.0.1/health https://127.0.0.1/api/v1/setup/status").split()
+                            "https://127.0.0.1/health/ready https://127.0.0.1/api/v1/setup/status").split()
         self.lock = threading.Lock()
         self.step = "idle"
         os.makedirs(self.state_dir, 0o700, exist_ok=True)
