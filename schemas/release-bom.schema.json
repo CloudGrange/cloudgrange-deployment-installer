@@ -231,10 +231,16 @@
       "maxLength": 512
     },
     "httpsUri": {
-      "description": "https URI with a dotted host, no userinfo, no query, no fragment and no whitespace. GitHub 'releases/latest' locators are rejected because their identity floats.",
+      "description": "Canonical https locator (same rules as cg-trust ReleaseBomVerifier.Https): dotted host, no userinfo, query, fragment or whitespace; every percent escape is two hex digits and never encodes '/', '\\', '.' or '%' (so no encoded separator, dot or double encoding); no empty, '.' or '..' segment (a single trailing '/' is allowed); and no 'latest' segment in any letter case, including one spelled with escaped letters. Installer-only additions: IP-literal hosts are refused, and 'latest' is refused as any segment, not only after 'releases'.",
       "type": "string",
-      "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?/[A-Za-z0-9._~%/+-]*$",
-      "not": { "pattern": "/releases/latest/" },
+      "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?(/|(/([A-Za-z0-9._~+-]|%(2[0-46-9A-Da-d]|5[0-9ABabD-Fd-f]|[013-46-9A-Fa-f][0-9A-Fa-f]))+)+/?)$",
+      "not": {
+        "anyOf": [
+          { "pattern": "/([Ll]|%[46][Cc])([Aa]|%[46]1)([Tt]|%[57]4)([Ee]|%[46]5)([Ss]|%[57]3)([Tt]|%[57]4)(/|$)" },
+          { "pattern": "/\\.\\.?(/|$)" },
+          { "pattern": "^https://([a-z0-9-]+\\.)+[0-9]+(:[0-9]{1,5})?/" }
+        ]
+      },
       "maxLength": 1024
     },
     "compositionRef": {

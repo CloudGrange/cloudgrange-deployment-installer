@@ -28,9 +28,17 @@ try {
     & (Join-Path $root 'experiments/compact-rke2/Test-PreflightParsing.ps1') -EvidenceDirectory (Join-Path $EvidenceDirectory 'preflight-parsing')
     $bomSchema=& (Join-Path $root 'test/Test-ReleaseBomSchema.ps1') -EvidenceDirectory (Join-Path $EvidenceDirectory 'release-bom-schema')
     if(-not $bomSchema.passed){throw 'Release BOM schema fixtures failed; inspect retained results.'}
+    # Installer engine and BOM validator unit suites (AB#9015, AB#9016). Skips are failures in Linux CI.
+    $pester=& (Join-Path $root 'test/Invoke-InstallerPester.ps1') -EvidenceDirectory (Join-Path $EvidenceDirectory 'pester') -RequireNoSkipped:($IsLinux -and $env:CI -eq 'true')
     $result.artifact_guard_cases=6
     $result.preflight_parsing_cases=3
     $result.release_bom_cases=[int]$bomSchema.case_count
+    $result.release_bom_semantic_cases=[int]$bomSchema.semantic_case_count
+    $result.release_bom_rule_codes=[int]$bomSchema.rule_code_count
+    $result.pester_total=[int]$pester.total
+    $result.pester_passed=[int]$pester.passed
+    $result.pester_failed=[int]$pester.failed
+    $result.pester_skipped=[int]$pester.skipped
     $result.passed=$true
 } catch {
     $result.failure=$_.Exception.Message
