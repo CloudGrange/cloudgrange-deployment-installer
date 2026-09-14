@@ -64,9 +64,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx
-            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx.sha256
-            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx.sig
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.vhdx
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.vhdx.sha256
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.vhdx.sig
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.version
           tag_name: ${{ github.ref_name }}
           fail_on_unmatched_files: false
 

@@ -45,7 +45,11 @@ $ErrorActionPreference = 'Stop'
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)
 New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
 
-$vhdxName     = "cloudgrange-appliance-$Version.vhdx"
+# AB#8129: fixed filename to match the docs and Import-CloudGrangeAppliance.ps1's
+# cloudgrange-appliance.sha256 fallback. The version is carried by the release tag and the
+# .version sidecar written below, not the filename.
+$vhdxName     = 'cloudgrange-appliance.vhdx'
+$versionPath  = Join-Path $OutputPath 'cloudgrange-appliance.version'
 $vhdxPath     = Join-Path $OutputPath $vhdxName
 $sha256Path   = "$vhdxPath.sha256"
 $sigPath      = "$vhdxPath.sig"
@@ -97,6 +101,7 @@ Write-Host "  Exported: $vhdxPath ($('{0:N0}' -f ((Get-Item $vhdxPath).Length / 
 Write-Progress-Step "Computing SHA-256 manifest"
 $hash = (Get-FileHash -Path $vhdxPath -Algorithm SHA256).Hash
 "$hash  $vhdxName" | Set-Content -Path $sha256Path -Encoding ascii
+$Version | Set-Content -Path $versionPath -Encoding ascii
 Write-Host "  SHA-256: $hash" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
