@@ -322,12 +322,12 @@ function Invoke-CloudGrangeInstall {
     $setupToken = ''
     $realmAdminPassword = ''
     if (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
-        $credSsh = @('-i', $sshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR', '-o', 'BatchMode=yes')
+        $credSsh = Get-CloudGrangeSshOptions -KeyPath $sshKeyPath
         if ($setupPending) {
-            $setupToken = ((& ssh.exe @credSsh "cloudgrange@$VmIp" 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt') -join '').Trim()
+            $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
             if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
         }
-        $realmAdminPassword = ((& ssh.exe @credSsh "cloudgrange@$VmIp" "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2") -join '').Trim()
+        $realmAdminPassword = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2")) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
     }
 
     # Clean up the ephemeral SSH key pair after successful install, unless an appliance build

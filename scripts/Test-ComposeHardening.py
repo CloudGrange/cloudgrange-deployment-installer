@@ -26,9 +26,16 @@
 #         driver options; no rendered secrets/configs
 #       - read-only root filesystem except the allowlist (portal and keycloak rewrite themselves at start)
 #       - no explicit root user; keycloak not uid 1000 (the VM's sudo account)
+#  3. nginx/nginx.conf, the LAN agent listener (parsed, comments ignored):
+#       - exactly one server on 8443, TLS; only `location ^~ /lan/v1/agents/` proxies; `location / { return 404; }`
+#       - that location has exactly `limit_except GET POST { deny all; }`
+#       - it returns 404 for the operator-only relay route reenrollment-approvals, case-insensitively, without
+#         proxying (approval stays local to the appliance)
+#       - cloudgrange-relay is referenced nowhere else (not from the 443 server)
 # Usage: Test-ComposeHardening.py <compose-dir>
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -245,6 +252,142 @@ def check_rendered(model, compose_dir):
     return violations
 
 
+AGENT_LOCATION = ["^~", "/lan/v1/agents/"]
+APPROVALS_PATHS = [
+    "/lan/v1/agents/reenrollment-approvals",
+    "/lan/v1/agents/ReEnrollment-Approvals",
+    "/lan/v1/agents/REENROLLMENT-APPROVALS/",
+    "/lan/v1/agents/reenrollment-approvals/extra",
+]
+AGENT_PATHS_ALLOWED = ["/lan/v1/agents/enroll", "/lan/v1/agents/a1/jobs", "/lan/v1/agents/a1/heartbeat"]
+
+
+def nginx_parse(text):
+    """Parse nginx.conf into [(directive, [args], children-or-None)]. Raises ValueError on bad structure."""
+    tokens = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
+        elif c == "#":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif c in "{};":
+            tokens.append(("p", c))
+            i += 1
+        elif c in "\"'":
+            j, buf = i + 1, []
+            while j < n and text[j] != c:
+                if text[j] == "\\" and j + 1 < n:
+                    buf.append(text[j + 1])
+                    j += 2
+                    continue
+                buf.append(text[j])
+                j += 1
+            if j >= n:
+                raise ValueError("unterminated quote")
+            tokens.append(("w", "".join(buf)))
+            i = j + 1
+        else:
+            j = i
+            while j < n and not text[j].isspace() and text[j] not in "{};":
+                j += 1
+            tokens.append(("w", text[i:j]))
+            i = j
+
+    def block(pos, nested):
+        items = []
+        while pos < len(tokens):
+            if tokens[pos] == ("p", "}"):
+                if not nested:
+                    raise ValueError("unbalanced '}'")
+                return items, pos + 1
+            words = []
+            while pos < len(tokens) and tokens[pos][0] == "w":
+                words.append(tokens[pos][1])
+                pos += 1
+            if pos >= len(tokens) or not words:
+                raise ValueError("unexpected end of directive")
+            if tokens[pos] == ("p", ";"):
+                items.append((words[0], words[1:], None))
+                pos += 1
+            elif tokens[pos] == ("p", "{"):
+                children, pos = block(pos + 1, True)
+                items.append((words[0], words[1:], children))
+            else:
+                raise ValueError("unexpected '}' after %s" % words[0])
+        if nested:
+            raise ValueError("missing '}'")
+        return items, pos
+
+    return block(0, False)[0]
+
+
+def nginx_walk(items):
+    for item in items or []:
+        yield item
+        yield from nginx_walk(item[2])
+
+
+def returns_404(children):
+    return any(d == "return" and a[:1] == ["404"] for d, a, _ in children or [])
+
+
+def check_nginx(compose_dir):
+    violations = []
+    bad = violations.append
+    path = os.path.join(compose_dir, "nginx", "nginx.conf")
+    try:
+        with open(path) as f:
+            tree = nginx_parse(f.read())
+    except (OSError, ValueError) as e:
+        return ["nginx.conf: %s" % e]
+    servers = [c for d, _, c in nginx_walk(tree) if d == "server" and c is not None]
+    lan = [s for s in servers if any(d == "listen" and a and a[0].rsplit(":", 1)[-1] == "8443" for d, a, _ in s)]
+    if len(lan) != 1:
+        return ["8443: expected exactly one server listening on 8443, found %d" % len(lan)]
+    server = lan[0]
+    if not any(d == "listen" and a and a[0].rsplit(":", 1)[-1] == "8443" and "ssl" in a[1:] for d, a, _ in server):
+        bad("8443: the listener must be TLS (listen 8443 ssl)")
+    locations = [(a, c) for d, a, c in server if d == "location" and c is not None]
+    proxied = [" ".join(a) for a, c in locations if any(d == "proxy_pass" for d, _, _ in nginx_walk(c))]
+    if proxied != [" ".join(AGENT_LOCATION)]:
+        bad("8443: only 'location %s' may proxy; proxying locations: %s" % (" ".join(AGENT_LOCATION), proxied))
+    if not any(a == ["/"] and returns_404(c) for a, c in locations):
+        bad("8443: 'location / { return 404; }' missing")
+    agent = [c for a, c in locations if a == AGENT_LOCATION]
+    agent_items = set()
+    if not agent:
+        bad("8443: 'location %s' missing" % " ".join(AGENT_LOCATION))
+    else:
+        children = agent[0]
+        agent_items = {id(item) for item in nginx_walk(children)}
+        limits = [(a, c) for d, a, c in children if d == "limit_except"]
+        if (len(limits) != 1 or sorted(m.upper() for m in limits[0][0]) != ["GET", "POST"]
+                or [(d, a) for d, a, _ in limits[0][1] or []] != [("deny", ["all"])]):
+            bad("8443 /lan/v1/agents/: limit_except GET POST { deny all; } missing or changed")
+        blocked = False
+        for d, a, c in children:
+            if d != "location" or c is None or len(a) != 2 or a[0] != "~*" or not returns_404(c):
+                continue
+            if any(d2 in ("proxy_pass", "limit_except") for d2, _, _ in nginx_walk(c)):
+                continue
+            try:
+                rx = re.compile(a[1], re.I)
+            except re.error:
+                continue
+            if all(rx.search(p) for p in APPROVALS_PATHS) and not any(rx.search(p) for p in AGENT_PATHS_ALLOWED):
+                blocked = True
+        if not blocked:
+            bad("8443 /lan/v1/agents/: reenrollment-approvals must return 404 (case-insensitive "
+                "'location ~* ^/lan/v1/agents/+reenrollment-approvals { return 404; }' inside the agent location)")
+    for item in nginx_walk(tree):
+        if any("cloudgrange-relay" in arg for arg in item[1]) and id(item) not in agent_items:
+            bad("cloudgrange-relay referenced outside the 8443 agent location: %s %s" % (item[0], " ".join(item[1])))
+    return violations
+
+
 def main(argv):
     if len(argv) != 2:
         print("usage: Test-ComposeHardening.py <compose-dir>", file=sys.stderr)
@@ -255,13 +398,18 @@ def main(argv):
         for v in violations:
             print("HARDENING-GATE FAIL (allowlist): " + v, file=sys.stderr)
         return 1
+    violations = check_nginx(compose_dir)
+    if violations:
+        for v in violations:
+            print("HARDENING-GATE FAIL (nginx): " + v, file=sys.stderr)
+        return 1
     model = render(compose_dir)
     violations = check_rendered(model, compose_dir)
     if violations:
         for v in violations:
             print("HARDENING-GATE FAIL: " + v, file=sys.stderr)
         return 1
-    print("hardening gate passed: %d services (raw allowlist and rendered checks)" % len(model["services"]))
+    print("hardening gate passed: %d services (raw allowlist and rendered checks; nginx 8443 agent route)" % len(model["services"]))
     return 0
 
 

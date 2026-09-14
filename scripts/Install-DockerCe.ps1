@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # ADR-029: Installs Docker CE inside the cloudgrange-docker VM via Hyper-V Direct connection
 
+# AB#8129: bounded ssh/scp transport (Get-CloudGrangeSshOptions, Invoke-CloudGrangeSsh).
+. (Join-Path $PSScriptRoot 'CloudGrange-Common.ps1')
+
 function Install-DockerCe {
     [CmdletBinding()]
     param(
@@ -132,48 +135,30 @@ exit 0
         $bashScript | wsl -d Ubuntu -u root -- bash -s
     } elseif (-not [string]::IsNullOrEmpty($SshKeyPath)) {
         # SSH path — preferred for Linux guests. Pipe the bash script via stdin.
-        # -o StrictHostKeyChecking=no / -o UserKnownHostsFile=/dev/null so the
-        # ephemeral guest key doesn't cause a prompt; the VM is freshly provisioned
-        # and its host key is not yet trusted on the host.
-        $sshArgs = @(
-            '-i', $SshKeyPath,
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'LogLevel=ERROR',
-            "cloudgrange@$VmIp",
-            'sudo', 'bash', '-s'
-        )
+        # Get-CloudGrangeSshOptions: StrictHostKeyChecking=no / UserKnownHostsFile=/dev/null so the ephemeral guest
+        # key doesn't cause a prompt (the VM is freshly provisioned and its host key is not yet trusted), plus the
+        # AB#8129 transport options (BatchMode, connect and keepalive timeouts). Each call has an overall timeout.
+        $sshOpts = Get-CloudGrangeSshOptions -KeyPath $SshKeyPath
         if (-not [string]::IsNullOrEmpty($OfflinePackagesPath)) {
             if (-not (Test-Path (Join-Path $OfflinePackagesPath 'SHA256SUMS'))) {
                 Write-Error "CG-INST-ERR-011: bundled Docker CE packages are incomplete at $OfflinePackagesPath (SHA256SUMS missing)."
             }
             Write-Host "  Uploading bundled Docker CE packages..." -ForegroundColor Gray
-            $sshOnly = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
             $stageParent = '/var/tmp/cloudgrange-docker-debs-stage'
-            & ssh.exe @sshOnly "cloudgrange@$VmIp" "rm -rf $stageParent $remoteDebDir && mkdir -p $stageParent"
+            Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "rm -rf $stageParent $remoteDebDir && mkdir -p $stageParent")) -TimeoutSeconds 120
             if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-011: cannot prepare package upload directory (exit $LASTEXITCODE)." }
             # Copy the directory itself (no local wildcard expansion), then move it into place.
-            & scp.exe -r @sshOnly ((Resolve-Path $OfflinePackagesPath).Path) "cloudgrange@${VmIp}:$stageParent/"
+            Invoke-CloudGrangeSsh -Tool scp -ArgumentList (@('-r') + $sshOpts + @(((Resolve-Path $OfflinePackagesPath).Path), "cloudgrange@${VmIp}:$stageParent/")) -TimeoutSeconds 900
             if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-011: upload of bundled Docker CE packages failed (exit $LASTEXITCODE)." }
             $leaf = Split-Path -Leaf ((Resolve-Path $OfflinePackagesPath).Path)
-            & ssh.exe @sshOnly "cloudgrange@$VmIp" "mv $stageParent/$leaf $remoteDebDir && rmdir $stageParent"
+            Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "mv $stageParent/$leaf $remoteDebDir && rmdir $stageParent")) -TimeoutSeconds 120
             if ($LASTEXITCODE -ne 0) { Write-Error "CG-INST-ERR-011: staging of bundled Docker CE packages failed (exit $LASTEXITCODE)." }
         }
         # Write raw bytes directly to SSH stdin — PowerShell's string pipeline appends
         # \r\n (Windows [Environment]::NewLine) which corrupts the last bash command.
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = 'ssh.exe'
-        foreach ($arg in $sshArgs) { $psi.ArgumentList.Add($arg) }
-        $psi.RedirectStandardInput = $true
-        $psi.UseShellExecute = $false
-        $sshProc = [System.Diagnostics.Process]::new()
-        $sshProc.StartInfo = $psi
-        $sshProc.Start() | Out-Null
-        $sshProc.StandardInput.BaseStream.Write($bashBytes, 0, $bashBytes.Length)
-        $sshProc.StandardInput.Close()
-        $sshProc.WaitForExit()
-        if ($sshProc.ExitCode -ne 0) {
-            Write-Error "Docker CE installation via SSH failed (exit $($sshProc.ExitCode))."
+        Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", 'sudo', 'bash', '-s')) -StandardInput $bashBytes -TimeoutSeconds 1800
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Docker CE installation via SSH failed (exit $LASTEXITCODE)."
         }
     } else {
         if ($null -eq $Credential) {

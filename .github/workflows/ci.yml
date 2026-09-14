@@ -59,6 +59,9 @@ jobs:
           python3 scripts/Test-ComposeHardening.py compose
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_install_scripts.py'
           python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
+          # Every installer ssh/scp call is bounded: BatchMode, connect/keepalive timeouts, overall timeout.
+          python3 scripts/Test-SshTransportOptions.py .
+          python3 -m unittest discover -v -s test/appliance -p 'test_ssh_transport.py'
           # KVP writer and operator-access cleanup run as root (the pool must be root-owned).
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_kvp_writer.py'
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_operator_access.py'
