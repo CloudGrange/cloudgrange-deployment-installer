@@ -52,6 +52,10 @@ done
 echo "[generalize] ${#IMAGES[@]} images reloaded into a fresh store"
 
 echo "[generalize] removing install-time settings and secrets"
+# The updater's backups hold a copy of .env and a database dump: none may ship.
+systemctl stop cloudgrange-updater.service 2>/dev/null || true
+rm -rf /var/lib/cloudgrange-updater
+systemctl is-enabled cloudgrange-updater.service >/dev/null 2>&1 || { echo "[generalize] ERROR: cloudgrange-updater.service is not enabled (in-app updates would not work)" >&2; exit 1; }
 if [ -f .env ]; then shred -u .env; fi
 printf 'CLOUDGRANGE_VERSION=%s\n' "${VERSION:-latest}" > .env.appliance
 chmod 644 .env.appliance

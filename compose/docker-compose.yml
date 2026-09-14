@@ -80,10 +80,17 @@ services:
       - Keycloak__ClientId=${CLOUDGRANGE_KEYCLOAK_CLIENT_ID:-cloudgrange-api}
       - Keycloak__ClientSecret=${KEYCLOAK_API_CLIENT_SECRET}
       - Keycloak__RequireHttpsMetadata=false
+      # AB#8129: in-app updates (Platform administration -> Updates).
+      - CLOUDGRANGE_IMAGE_TAG=${CLOUDGRANGE_VERSION:-latest}
+      - CLOUDGRANGE_UPDATES_DIR=/var/lib/cloudgrange/updates
+      - CLOUDGRANGE_UPDATE_CHANNEL_URL=${CLOUDGRANGE_UPDATE_CHANNEL_URL:-}
     volumes:
       # The API's master encryption key (secrets.key, used for the identity-provider secrets it stores) and
       # the one-use setup token. Not a PostgresEncryptedSecretsProvider (not implemented yet, story S-secrets).
       - api_secrets:/etc/cloudgrange
+      # AB#8129: update requests and uploaded release bundles for the root cloudgrange-updater host service
+      # (updater/cloudgrange-updater.py), which publishes its status here under status/ (root-owned; the API reads it).
+      - platform_updates:/var/lib/cloudgrange/updates
     depends_on:
       postgres:
         condition: service_healthy
@@ -414,6 +421,7 @@ volumes:
   grafana_data:
   relay_identity:
   api_secrets:
+  platform_updates:
   healthcheck_tools:
   # AB#1593: TLS certs for nginx. Populated by New-SelfSignedCert.ps1 at install time.
   # Replace with CA-signed certs for production use.

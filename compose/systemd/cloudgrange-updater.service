@@ -1,0 +1,22 @@
+# AB#8129: installs release bundles requested from Platform administration -> Updates (updater/cloudgrange-updater.py).
+# Installed by scripts/Deploy-DockerCompose.ps1 to /etc/systemd/system/cloudgrange-updater.service; later releases
+# refresh it (and the updater itself) after a successful update.
+# Runs as root: it replaces /opt/cloudgrange, loads images and backs up / restores the platform database. It trusts
+# nothing the API writes to the cloudgrange_platform_updates volume (see the updater header).
+[Unit]
+Description=CloudGrange updater
+Requires=docker.service
+After=docker.service cloudgrange.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/cloudgrange-updater
+Restart=always
+RestartSec=5
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
