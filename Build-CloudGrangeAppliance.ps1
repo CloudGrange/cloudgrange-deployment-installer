@@ -6,7 +6,8 @@
 #
 # Run this on the Hyper-V host AFTER a successful 'Online' mode install has completed.
 # The nested VM (cloudgrange-docker) is exported, signed with cosign, and a manifest
-# written alongside it — ready to attach to a GitHub Release.
+# written alongside it. This is a documented Hyper-V host step; the VHDX SHA-256 is recorded, not reproducible
+# (docs/releases/reproducible-build.md).
 #
 # Usage:
 #   Build-CloudGrangeAppliance.ps1 -OutputPath C:\CloudGrangeAppliance [-Version 1.0.0-preview1] [-CosignKeyPath .\cosign.key]
@@ -227,7 +228,7 @@ if (-not $SkipSigning) {
     Write-Host "  Signature: $sigPath" -ForegroundColor Gray
 }
 Write-Host ""
-Write-Host "  Attach these files to a GitHub Release:" -ForegroundColor Yellow
+Write-Host "  Record these files with the release baseline (docs/releases/):" -ForegroundColor Yellow
 Write-Host "    $vhdxName" -ForegroundColor White
 Write-Host "    $(Split-Path $sha256Path -Leaf)" -ForegroundColor White
 if (-not $SkipSigning) {

@@ -12,7 +12,9 @@ import subprocess
 import tempfile
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import gate_requirements as req
+
+REPO =os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.environ.get("CLOUDGRANGE_KVP_TOOL_UNDER_TEST", os.path.join(REPO, "appliance", "cloudgrange-kvp.py"))
 RECORD = 2560
 
@@ -21,8 +23,12 @@ def mode(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
 
-@unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "requires root (pool paths must be root-owned)")
 class KvpWriterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Missing root FAILS the run (gate_requirements); local developers may set CLOUDGRANGE_TEST_ALLOW_SKIP=1.
+        req.require(req.is_root(), "root (pool paths must be root-owned)")
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.dir = os.path.join(self.tmp, "hyperv")

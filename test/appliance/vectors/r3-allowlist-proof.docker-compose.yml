@@ -1,0 +1,33 @@
+# Review proof for internal PR #65 r2: a compose file that satisfies the seven allowlist rules as
+# written (no privileged, no host namespaces, no devices/sysctls/extra_hosts, no cap_add, only named
+# volumes declared in the file, no published ports, read_only + no-new-privileges kept) yet reaches
+# host paths and privilege. Rendered only with `docker compose config`; the runtime check uses a
+# local image and a read-only /etc bind.
+name: cgallowproof
+services:
+  cloudgrange-api:
+    image: ${PROOF_IMAGE}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    user: "1654:1654"
+    command: ["sh", "-c", "ls /hostetc/hostname && head -c 0 /run/secrets/hostfile && echo HOST-PATHS-REACHED && sleep 2"]
+    volumes:
+      - hostetc:/hostetc:ro
+    secrets:
+      - hostfile
+    post_start:
+      - command: ["sh", "-c", "id -u > /dev/null"]
+        user: root
+        privileged: true
+volumes:
+  hostetc:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /etc
+secrets:
+  hostfile:
+    file: /etc/hostname

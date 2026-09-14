@@ -12,18 +12,18 @@ Every image is pinned by `@sha256` digest, and a release bundle refuses to build
 
 | Service | Image (tag) | Host ports | Role |
 |---|---|---|---|
-| `nginx` | `nginx:1.31.5-alpine` | **443** (TLS), **80** (redirect to 443) | The only published entry point: portal, API (`/api/`, `/health/`) and the `cloudgrange` Keycloak realm (`/realms/cloudgrange/`) |
+| `nginx` | `nginx:1.31.5-alpine` | **443** (TLS), **80** (redirect to 443), **8443** (TLS, agent API only) | The only published entry point. On 443: portal, API (`/api/`, `/health/`) and the `cloudgrange` Keycloak realm (`/realms/cloudgrange/`). On 8443: only the relay's agent routes (`/lan/v1/agents/`) |
 | `cloudgrange-api` | `ghcr.io/cloudgrange/cloudgrange-api:<version>` | none | Platform API (built from cloudgrange-platform-api) |
 | `cloudgrange-portal` | `ghcr.io/cloudgrange/cloudgrange-portal:<version>` | none | Web portal (built from cloudgrange-portal) |
-| `cloudgrange-relay` | `ghcr.io/cloudgrange/cloudgrange-relay:<version>` | none | Relay for host agents. Its listener is plain HTTP; agent mTLS is planned, not implemented, so it is internal only |
-| `postgres` | `postgres:17.11-alpine` | none | Database and the default PostgreSQL-encrypted secrets provider (ADR-009) |
+| `cloudgrange-relay` | `ghcr.io/cloudgrange/cloudgrange-relay:<version>` | none (agents use nginx 8443) | Relay for host agents. Its own listener is plain HTTP and internal; agents reach `/lan/v1/agents/` through nginx TLS on 8443. Agent mTLS is planned, not implemented: enrollment uses the relay enrollment token |
+| `postgres` | `postgres:17.11-alpine` | none | Platform database. The API stores identity-provider client secrets here, AES-256-GCM-encrypted with its master key (`/etc/cloudgrange/secrets.key`). The PostgresEncryptedSecretsProvider (ADR-009) is not implemented yet (story S-secrets) |
 | `keycloak` | `quay.io/keycloak/keycloak:26.6.4` | none | Local identity provider (ADR-008). The master realm and admin console are not published |
 | `otel-collector` | `otel/opentelemetry-collector-contrib:0.160.0` | none | Telemetry pipeline (ADR-016) |
 | `prometheus` | `prom/prometheus:v3.14.0` | none | Metrics |
 | `loki` | `grafana/loki:3.7.7` | none | Logs |
 | `grafana` | `grafana/grafana:12.1.1` | none | Dashboards over Prometheus and Loki |
 
-systemd supervises the stack (`compose/systemd/cloudgrange.service`, ADR-059). OpenBao and Entra ID are optional and not in the default stack. The runtime agent is a Windows host service, not a container, so it is not in this list.
+systemd supervises the stack (`compose/systemd/cloudgrange.service`, ADR-059). Stack credentials are generated per install into `/opt/cloudgrange/.env` (root 0600, root-owned directory) and passed to containers as environment variables. OpenBao and Entra ID are optional and not in the default stack. The runtime agent is a Windows host service, not a container, so it is not in this list.
 
 The realm import creates no users. `compose/systemd/cloudgrange-realm-admin.service` creates `admin@cloudgrange.local` (PlatformAdmin) with a random, temporary password (`CLOUDGRANGE_REALM_ADMIN_PASSWORD` in `/opt/cloudgrange/.env`). The portal client accepts redirects only to `https://<CLOUDGRANGE_HOSTNAME>/*`.
 

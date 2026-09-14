@@ -271,10 +271,10 @@ $deadline = [DateTime]::UtcNow.AddMinutes($CredentialTimeoutMinutes)
 $kvpItems = @{}
 while ([DateTime]::UtcNow -lt $deadline) {
     $kvpItems = Get-CloudGrangeKvpItems -Name $VmName
-    if ($kvpItems['CloudGrange.State'] -in @('setup-pending', 'setup-complete')) { break }
+    if ($kvpItems['CloudGrange.State'] -in @('setup-pending', 'setup-complete', 'setup-stale')) { break }
     Start-Sleep -Seconds 10
 }
-if ($kvpItems['CloudGrange.State'] -notin @('setup-pending', 'setup-complete')) {
+if ($kvpItems['CloudGrange.State'] -notin @('setup-pending', 'setup-complete', 'setup-stale')) {
     Write-Host ""
     Write-Host "  [ERROR] The appliance did not publish its setup credentials within $CredentialTimeoutMinutes minutes." -ForegroundColor Red
     Write-Host "  The VM is left running. Open its console (Hyper-V Manager > Connect): the login banner shows" -ForegroundColor Yellow
@@ -326,18 +326,28 @@ if ($kvpItems['CloudGrange.State'] -eq 'setup-pending') {
     }
     # Security: never put the token in a URL (browser history, logs, Referer). Console only, once.
     Write-Host "  First-run setup: open $portalUrl/setup and enter the one-use setup token when prompted." -ForegroundColor Cyan
-    Write-Host "    Setup token:              $($kvpItems['CloudGrange.SetupToken'])" -ForegroundColor White
+    if ($kvpItems['CloudGrange.SetupToken']) {
+        Write-Host "    Setup token:              $($kvpItems['CloudGrange.SetupToken'])" -ForegroundColor White
+    } else {
+        # The appliance never publishes an expired token; a new one is being issued.
+        Write-Host "    Setup token:              (being re-issued by the appliance; run this read again in a few minutes)" -ForegroundColor Yellow
+    }
     Write-Host "    Identity administrator:   $($kvpItems['CloudGrange.RealmAdminUser'])" -ForegroundColor White
-    Write-Host "    Temporary password:       $($kvpItems['CloudGrange.RealmAdminPassword'])  (must be changed at first sign-in)" -ForegroundColor White
+    if ($kvpItems['CloudGrange.RealmAdminPassword']) {
+        Write-Host "    Temporary password:       $($kvpItems['CloudGrange.RealmAdminPassword'])  (must be changed at first sign-in)" -ForegroundColor White
+    }
     if ($result.OperatorKeyPath) {
         Write-Host "    SSH:                      ssh -i `"$OperatorKeyPath`" $($kvpItems['CloudGrange.SshUser'])@$address" -ForegroundColor White
     }
     Write-Host "  These are shown once. The appliance removes the token, the temporary password and the SSH" -ForegroundColor Yellow
     Write-Host "  private key from KVP and its console banner as soon as setup completes." -ForegroundColor Yellow
     if ($PassThru) {
-        $result.SetupToken         = ConvertTo-SecureString -String $kvpItems['CloudGrange.SetupToken'] -AsPlainText -Force
-        $result.RealmAdminPassword = ConvertTo-SecureString -String $kvpItems['CloudGrange.RealmAdminPassword'] -AsPlainText -Force
+        if ($kvpItems['CloudGrange.SetupToken']) { $result.SetupToken = ConvertTo-SecureString -String $kvpItems['CloudGrange.SetupToken'] -AsPlainText -Force }
+        if ($kvpItems['CloudGrange.RealmAdminPassword']) { $result.RealmAdminPassword = ConvertTo-SecureString -String $kvpItems['CloudGrange.RealmAdminPassword'] -AsPlainText -Force }
     }
+} elseif ($kvpItems['CloudGrange.State'] -eq 'setup-stale') {
+    Write-Host "  Setup was not completed in time, so the appliance stopped publishing its one-use credentials" -ForegroundColor Yellow
+    Write-Host "  (CloudGrange.State=setup-stale). Re-arm it as described in docs/appliance-operator-access.md." -ForegroundColor Yellow
 } else {
     Write-Host "  Setup has already been completed on this appliance; its one-use credentials were removed." -ForegroundColor Cyan
 }

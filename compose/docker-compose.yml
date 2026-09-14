@@ -5,8 +5,13 @@
 #   Platform:    nginx (ingress/TLS), postgres, keycloak (ADR-008)
 #   Observability (ADR-016): otel-collector -> prometheus + loki, grafana
 #   Helper:      healthcheck-tools (one-shot; see below)
-# Secrets use the PostgreSQL-encrypted provider by default (ADR-009); OpenBao is optional and not
-# part of this stack. Entra ID is optional and not bundled. The relay runs as a Compose container and
+# Secrets, as implemented today: stack credentials (PostgreSQL, Keycloak admin and API client, Grafana,
+# relay enrollment token, temporary realm administrator password) are generated per install into
+# /opt/cloudgrange/.env (root 0600) and passed to containers as environment variables. The API encrypts the
+# identity-provider client secrets it stores with AES-256-GCM, using a master key kept in the api_secrets
+# volume (/etc/cloudgrange/secrets.key, 0600), and keeps the ciphertext in PostgreSQL. The
+# PostgresEncryptedSecretsProvider (ADR-009) is NOT implemented yet (story S-secrets). OpenBao is optional
+# and not part of this stack. Entra ID is optional and not bundled. The relay runs as a Compose container and
 # the whole stack is supervised by systemd (systemd/cloudgrange.service, ADR-059).
 # The runtime agent is a Windows host service, not a container; it is not part of this file.
 #
@@ -27,7 +32,8 @@
 # read-only with tmpfs for writable paths, except where the image rewrites itself at start:
 #   - cloudgrange-portal: its entrypoint injects runtime config into index.html and the nginx conf
 #   - keycloak: `start` re-augments the server into /opt/keycloak/lib on first start
-# The only published host ports are nginx 443 (TLS) and 80 (redirect).
+# The only published host ports are nginx 443 (TLS), 80 (redirect) and 8443 (TLS; agent API routes of the
+# relay only, /lan/v1/agents/). scripts/Test-ComposeHardening.py enforces all of this at release.
 
 name: cloudgrange
 
@@ -75,7 +81,8 @@ services:
       - Keycloak__ClientSecret=${KEYCLOAK_API_CLIENT_SECRET}
       - Keycloak__RequireHttpsMetadata=false
     volumes:
-      # ADR-009: the PostgreSQL-encrypted secrets provider's master key and the one-use setup token.
+      # The API's master encryption key (secrets.key, used for the identity-provider secrets it stores) and
+      # the one-use setup token. Not a PostgresEncryptedSecretsProvider (not implemented yet, story S-secrets).
       - api_secrets:/etc/cloudgrange
     depends_on:
       postgres:
@@ -123,8 +130,9 @@ services:
       - cloudgrange
 
   # AB#8129 / ADR-059: the relay is a default Compose container; systemd supervises the stack.
-  # Its LAN listener is plain HTTP today; agent mTLS (ADR-008) is not implemented yet, so the port is
-  # NOT published on the host (AB#8129). Only Prometheus reaches it on the Compose network.
+  # Its LAN listener is plain HTTP and is NOT published on the host. Host agents reach its agent API only
+  # through nginx TLS on 8443 (/lan/v1/agents/); Prometheus scrapes /metrics on the Compose network.
+  # Agent mTLS (ADR-008) is not implemented yet.
   cloudgrange-relay:
     image: ghcr.io/cloudgrange/cloudgrange-relay:${CLOUDGRANGE_VERSION:-latest}
     <<: *hardening
@@ -166,7 +174,7 @@ services:
     <<: *hardening
     restart: always
     read_only: true
-    # nginx master (root) binds 80/443 and switches its workers to the nginx user.
+    # nginx master (root) binds 80/443/8443 and switches its workers to the nginx user.
     cap_add:
       - CHOWN
       - SETUID
@@ -179,6 +187,8 @@ services:
     ports:
       - "443:443"
       - "80:80"
+      # Agent API of the relay only (/lan/v1/agents/, TLS); see nginx/nginx.conf.
+      - "8443:8443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx_certs:/etc/nginx/certs:ro
@@ -186,8 +196,8 @@ services:
       cloudgrange-portal:
         condition: service_healthy
     healthcheck:
-      # :80 answers with the 301 redirect; :443 must complete a TLS handshake and answer.
-      test: ["CMD-SHELL", "curl -sf -o /dev/null http://127.0.0.1/ && curl -sk -o /dev/null https://127.0.0.1/"]
+      # :80 answers with the 301 redirect; :443 and :8443 must complete a TLS handshake and answer.
+      test: ["CMD-SHELL", "curl -sf -o /dev/null http://127.0.0.1/ && curl -sk -o /dev/null https://127.0.0.1/ && curl -sk -o /dev/null https://127.0.0.1:8443/"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -366,14 +376,28 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_ANALYTICS_REPORTING_ENABLED=false
+      # First-start "database is locked" race (SQLite): on a fresh volume, datasource provisioning ran while
+      # Grafana's offline-failing background writers (plugin preinstall, plugin signing-key download, update
+      # checks) and the rest of the stack's first-start I/O held the database, exhausted the default 5
+      # transaction retries, and Grafana exited once. The appliance is offline, so those writers are
+      # disabled; WAL lets readers run beside the single writer; provisioning waits through a busy lock
+      # instead of failing; and Grafana starts only after Prometheus and Loki are healthy.
+      - GF_PLUGINS_PREINSTALL_DISABLED=true
+      - GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
+      - GF_DATABASE_WAL=true
+      - GF_DATABASE_TRANSACTION_RETRIES=40
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     expose:
       - "3000"
     depends_on:
-      - prometheus
-      - loki
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
       interval: 15s

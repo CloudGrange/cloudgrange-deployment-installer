@@ -30,6 +30,8 @@ export KC_CLI_PASSWORD
 # --config in /tmp (a tmpfs): Keycloak runs as a dedicated uid whose home (/) is not writable, so kcadm's
 # default ~/.keycloak/kcadm.config cannot be created.
 kc() { docker compose --env-file .env exec -T -e KC_CLI_PASSWORD keycloak /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm-cloudgrange.config; }
+# The kcadm session file holds a master-realm admin token: delete it when this script exits, success or not.
+trap 'docker compose --env-file .env exec -T keycloak rm -f /tmp/kcadm-cloudgrange.config >/dev/null 2>&1 || true' EXIT
 
 echo "[realm-admin] waiting for Keycloak and the '$REALM' realm"
 for _ in $(seq 1 90); do

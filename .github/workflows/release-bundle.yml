@@ -1,28 +1,64 @@
 name: Release Bundle
-# Builds the air-gap bundled distribution ZIP on v*.*.* tag push (AB#1586, AB#1587, AB#8129).
-# The bundle contains every image in compose/docker-compose.yml saved to one
-# cloudgrange-images.tar (the file Install-CloudGrange.ps1 -Mode Bundled loads), the compose
-# files, the systemd unit, and Install-CloudGrange.ps1. The image list is read from the compose
-# file, which is the source of truth for the service list.
+# Rebuilds the air-gap bundle Install-CloudGrange-Bundled.zip from ONE commit on main, reproducibly (AB#1586,
+# AB#1587, AB#8129). On demand only, on the self-hosted HCS Linux runner. No tag push trigger, no GitHub release:
+# the zip, its SHA-256 and release-record.json are uploaded as a workflow artifact and the SHA-256 is written to
+# the run summary. Rebuilding the same commit and version gives the same SHA-256 (docs/releases/reproducible-build.md).
+#
+# Every input is pinned in the repo under release/: first-party images are stamped repo:<version>@sha256 from the
+# registry, vendor images are digest-pinned in compose, the Ubuntu cloud image and the .deb set are checked against
+# release/ubuntu-noble-cloudimg-amd64.sha256 and release/docker-debs/SHA256SUMS.
 # The bundle is NOT signed: SHA256SUMS is an integrity check only, not an authenticity check.
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Full 40-character commit SHA on main to build from'
+        required: true
+      version:
+        description: 'Release version (X.Y.Z[-pre]); the first-party images must exist at this tag'
+        required: true
 permissions:
-  contents: write
+  contents: read
   packages: read
+concurrency:
+  group: release-bundle-${{ inputs.commit_sha }}
+  cancel-in-progress: false
 jobs:
   build-bundle:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hcs]
+    timeout-minutes: 90
+    env:
+      COMMIT_SHA: ${{ inputs.commit_sha }}
+      CLOUDGRANGE_VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Determine release version
+      - name: Validate inputs
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
-          echo "CLOUDGRANGE_VERSION=$v" >> "$GITHUB_ENV"
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "commit_sha must be a full 40-character SHA"; exit 1; }
+          [[ "$CLOUDGRANGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "invalid version"; exit 1; }
+          for t in docker zip python3 pwsh curl sha256sum; do command -v "$t" >/dev/null || { echo "runner is missing $t"; exit 1; }; done
+          python3 -c 'import yaml' || { echo "runner is missing python3-yaml"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Require the commit to be on main and export exactly that tree
+        run: |
+          git cat-file -e "$COMMIT_SHA^{commit}"
+          git merge-base --is-ancestor "$COMMIT_SHA" origin/main || { echo "$COMMIT_SHA is not on origin/main"; exit 1; }
+          rm -rf "$RUNNER_TEMP/src" && mkdir -p "$RUNNER_TEMP/src"
+          git archive --format=tar "$COMMIT_SHA" | tar -x -C "$RUNNER_TEMP/src"
+          echo "tree: $(git rev-parse "$COMMIT_SHA^{tree}")"
+
+      - name: Gate tests on the exported tree (fail, never skip)
+        working-directory: ${{ runner.temp }}/src
+        run: |
+          test -z "${CLOUDGRANGE_TEST_ALLOW_SKIP:-}"
+          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_install_scripts.py'
+          python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
+          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_kvp_writer.py'
+          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_operator_access.py'
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -31,72 +67,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pin first-party images by digest and gate every image (AB#8129)
+      - name: Fetch pinned inputs (verified against release/ by the build script)
         run: |
-          # First-party images for exactly this version, stamped into the bundle's compose file as
-          # repo:<version>@sha256:<digest>. The gate then requires a digest on EVERY image (no exemptions).
-          for svc in api portal relay; do docker pull "ghcr.io/cloudgrange/cloudgrange-$svc:$CLOUDGRANGE_VERSION"; done
-          bash scripts/Set-FirstPartyImagePins.sh compose/docker-compose.yml "$CLOUDGRANGE_VERSION"
-          bash scripts/Test-ComposeImagePins.sh compose > images.txt
-          echo "Images:"; cat images.txt
-
-      - name: Compose hardening gate (AB#8129)
-        run: |
-          # cap_drop ALL, no-new-privileges and a healthcheck on every service; no privileged, devices, host
-          # namespaces or docker.sock; read-only roots except the allowlist; host ports only nginx 80/443.
-          python3 scripts/Test-ComposeHardening.py compose
-          python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
-          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_kvp_writer.py'
-          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_operator_access.py'
-
-      - name: Pull container images
-        run: |
-          while IFS= read -r image; do
-            [ -z "$image" ] && continue
-            echo "Pulling $image..."
-            docker pull "$image"
-          done < images.txt
-
-      - name: Save container images to one tar
-        run: |
-          mkdir -p bundle
-          # AB#8129: save every image under its tag name. A digest-only `docker save` loads
-          # unnamed, and compose's "repo:tag@sha256:..." then cannot resolve without a registry.
-          : > save.txt
-          while IFS= read -r image; do
-            [ -z "$image" ] && continue
-            named="${image%@sha256:*}"; docker tag "$image" "$named"; echo "$named" >> save.txt
-          done < images.txt
-          xargs -a save.txt docker save -o bundle/cloudgrange-images.tar
-          cp images.txt bundle/images.txt
-
-      - name: Copy installer files into bundle
-        run: |
-          cp Install-CloudGrange.ps1   bundle/
-          cp verify-bundle.ps1        bundle/
-          cp New-SelfSignedCert.ps1   bundle/
-          cp Uninstall-CloudGrange.ps1 bundle/ 2>/dev/null || true
-          cp Update-CloudGrange.ps1    bundle/ 2>/dev/null || true
-          cp -r scripts/              bundle/scripts/
-          cp -r compose/              bundle/compose/
-          mkdir -p bundle/docs && cp docs/prerequisites.md docs/product-installer-design.md docs/appliance-operator-access.md bundle/docs/
-          # Install-CloudGrange.ps1 refuses to run without this integrity file beside it.
-          sha256sum Install-CloudGrange.ps1 | awk '{print toupper($1)"  Install-CloudGrange.ps1"}' > bundle/cloudgrange-installer.sha256
-
-      - name: Add verified Ubuntu noble cloud image (required by -Mode Bundled)
-        run: |
-          # AB#8129: pinned image serial (kernel 6.8.0-139-generic). The bundled linux-cloud-tools debs
-          # below must match this kernel; update both together.
+          IN="$RUNNER_TEMP/inputs" && rm -rf "$IN" && mkdir -p "$IN/debs"
           base=https://cloud-images.ubuntu.com/noble/20260911
-          curl -fsSL "$base/SHA256SUMS" -o ubuntu-SHA256SUMS
-          curl -fsSL "$base/noble-server-cloudimg-amd64.img" -o noble-server-cloudimg-amd64.img
-          grep ' \*\?noble-server-cloudimg-amd64.img$' ubuntu-SHA256SUMS | sha256sum -c
-          mv noble-server-cloudimg-amd64.img bundle/ubuntu-24.04-cloudimg.img
-
-      - name: Add pinned Docker CE packages for offline Bundled installs (AB#8129)
-        run: |
-          # Exact versions; the apt repo key fingerprint is checked before use.
-          docker run --rm -v "$PWD/bundle:/out" ubuntu@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 bash -euo pipefail -c '
+          curl -fsSL "$base/noble-server-cloudimg-amd64.img" -o "$IN/noble-server-cloudimg-amd64.img"
+          # Exact versions from release/docker-debs/versions.txt; the apt repo key fingerprint is checked before use.
+          docker run --rm -v "$IN/debs:/out" -v "$RUNNER_TEMP/src/release/docker-debs:/pins:ro" \
+            ubuntu@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 bash -euo pipefail -c '
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq && apt-get install -y -qq ca-certificates curl gnupg >/dev/null
             install -m 0755 -d /etc/apt/keyrings
@@ -104,51 +82,35 @@ jobs:
             gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | grep -q "^fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:"
             echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
             apt-get update -qq
-            mkdir -p /out/docker-debs/debs
-            apt-get install -y -qq --download-only --no-install-recommends \
-              docker-ce=5:29.8.0-1~ubuntu.24.04~noble docker-ce-cli=5:29.8.0-1~ubuntu.24.04~noble \
-              containerd.io=2.3.5-1~ubuntu.24.04~noble docker-buildx-plugin=0.37.1-1~ubuntu.24.04~noble \
-              docker-compose-plugin=5.5.1-1~ubuntu.24.04~noble jq=1.7.1-3ubuntu0.24.04.2 >/dev/null
-            # Hyper-V KVP daemon for appliance operator access; must match the pinned image kernel above.
-            apt-get install -y -qq --download-only --no-install-recommends \
-              linux-cloud-tools-6.8.0-139-generic=6.8.0-139.139 linux-cloud-tools-6.8.0-139=6.8.0-139.139 \
-              linux-cloud-tools-common=6.8.0-139.139 >/dev/null
-            cp /var/cache/apt/archives/*.deb /out/docker-debs/debs/
-            printf "%s\n" docker-ce=5:29.8.0-1~ubuntu.24.04~noble docker-ce-cli=5:29.8.0-1~ubuntu.24.04~noble containerd.io=2.3.5-1~ubuntu.24.04~noble docker-buildx-plugin=0.37.1-1~ubuntu.24.04~noble docker-compose-plugin=5.5.1-1~ubuntu.24.04~noble jq=1.7.1-3ubuntu0.24.04.2 linux-cloud-tools-6.8.0-139-generic=6.8.0-139.139 linux-cloud-tools-6.8.0-139=6.8.0-139.139 linux-cloud-tools-common=6.8.0-139.139 > /out/docker-debs/versions.txt
+            apt-get install -y -qq --download-only --no-install-recommends $(cat /pins/versions.txt) >/dev/null
+            cp /var/cache/apt/archives/*.deb /out/
           '
-          (cd bundle/docker-debs/debs && sha256sum *.deb > ../SHA256SUMS)
 
-      - name: Generate SHA-256 manifest
+      - name: Build the bundle (deterministic)
         run: |
-          cd bundle
-          # Generate SHA256SUMS relative to the bundle root. Exclude the manifest itself: the
-          # redirect creates it before find runs, so it would list a hash of a partial file.
-          find . -type f ! -name SHA256SUMS | sort | while read -r f; do
-            sha256sum "$f" | sed 's|  \./|  |'
-          done > SHA256SUMS
-          echo "SHA256SUMS generated:"
-          cat SHA256SUMS
-
-      - name: Create bundle ZIP
-        run: |
-          ZIP_NAME="Install-CloudGrange-Bundled.zip"
-          cd bundle
-          zip -r "../${ZIP_NAME}" .
-          cd ..
-          sha256sum "${ZIP_NAME}" > "${ZIP_NAME}.sha256"
-          echo "Bundle: ${ZIP_NAME} ($(du -sh "${ZIP_NAME}" | cut -f1))"
-          echo "SHA256: $(cat "${ZIP_NAME}.sha256")"
+          bash "$RUNNER_TEMP/src/scripts/New-ReleaseBundle.sh" --source "$RUNNER_TEMP/src" --version "$CLOUDGRANGE_VERSION" \
+            --images registry --ubuntu-image "$RUNNER_TEMP/inputs/noble-server-cloudimg-amd64.img" \
+            --debs-dir "$RUNNER_TEMP/inputs/debs" --out "$RUNNER_TEMP/out" --source-commit "$COMMIT_SHA"
 
       - name: Verify bundle integrity
-        run: |
-          pwsh -Command ".\verify-bundle.ps1 -BundlePath 'Install-CloudGrange-Bundled.zip'"
-        continue-on-error: false
+        run: pwsh -NoProfile -File "$RUNNER_TEMP/src/verify-bundle.ps1" -BundlePath "$RUNNER_TEMP/out/Install-CloudGrange-Bundled.zip"
 
-      - name: Attach bundle to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Record SHA-256
+        run: |
+          {
+            echo "### Install-CloudGrange-Bundled.zip"
+            echo "- commit: \`$COMMIT_SHA\`"
+            echo "- version: \`$CLOUDGRANGE_VERSION\`"
+            echo "- sha256: \`$(cut -d' ' -f1 "$RUNNER_TEMP/out/Install-CloudGrange-Bundled.zip.sha256")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/out/release-record.json"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            Install-CloudGrange-Bundled.zip
-            Install-CloudGrange-Bundled.zip.sha256
-          tag_name: ${{ github.ref_name }}
-          generate_release_notes: true
+          name: release-bundle-${{ inputs.version }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/out/Install-CloudGrange-Bundled.zip
+            ${{ runner.temp }}/out/Install-CloudGrange-Bundled.zip.sha256
+            ${{ runner.temp }}/out/release-record.json

@@ -30,8 +30,11 @@ sudo pwsh ./Install-CloudGrange.ps1 -Mode Install -SiteConfig /etc/cloudgrange/s
 It shares the generic phase/checkpoint/envelope/evidence engine under `installer/` with the
 future-optional RKE2 profile — see that document's §3 for the mechanics (on-node layout,
 checkpoint chain, atomic writes, resume/refusal rules). The phases it runs bring up the Docker
-Compose composition (PostgreSQL 17, local Keycloak, PostgresEncryptedSecretsProvider, API/Core,
-portal, gateway) rather than an RKE2/Helm bring-up.
+Compose composition (PostgreSQL 17, local Keycloak, API/Core, portal, gateway) rather than an RKE2/Helm
+bring-up. Secrets today: per-install credentials in `/opt/cloudgrange/.env` (root 0600) passed as container
+environment, and the API's AES-256-GCM master-key encryption of the identity-provider secrets it stores in
+PostgreSQL. The PostgresEncryptedSecretsProvider is the selected target but is not implemented yet (story
+S-secrets).
 
 ## The three customer packages
 

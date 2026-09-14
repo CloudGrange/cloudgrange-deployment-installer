@@ -3,6 +3,8 @@
 [Unit]
 Description=CloudGrange appliance operator access (KVP and local console until setup completes)
 ConditionPathExists=!/etc/cloudgrange/operator-access-cleared
+# After the rotation ceiling nothing is published until an administrator re-arms (docs/appliance-operator-access.md).
+ConditionPathExists=!/etc/cloudgrange/operator-access-stale
 Requires=cloudgrange.service
 Wants=hv-kvp-daemon.service cloudgrange-realm-admin.service
 After=cloudgrange.service cloudgrange-realm-admin.service hv-kvp-daemon.service
