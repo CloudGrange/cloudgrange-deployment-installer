@@ -20,7 +20,9 @@ function Deploy-DockerCompose {
     )
 
     $composeDir = '/opt/cloudgrange'
-    $composeSrc = Join-Path $PSScriptRoot '..\compose'
+    # Resolve to a canonical path: FileInfo.FullName below is canonical, so an unresolved
+    # '..\compose' prefix breaks the relative-path Substring and misplaces files (AB#8129).
+    $composeSrc = (Resolve-Path (Join-Path $PSScriptRoot '..\compose')).Path
     # Generate random secrets; never written to disk on the Windows host. They are written only to
     # /opt/cloudgrange/.env (mode 0600) inside the guest so systemd can restart the stack (AB#8129).
     $newSecret = { [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24)).ToLowerInvariant() }
@@ -37,7 +39,8 @@ function Deploy-DockerCompose {
     #   3. Probe portal at http://<host>/health (retry up to 30s).
     # AB#1852: In bundled mode, the image tar is scp'd to the guest and loaded via docker load.
     # The remote path where the tar will land (if applicable).
-    $remoteTarPath = '/opt/cloudgrange-images.tar'
+    # scp runs as the unprivileged 'cloudgrange' user, which cannot write to /opt (AB#8129).
+    $remoteTarPath = '/var/tmp/cloudgrange-images.tar'
 
     $pullOrLoad = if (-not [string]::IsNullOrEmpty($BundledImagesPath)) {
         "docker load -i $remoteTarPath && rm -f $remoteTarPath"
@@ -198,8 +201,10 @@ exit 0
     # AB#1593: nginx now terminates TLS on 443 and proxies to portal on 80.
     # SkipCertificateCheck is required for the self-signed cert generated at install time.
     # Falls back to probing '/' if /health is not available.
-    Write-Host "  Probing portal at https://$VmIp/health (timeout: 30s)..."
-    $portalHealthUrl = "https://$VmIp/health"
+    # AB#8129: bare /health 301-redirects to http://<ip>/health/ via the portal's "location /health/";
+    # /health/ready is proxied straight through to the API readiness check.
+    Write-Host "  Probing portal at https://$VmIp/health/ready (timeout: 30s)..."
+    $portalHealthUrl = "https://$VmIp/health/ready"
     $portalOk = $false
     $portalDeadline = [DateTime]::UtcNow.AddSeconds(30)
     while ([DateTime]::UtcNow -lt $portalDeadline) {
