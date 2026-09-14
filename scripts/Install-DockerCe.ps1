@@ -81,7 +81,13 @@ fi
 systemctl enable docker
 systemctl start docker
 # AB#8129: Hyper-V KVP daemon for appliance operator access (bundled debs or the online install above).
-systemctl enable --now hv-kvp-daemon.service 2>/dev/null || echo "WARNING: hv-kvp-daemon.service is not available"
+# hv-kvp-daemon.service BindsTo the vmbus!hv_kvp device unit, which systemd only sees once the udev rule
+# shipped by linux-cloud-tools-common has tagged the device. The device appeared at boot, before the
+# package was installed, so replay its add event before starting the daemon.
+udevadm trigger --action=add --subsystem-match=misc 2>/dev/null || true
+udevadm settle 2>/dev/null || true
+systemctl enable hv-kvp-daemon.service 2>/dev/null || echo "WARNING: hv-kvp-daemon.service is not available"
+systemctl restart hv-kvp-daemon.service 2>/dev/null || echo "WARNING: hv-kvp-daemon.service did not start"
 
 PROXY='__PROXY__'
 if [ -n "$PROXY" ]; then
