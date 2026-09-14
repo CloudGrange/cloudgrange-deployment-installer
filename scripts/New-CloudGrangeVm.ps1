@@ -19,7 +19,10 @@ param(
     [string]$SshPublicKey     = '',
     # Path to the SSH public key file. Preferred over -SshPublicKey when invoking via
     # powershell.exe -File to avoid argument-splitting on the space inside the key string.
-    [string]$SshPublicKeyFile = ''
+    [string]$SshPublicKeyFile = '',
+    [string]$SwitchName       = 'cloudgrange-internal',
+    [switch]$SkipHostPortForward,
+    [switch]$NoDefaultGateway
 )
 
 function New-CloudGrangeVm {
@@ -35,15 +38,24 @@ function New-CloudGrangeVm {
         # SSH public key (openssh format: "ssh-ed25519 AAAA... comment") to add to
         # the cloudgrange user's authorized_keys via cloud-init. When provided, the
         # installer uses SSH (not Hyper-V PowerShell Direct) to run guest commands.
-        [string]$SshPublicKey = ''
+        [string]$SshPublicKey = '',
+        # AB#8129: an existing switch is used as-is (no host IP or NAT changes).
+        [string]$SwitchName = 'cloudgrange-internal',
+        # AB#8129: skip the host-wide inbound 443 firewall rule and netsh portproxy.
+        [switch]$SkipHostPortForward,
+        # AB#8129: air-gapped VM. No default route or public DNS in cloud-init network-config;
+        # the VM reaches only its own /24 (the host). Used for Bundled installs with no egress.
+        [switch]$NoDefaultGateway
     )
 
     $ErrorActionPreference = 'Stop'
 
     $vmName     = 'cloudgrange-docker'
-    $switchName = 'cloudgrange-internal'
-    $hostIp     = '192.168.100.1'
-    $vmGateway  = '192.168.100.1'
+    $switchName = $SwitchName
+    # Gateway/host IP and NAT prefix derive from the VM IP (/24) instead of a fixed 192.168.100.x.
+    $subnetBase = $VmIp -replace '\.\d+$', ''
+    $hostIp     = "$subnetBase.1"
+    $natPrefix  = "$subnetBase.0/24"
     $natName    = 'CloudGrangeNAT'
 
     # Import Hyper-V module — required in PS5.1 subprocess context (PS7 cannot load it).
@@ -77,13 +89,21 @@ function New-CloudGrangeVm {
     # Hyper-V internal switch + WinNAT so the cloudgrange-docker VM has internet access.
     # An Internal switch provides a private network; WinNAT adds outbound NAT so the
     # nested VM can pull images from ghcr.io, update packages, etc.
+    # AB#8129: an existing switch (e.g. one already backed by WinNAT) is used unchanged. WinNAT
+    # supports only one NAT network per host, so creating a second switch + NAT fails on hosts
+    # that already run one (Docker Desktop, WSL, lab NATs).
+    $createdSwitch = $false
     if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
         Write-Host "  Creating Hyper-V internal switch: $switchName"
         New-VMSwitch -Name $switchName -SwitchType Internal | Out-Null
+        $createdSwitch = $true
+    } else {
+        Write-Host "  Using existing Hyper-V switch: $switchName (no host IP or NAT changes)"
     }
     # Assign the host-side IP on the switch NIC (gateway for the nested VM).
     # The adapter may take a moment to appear after New-VMSwitch; retry up to 10 seconds.
     $hostNic = $null
+    if ($createdSwitch) {
     for ($i = 0; $i -lt 10; $i++) {
         $hostNic = Get-NetAdapter | Where-Object { $_.Name -eq "vEthernet ($switchName)" }
         if ($hostNic) { break }
@@ -109,10 +129,15 @@ function New-CloudGrangeVm {
     } else {
         Write-Warning "  vEthernet ($switchName) adapter not found after 10s - host IP not assigned."
     }
-    # Create WinNAT for outbound internet from the nested VM's subnet.
-    if (-not (Get-NetNat -Name $natName -ErrorAction SilentlyContinue)) {
-        Write-Host "  Creating WinNAT: $natName (192.168.100.0/24)"
-        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix '192.168.100.0/24' | Out-Null
+    }
+    # Create WinNAT for outbound internet from the nested VM's subnet, unless a NAT already
+    # covers that prefix (WinNAT allows one NAT network per host).
+    $coveringNat = Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.InternalIPInterfaceAddressPrefix -eq $natPrefix }
+    if ($coveringNat) {
+        Write-Host "  Outbound NAT already provided by: $($coveringNat.Name) ($natPrefix)"
+    } elseif ($createdSwitch -and -not (Get-NetNat -Name $natName -ErrorAction SilentlyContinue)) {
+        Write-Host "  Creating WinNAT: $natName ($natPrefix)"
+        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $natPrefix | Out-Null
     }
 
     # Ensure VHDX directory exists
@@ -232,21 +257,21 @@ if ! ip addr show "$IFACE" | grep -q "VMIP_PLACEHOLDER"; then
   ip addr flush dev "$IFACE" 2>/dev/null || true
   ip addr add VMIP_PLACEHOLDER/24 dev "$IFACE"
   ip link set "$IFACE" up
-  ip route add default via GWIP_PLACEHOLDER dev "$IFACE" 2>/dev/null || true
-  printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+  if [ "NOGW_PLACEHOLDER" != "1" ]; then
+    ip route add default via GWIP_PLACEHOLDER dev "$IFACE" 2>/dev/null || true
+    printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+  fi
   echo "IP set manually on $IFACE" >> $LOG
 else
   echo "IP already present (netplan)" >> $LOG
 fi
-# Install packages
-apt-get update -q >> $LOG 2>&1
-DEBIAN_FRONTEND=noninteractive apt-get install -y -q openssh-server qemu-guest-agent >> $LOG 2>&1
-systemctl enable --now ssh >> $LOG 2>&1
-systemctl enable --now qemu-guest-agent >> $LOG 2>&1
+# AB#8129: openssh-server ships in the Ubuntu cloud image; no package install here, so an
+# air-gapped VM (no default route) completes runcmd. qemu-guest-agent is not used on Hyper-V.
+systemctl enable --now ssh >> $LOG 2>&1 || true
 echo "cloudgrange-runcmd-done $(date)" >> $LOG
 '@
     # Substitute the actual IP/gateway into the script
-    $netSetupScript = $netSetupScript -replace 'VMIP_PLACEHOLDER', $VmIp -replace 'GWIP_PLACEHOLDER', $vmGateway4
+    $netSetupScript = $netSetupScript -replace 'VMIP_PLACEHOLDER', $VmIp -replace 'GWIP_PLACEHOLDER', $vmGateway4 -replace 'NOGW_PLACEHOLDER', $(if ($NoDefaultGateway) { '1' } else { '0' })
 
     # Pre-compute indented script block outside here-string to avoid PS5.1 parse issues
     # with complex ForEach-Object scriptblocks inside $(...)  in double-quoted strings.
@@ -272,8 +297,9 @@ runcmd:
   - /usr/local/bin/cloudgrange-net-setup.sh
 "@
 
+    # AB#8129: unique instance-id per provisioning so cloud-init per-instance state is never reused.
     $metaData = @"
-instance-id: cloudgrange-docker
+instance-id: cloudgrange-docker-$([guid]::NewGuid().ToString('N'))
 local-hostname: cloudgrange-docker
 "@
 
@@ -290,12 +316,17 @@ ethernets:
     set-name: eth0
     dhcp4: false
     addresses: [$VmIp/24]
+"@
+    if (-not $NoDefaultGateway) {
+        $networkConfig += @"
+
     routes:
       - to: default
         via: $vmGateway4
     nameservers:
       addresses: [8.8.8.8, 1.1.1.1]
 "@
+    }
 
     # PS5.1 Set-Content -Encoding UTF8 emits a UTF-8 BOM (0xEF 0xBB 0xBF). Cloud-init
     # checks whether user-data starts with the literal bytes '#cloud-config'; a BOM
@@ -351,7 +382,9 @@ ethernets:
 
     # Windows Firewall — forward port 443 from management NIC to VM
     $fwRuleName = 'CloudGrange-Portal-443'
-    if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
+    if ($SkipHostPortForward) {
+        Write-Host "  Skipping host 443 firewall rule and portproxy (-SkipHostPortForward)"
+    } elseif (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
         # Port forwarding via netsh portproxy (management NIC → VM IP)
         netsh interface portproxy add v4tov4 listenport=443 connectaddress=$VmIp connectport=443 | Out-Null
@@ -386,5 +419,6 @@ if ($MyInvocation.InvocationName -ne '.') {
 
     . "$PSScriptRoot\CloudGrange-Common.ps1"
     New-CloudGrangeVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
-        -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath
+        -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath `
+        -SwitchName $SwitchName -SkipHostPortForward:$SkipHostPortForward -NoDefaultGateway:$NoDefaultGateway
 }

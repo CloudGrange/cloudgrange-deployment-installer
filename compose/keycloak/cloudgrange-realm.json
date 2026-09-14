@@ -2,7 +2,7 @@
   "realm": "cloudgrange",
   "enabled": true,
   "displayName": "CloudGrange",
-  "sslRequired": "none",
+  "sslRequired": "external",
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
@@ -26,15 +26,15 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "redirectUris": [
-        "http://localhost/*",
-        "http://localhost:80/*",
-        "https://*"
+        "https://${CLOUDGRANGE_HOSTNAME}/*"
       ],
       "webOrigins": [
-        "http://localhost",
-        "http://localhost:80",
-        "+"
+        "https://${CLOUDGRANGE_HOSTNAME}"
       ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://${CLOUDGRANGE_HOSTNAME}/*"
+      },
       "protocol": "openid-connect",
       "protocolMappers": [
         {
@@ -75,29 +75,12 @@
       "clientAuthenticatorType": "client-secret",
       "secret": "${KEYCLOAK_API_CLIENT_SECRET}",
       "serviceAccountsEnabled": true,
-      "standardFlowEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["http://localhost:8081/*", "http://localhost/*", "http://cloudgrange-dev.eastus.cloudapp.azure.com/*", "http://cloudgrange-dev.eastus.cloudapp.azure.com:8081/*"],
+      "redirectUris": [],
+      "webOrigins": [],
       "protocol": "openid-connect"
-    }
-  ],
-  "users": [
-    {
-      "username": "admin@cloudgrange.local",
-      "email": "admin@cloudgrange.local",
-      "enabled": true,
-      "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "${KEYCLOAK_ADMIN_PASSWORD}",
-          "temporary": true
-        }
-      ],
-      "realmRoles": ["PlatformAdmin"],
-      "attributes": {
-        "org_id": ["00000000-0000-0000-0000-000000000001"]
-      }
     }
   ]
 }

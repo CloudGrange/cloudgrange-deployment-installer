@@ -29,8 +29,38 @@ param(
     # Do NOT use in production — unsigned appliances cannot be traced to a known-good build.
     [switch]$AllowUnsigned,
 
-    [string]$VmIp   = '192.168.100.10',
-    [string]$VmName = 'cloudgrange-docker'
+    # AB#8129: Hyper-V switch for the appliance NIC. An existing switch is used as-is; a missing one
+    # is created as an Internal switch.
+    [string]$SwitchName = 'cloudgrange-internal',
+
+    # AB#8129: optional static IPv4 for networks without DHCP. When set, a NoCloud seed carrying ONLY the
+    # network configuration is attached (no users, no keys). Leave empty for DHCP; the address is then
+    # read from the appliance over Hyper-V KVP.
+    [ValidatePattern('^$|^(\d{1,3}\.){3}\d{1,3}$')]
+    [string]$VmIp = '',
+    [ValidateRange(8, 32)]
+    [int]$PrefixLength = 24,
+    [ValidatePattern('^$|^(\d{1,3}\.){3}\d{1,3}$')]
+    [string]$Gateway = '',
+    [ValidatePattern('^(\d{1,3}\.){3}\d{1,3}$')]
+    [string[]]$DnsServers = @(),
+
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]{0,62}$')]
+    [string]$VmName = 'cloudgrange-docker',
+
+    # AB#8129: do not add the host firewall rule and port proxy that publish the portal on host port 443.
+    [switch]$SkipHostPortForward,
+
+    # AB#8129: where to save the operator SSH private key the appliance publishes over KVP.
+    # Default: %USERPROFILE%\.ssh\cloudgrange-<VmName>-operator_ed25519 (current user only).
+    [string]$OperatorKeyPath = '',
+
+    # AB#8129: how long to wait for first boot to publish the setup credentials.
+    [ValidateRange(5, 60)]
+    [int]$CredentialTimeoutMinutes = 20,
+
+    # AB#8129: also return the credentials as an object (setup token and password as SecureString).
+    [switch]$PassThru
 )
 
 Set-StrictMode -Version Latest
@@ -164,16 +194,42 @@ if ($sigFilePresent) {
 # ---------------------------------------------------------------------------
 # AB#1588 Step 3: Create Hyper-V VM from the validated VHDX
 # ---------------------------------------------------------------------------
-Write-Progress-Step "Creating Hyper-V internal switch (if needed)"
-$switchName = 'cloudgrange-internal'
+Write-Progress-Step "Selecting Hyper-V switch '$SwitchName'"
+$switchName = $SwitchName
 if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
     New-VMSwitch -Name $switchName -SwitchType Internal | Out-Null
     Write-Host "  Created virtual switch: $switchName" -ForegroundColor Gray
+} else {
+    Write-Host "  Using existing virtual switch: $switchName (unchanged)" -ForegroundColor Gray
+}
+if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
+    Write-Error "CG-APPL-ERR-009: a VM named '$VmName' already exists. Choose another -VmName."
 }
 
 Write-Progress-Step "Creating Hyper-V VM from appliance VHDX"
 # AB#1588 Step 3: Generation 2, UEFI, dynamic memory, 2 vCPU minimum.
 $vm = New-VM -Name $VmName -Generation 2 -VHDPath $AppliancePath -SwitchName $switchName
+# AB#8129: the appliance hands its setup credentials to host administrators over KVP data exchange.
+Enable-VMIntegrationService -VMName $VmName -Name 'Key-Value Pair Exchange'
+
+# AB#8129: static addressing for networks without DHCP — a NoCloud seed with network-config only.
+if (-not [string]::IsNullOrEmpty($VmIp)) {
+    . "$PSScriptRoot\scripts\CloudGrange-Prereqs.ps1"
+    $seedDir = Join-Path $applianceDir "$VmName-seed"
+    New-Item -ItemType Directory -Force -Path $seedDir | Out-Null
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText((Join-Path $seedDir 'meta-data'), "instance-id: cloudgrange-appliance-$([guid]::NewGuid().ToString('N'))`nlocal-hostname: $VmName`n", $utf8)
+    [IO.File]::WriteAllText((Join-Path $seedDir 'user-data'), "#cloud-config`n", $utf8)
+    $net = "version: 2`nethernets:`n  cloudgrange-eth:`n    match:`n      name: `"e*`"`n    set-name: eth0`n    dhcp4: false`n    addresses: [$VmIp/$PrefixLength]`n"
+    if ($Gateway) { $net += "    routes:`n      - to: default`n        via: $Gateway`n" }
+    if ($DnsServers.Count -gt 0) { $net += "    nameservers:`n      addresses: [$($DnsServers -join ', ')]`n" }
+    [IO.File]::WriteAllText((Join-Path $seedDir 'network-config'), $net, $utf8)
+    $seedIso = Join-Path $applianceDir "$VmName-seed.iso"
+    New-CiDataIso -SourceDir $seedDir -OutputIso $seedIso -VolumeLabel 'cidata'
+    Remove-Item -Recurse -Force $seedDir
+    Add-VMDvdDrive -VMName $VmName -Path $seedIso
+    Write-Host "  Static address $VmIp/$PrefixLength via NoCloud seed (network configuration only)" -ForegroundColor Gray
+}
 Set-VM -VM $vm `
     -DynamicMemory `
     -MemoryStartupBytes 4GB `
@@ -188,63 +244,116 @@ Set-VM -VM $vm `
 Set-VMFirmware -VM $vm -SecureBootTemplate 'MicrosoftUEFICertificateAuthority'
 Set-VMFirmware -VM $vm -EnableSecureBoot On
 
-# Open firewall for portal access
-$fwRuleName = 'CloudGrange-Portal-443'
-if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
-    netsh interface portproxy add v4tov4 listenport=443 connectaddress=$VmIp connectport=443 | Out-Null
-    Write-Host "  Firewall rule and port proxy configured for port 443" -ForegroundColor Gray
-}
-
 # ---------------------------------------------------------------------------
-# AB#1588 Step 4: Start VM and wait for portal — 3-minute SLA (hard requirement)
+# AB#1588 Step 4: Start VM, wait for first boot (KVP) and the portal
 # ---------------------------------------------------------------------------
 Write-Progress-Step "Starting appliance VM"
 Start-VM -Name $VmName
 
-Write-Host "  Waiting for CloudGrange portal to become reachable (SLA: 3 minutes)..." -ForegroundColor Gray
-$portalUrl   = "https://$VmIp"
-$slaSeconds  = 180
-$ok          = Wait-ForHttpOk -Url $portalUrl -TimeoutSeconds $slaSeconds
+# AB#8129: read the appliance's guest-to-host KVP items (Hyper-V administrators only).
+function Get-CloudGrangeKvpItems {
+    param([Parameter(Mandatory)][string]$Name)
+    $items = @{}
+    $cs = @(Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$Name'" -ErrorAction SilentlyContinue)
+    if ($cs.Count -ne 1) { return $items }
+    $kvp = Get-CimAssociatedInstance -InputObject $cs[0] -ResultClassName Msvm_KvpExchangeComponent -ErrorAction SilentlyContinue
+    if (-not $kvp -or -not $kvp.GuestExchangeItems) { return $items }
+    foreach ($xmlText in $kvp.GuestExchangeItems) {
+        $props = @{}
+        foreach ($p in ([xml]$xmlText).INSTANCE.PROPERTY) { $props[$p.NAME] = $p.VALUE }
+        if ([string]$props['Name'] -like 'CloudGrange.*') { $items[[string]$props['Name']] = [string]$props['Data'] }
+    }
+    return $items
+}
 
-if (-not $ok) {
-    # AB#1588 hard SLA failure — stop the VM and surface a clear error.
-    Stop-VM -Name $VmName -TurnOff -Force -ErrorAction SilentlyContinue
+Write-Host "  Waiting for first boot to publish the setup credentials over Hyper-V KVP (up to $CredentialTimeoutMinutes minutes)..." -ForegroundColor Gray
+$deadline = [DateTime]::UtcNow.AddMinutes($CredentialTimeoutMinutes)
+$kvpItems = @{}
+while ([DateTime]::UtcNow -lt $deadline) {
+    $kvpItems = Get-CloudGrangeKvpItems -Name $VmName
+    if ($kvpItems['CloudGrange.State'] -in @('setup-pending', 'setup-complete')) { break }
+    Start-Sleep -Seconds 10
+}
+if ($kvpItems['CloudGrange.State'] -notin @('setup-pending', 'setup-complete')) {
     Write-Host ""
-    Write-Host "  [ERROR] Portal did not become reachable within 3 minutes." -ForegroundColor Red
-    Write-Host "  The appliance VM has been stopped. Check the Hyper-V console for boot errors." -ForegroundColor Red
-    Write-Error "CG-APPL-ERR-001: 3-minute SLA exceeded — portal not reachable at $portalUrl. VM stopped."
+    Write-Host "  [ERROR] The appliance did not publish its setup credentials within $CredentialTimeoutMinutes minutes." -ForegroundColor Red
+    Write-Host "  The VM is left running. Open its console (Hyper-V Manager > Connect): the login banner shows" -ForegroundColor Yellow
+    Write-Host "  the setup URL, the one-use setup token and the temporary identity administrator password." -ForegroundColor Yellow
+    Write-Error "CG-APPL-ERR-008: no CloudGrange.State KVP item from '$VmName'."
+}
+
+$address   = if ($VmIp) { $VmIp } else { $kvpItems['CloudGrange.Address'] }
+$portalUrl = "https://$address"
+Write-Host "  Waiting for the CloudGrange portal at $portalUrl ..." -ForegroundColor Gray
+if (-not (Wait-ForHttpOk -Url $portalUrl -TimeoutSeconds 180)) {
+    Write-Error "CG-APPL-ERR-001: portal not reachable at $portalUrl within 3 minutes after first boot completed. The VM is left running for diagnosis."
 }
 
 # ---------------------------------------------------------------------------
-# AB#1588 Step 5: Print admin URL and initial setup token
+# AB#1588 Step 5 / AB#8129: show the one-use setup credentials ONCE and save the operator SSH key
 # ---------------------------------------------------------------------------
-# The appliance emits the initial setup token to the VM's startup log at
-# /var/log/cloudgrange-init.log — retrieve it from the setup-status API endpoint.
-$setupToken = ''
-try {
-    $apiBase    = "http://$VmIp:8081"
-    $statusResp = Invoke-RestMethod -Uri "$apiBase/api/v1/platform/setup-status" `
-        -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
-    if ($statusResp.setupToken) {
-        $setupToken = $statusResp.setupToken
-    }
-} catch {
-    # Non-fatal — token may not be exposed via the API in this appliance version
+$result = [ordered]@{
+    VmName             = $VmName
+    Address            = $address
+    PortalUrl          = $portalUrl
+    SetupUrl           = "$portalUrl/setup"
+    State              = $kvpItems['CloudGrange.State']
+    RealmAdminUser     = $kvpItems['CloudGrange.RealmAdminUser']
+    SetupToken         = $null
+    RealmAdminPassword = $null
+    SshUser            = $kvpItems['CloudGrange.SshUser']
+    OperatorKeyPath    = $null
 }
 
 Write-Host ""
 Write-Host "  CloudGrange appliance is live!" -ForegroundColor Green
 Write-Host "  Portal:  $portalUrl" -ForegroundColor Cyan
-if ($setupToken) {
-    # Security: never embed the token in a URL query parameter — it would appear in browser
-    # history, server access logs, proxy logs, and Referer headers. Print it to the terminal
-    # only and instruct the operator to enter it via the setup wizard form (POST body).
-    Write-Host "  Initial admin token: $setupToken" -ForegroundColor White
-    Write-Host "  Open $portalUrl/setup in your browser and enter this token when prompted." -ForegroundColor Cyan
-    Write-Host "  Keep this token secret — it grants full admin access during first-run setup." -ForegroundColor Yellow
+if ($kvpItems['CloudGrange.State'] -eq 'setup-pending') {
+    $sshKey = $kvpItems['CloudGrange.SshPrivateKey']
+    if ($sshKey) {
+        if ([string]::IsNullOrEmpty($OperatorKeyPath)) {
+            $OperatorKeyPath = Join-Path $HOME ".ssh\cloudgrange-$VmName-operator_ed25519"
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path $OperatorKeyPath -Parent) | Out-Null
+        # Create the file empty, restrict it to the current user, then write the key (LF line endings).
+        [IO.File]::WriteAllText($OperatorKeyPath, '')
+        $acl = [System.Security.AccessControl.FileSecurity]::new()
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.WindowsIdentity]::GetCurrent().User, 'FullControl', 'Allow'))
+        Set-Acl -Path $OperatorKeyPath -AclObject $acl
+        [IO.File]::WriteAllText($OperatorKeyPath, (($sshKey -replace "`r`n", "`n").TrimEnd("`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+        $result.OperatorKeyPath = $OperatorKeyPath
+    }
+    # Security: never put the token in a URL (browser history, logs, Referer). Console only, once.
+    Write-Host "  First-run setup: open $portalUrl/setup and enter the one-use setup token when prompted." -ForegroundColor Cyan
+    Write-Host "    Setup token:              $($kvpItems['CloudGrange.SetupToken'])" -ForegroundColor White
+    Write-Host "    Identity administrator:   $($kvpItems['CloudGrange.RealmAdminUser'])" -ForegroundColor White
+    Write-Host "    Temporary password:       $($kvpItems['CloudGrange.RealmAdminPassword'])  (must be changed at first sign-in)" -ForegroundColor White
+    if ($result.OperatorKeyPath) {
+        Write-Host "    SSH:                      ssh -i `"$OperatorKeyPath`" $($kvpItems['CloudGrange.SshUser'])@$address" -ForegroundColor White
+    }
+    Write-Host "  These are shown once. The appliance removes the token, the temporary password and the SSH" -ForegroundColor Yellow
+    Write-Host "  private key from KVP and its console banner as soon as setup completes." -ForegroundColor Yellow
+    if ($PassThru) {
+        $result.SetupToken         = ConvertTo-SecureString -String $kvpItems['CloudGrange.SetupToken'] -AsPlainText -Force
+        $result.RealmAdminPassword = ConvertTo-SecureString -String $kvpItems['CloudGrange.RealmAdminPassword'] -AsPlainText -Force
+    }
 } else {
-    Write-Host "  Navigate to $portalUrl/setup to complete first-run setup." -ForegroundColor Cyan
+    Write-Host "  Setup has already been completed on this appliance; its one-use credentials were removed." -ForegroundColor Cyan
 }
+$kvpItems = $null
 Write-Host "  Note: The portal uses a self-signed certificate. Your browser will show a security warning." -ForegroundColor Yellow
+Write-Host "  Operator access is documented in docs/appliance-operator-access.md." -ForegroundColor Gray
 Write-Host ""
+
+if (-not $SkipHostPortForward) {
+    # Publish the portal on host port 443 for other machines on the host's network.
+    $fwRuleName = 'CloudGrange-Portal-443'
+    if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
+        netsh interface portproxy add v4tov4 listenport=443 connectaddress=$address connectport=443 | Out-Null
+        Write-Host "  Firewall rule and port proxy configured for port 443" -ForegroundColor Gray
+    }
+}
+
+if ($PassThru) { [pscustomobject]$result }

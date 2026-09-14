@@ -19,7 +19,13 @@ exporters:
   debug:
     verbosity: normal
 
+extensions:
+  # AB#8129: container healthcheck target (internal to the container; not published).
+  health_check:
+    endpoint: 127.0.0.1:13133
+
 service:
+  extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]

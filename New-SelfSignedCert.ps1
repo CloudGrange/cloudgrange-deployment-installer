@@ -57,12 +57,14 @@ set -euo pipefail
 
 CERT_DIR="/tmp/cloudgrange-certs-`$`$"
 mkdir -p "`$CERT_DIR"
+# AB#8129: digest-pinned helper image, shipped in the bundle (never alpine:latest).
+HELPER_IMAGE="`$(head -1 $ComposeDir/helper-images.txt)"
 
 # AB#2347: Migrate any legacy server.crt/server.key in the volume to cloudgrange.crt/cloudgrange.key
 # so nginx can boot regardless of how the volume was first populated.
 docker volume inspect cloudgrange_nginx_certs >/dev/null 2>&1 && docker run --rm \
     -v cloudgrange_nginx_certs:/certs \
-    alpine:latest \
+    "`$HELPER_IMAGE" \
     sh -c '
         if [ -f /certs/server.crt ] && [ ! -f /certs/cloudgrange.crt ]; then
             echo "Migrating legacy server.crt -> cloudgrange.crt"
@@ -111,7 +113,7 @@ openssl x509 -in "`$CERT_DIR/cloudgrange.crt" -noout -subject -dates 2>/dev/null
 docker run --rm \
     -v cloudgrange_nginx_certs:/certs \
     -v "`${CERT_DIR}:/src:ro" \
-    alpine:latest \
+    "`$HELPER_IMAGE" \
     sh -c "cp /src/cloudgrange.crt /certs/cloudgrange.crt && cp /src/cloudgrange.key /certs/cloudgrange.key && chmod 644 /certs/cloudgrange.crt && chmod 600 /certs/cloudgrange.key"
 
 echo "Certificates installed into nginx_certs volume."

@@ -1,0 +1,17 @@
+# AB#8129 — appliance operator access: publish the one-use setup token, temporary realm admin password
+# and operator SSH key to Hyper-V KVP and the local console until setup completes, then remove them.
+[Unit]
+Description=CloudGrange appliance operator access (KVP and local console until setup completes)
+ConditionPathExists=!/etc/cloudgrange/operator-access-cleared
+Requires=cloudgrange.service
+Wants=hv-kvp-daemon.service cloudgrange-realm-admin.service
+After=cloudgrange.service cloudgrange-realm-admin.service hv-kvp-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/cloudgrange-operator-access.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

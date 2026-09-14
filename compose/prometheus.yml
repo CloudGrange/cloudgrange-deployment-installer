@@ -12,9 +12,9 @@ scrape_configs:
 
   - job_name: cloudgrange-relay
     static_configs:
-      # Relay LAN listener — port matches RELAY_LISTEN_PORT (default 8080 in Program.cs;
-      # set to 8443 for the relay profile in docker-compose.yml).
-      # When the relay profile is enabled, this target scrapes relay process metrics.
-      - targets: ['cloudgrange-relay:8080']
+      # Relay LAN listener — port matches RELAY_LISTEN_PORT=8443 in docker-compose.yml (AB#8129).
+      # The listener is plain HTTP today (Kestrel ListenAnyIP) and is not published on the host;
+      # the relay serves Prometheus text at /metrics (cloudgrange-runtime-relay #5).
+      - targets: ['cloudgrange-relay:8443']
     metrics_path: /metrics
     scheme: http

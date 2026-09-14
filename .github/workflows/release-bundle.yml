@@ -1,7 +1,10 @@
 name: Release Bundle
-# Builds the air-gap bundled distribution ZIP on v*.*.* tag push (AB#1586, AB#1587).
-# The bundle contains all container images as .tar files, cloud-init templates,
-# and Install-CloudGrange.ps1 — sufficient to install CloudGrange with no internet access.
+# Builds the air-gap bundled distribution ZIP on v*.*.* tag push (AB#1586, AB#1587, AB#8129).
+# The bundle contains every image in compose/docker-compose.yml saved to one
+# cloudgrange-images.tar (the file Install-CloudGrange.ps1 -Mode Bundled loads), the compose
+# files, the systemd unit, and Install-CloudGrange.ps1. The image list is read from the compose
+# file, which is the source of truth for the service list.
+# The bundle is NOT signed: SHA256SUMS is an integrity check only, not an authenticity check.
 on:
   push:
     tags:
@@ -12,13 +15,14 @@ permissions:
 jobs:
   build-bundle:
     runs-on: ubuntu-latest
-    env:
-      IMAGES: |
-        ghcr.io/cloudgrange-cloud/cloudgrange-api:latest
-        ghcr.io/cloudgrange-cloud/cloudgrange-portal:latest
-        ghcr.io/cloudgrange-cloud/cloudgrange-relay:latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine release version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
+          echo "CLOUDGRANGE_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -27,39 +31,99 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin first-party images by digest and gate every image (AB#8129)
+        run: |
+          # First-party images for exactly this version, stamped into the bundle's compose file as
+          # repo:<version>@sha256:<digest>. The gate then requires a digest on EVERY image (no exemptions).
+          for svc in api portal relay; do docker pull "ghcr.io/cloudgrange/cloudgrange-$svc:$CLOUDGRANGE_VERSION"; done
+          bash scripts/Set-FirstPartyImagePins.sh compose/docker-compose.yml "$CLOUDGRANGE_VERSION"
+          bash scripts/Test-ComposeImagePins.sh compose > images.txt
+          echo "Images:"; cat images.txt
+
+      - name: Compose hardening gate (AB#8129)
+        run: |
+          # cap_drop ALL, no-new-privileges and a healthcheck on every service; no privileged, devices, host
+          # namespaces or docker.sock; read-only roots except the allowlist; host ports only nginx 80/443.
+          python3 scripts/Test-ComposeHardening.py compose
+          python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
+          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_kvp_writer.py'
+          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_operator_access.py'
+
       - name: Pull container images
         run: |
           while IFS= read -r image; do
             [ -z "$image" ] && continue
             echo "Pulling $image..."
             docker pull "$image"
-          done <<< "$IMAGES"
+          done < images.txt
 
-      - name: Save container images as .tar files
+      - name: Save container images to one tar
         run: |
-          mkdir -p bundle/images
+          mkdir -p bundle
+          # AB#8129: save every image under its tag name. A digest-only `docker save` loads
+          # unnamed, and compose's "repo:tag@sha256:..." then cannot resolve without a registry.
+          : > save.txt
           while IFS= read -r image; do
             [ -z "$image" ] && continue
-            # Derive a safe filename from the image reference
-            safe=$(echo "$image" | tr '/:' '_')
-            echo "Saving $image -> bundle/images/${safe}.tar"
-            docker save "$image" -o "bundle/images/${safe}.tar"
-          done <<< "$IMAGES"
+            named="${image%@sha256:*}"; docker tag "$image" "$named"; echo "$named" >> save.txt
+          done < images.txt
+          xargs -a save.txt docker save -o bundle/cloudgrange-images.tar
+          cp images.txt bundle/images.txt
 
       - name: Copy installer files into bundle
         run: |
           cp Install-CloudGrange.ps1   bundle/
           cp verify-bundle.ps1        bundle/
+          cp New-SelfSignedCert.ps1   bundle/
           cp Uninstall-CloudGrange.ps1 bundle/ 2>/dev/null || true
           cp Update-CloudGrange.ps1    bundle/ 2>/dev/null || true
           cp -r scripts/              bundle/scripts/
           cp -r compose/              bundle/compose/
+          mkdir -p bundle/docs && cp docs/prerequisites.md docs/product-installer-design.md docs/appliance-operator-access.md bundle/docs/
+          # Install-CloudGrange.ps1 refuses to run without this integrity file beside it.
+          sha256sum Install-CloudGrange.ps1 | awk '{print toupper($1)"  Install-CloudGrange.ps1"}' > bundle/cloudgrange-installer.sha256
+
+      - name: Add verified Ubuntu noble cloud image (required by -Mode Bundled)
+        run: |
+          # AB#8129: pinned image serial (kernel 6.8.0-139-generic). The bundled linux-cloud-tools debs
+          # below must match this kernel; update both together.
+          base=https://cloud-images.ubuntu.com/noble/20260911
+          curl -fsSL "$base/SHA256SUMS" -o ubuntu-SHA256SUMS
+          curl -fsSL "$base/noble-server-cloudimg-amd64.img" -o noble-server-cloudimg-amd64.img
+          grep ' \*\?noble-server-cloudimg-amd64.img$' ubuntu-SHA256SUMS | sha256sum -c
+          mv noble-server-cloudimg-amd64.img bundle/ubuntu-24.04-cloudimg.img
+
+      - name: Add pinned Docker CE packages for offline Bundled installs (AB#8129)
+        run: |
+          # Exact versions; the apt repo key fingerprint is checked before use.
+          docker run --rm -v "$PWD/bundle:/out" ubuntu@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq && apt-get install -y -qq ca-certificates curl gnupg >/dev/null
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+            gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | grep -q "^fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:"
+            echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
+            apt-get update -qq
+            mkdir -p /out/docker-debs/debs
+            apt-get install -y -qq --download-only --no-install-recommends \
+              docker-ce=5:29.8.0-1~ubuntu.24.04~noble docker-ce-cli=5:29.8.0-1~ubuntu.24.04~noble \
+              containerd.io=2.3.5-1~ubuntu.24.04~noble docker-buildx-plugin=0.37.1-1~ubuntu.24.04~noble \
+              docker-compose-plugin=5.5.1-1~ubuntu.24.04~noble jq=1.7.1-3ubuntu0.24.04.2 >/dev/null
+            # Hyper-V KVP daemon for appliance operator access; must match the pinned image kernel above.
+            apt-get install -y -qq --download-only --no-install-recommends \
+              linux-cloud-tools-6.8.0-139-generic=6.8.0-139.139 linux-cloud-tools-6.8.0-139=6.8.0-139.139 \
+              linux-cloud-tools-common=6.8.0-139.139 >/dev/null
+            cp /var/cache/apt/archives/*.deb /out/docker-debs/debs/
+            printf "%s\n" docker-ce=5:29.8.0-1~ubuntu.24.04~noble docker-ce-cli=5:29.8.0-1~ubuntu.24.04~noble containerd.io=2.3.5-1~ubuntu.24.04~noble docker-buildx-plugin=0.37.1-1~ubuntu.24.04~noble docker-compose-plugin=5.5.1-1~ubuntu.24.04~noble jq=1.7.1-3ubuntu0.24.04.2 linux-cloud-tools-6.8.0-139-generic=6.8.0-139.139 linux-cloud-tools-6.8.0-139=6.8.0-139.139 linux-cloud-tools-common=6.8.0-139.139 > /out/docker-debs/versions.txt
+          '
+          (cd bundle/docker-debs/debs && sha256sum *.deb > ../SHA256SUMS)
 
       - name: Generate SHA-256 manifest
         run: |
           cd bundle
-          # Generate SHA256SUMS relative to the bundle root
-          find . -type f | sort | while read -r f; do
+          # Generate SHA256SUMS relative to the bundle root. Exclude the manifest itself: the
+          # redirect creates it before find runs, so it would list a hash of a partial file.
+          find . -type f ! -name SHA256SUMS | sort | while read -r f; do
             sha256sum "$f" | sed 's|  \./|  |'
           done > SHA256SUMS
           echo "SHA256SUMS generated:"
@@ -67,7 +131,6 @@ jobs:
 
       - name: Create bundle ZIP
         run: |
-          VERSION="${GITHUB_REF_NAME}"
           ZIP_NAME="Install-CloudGrange-Bundled.zip"
           cd bundle
           zip -r "../${ZIP_NAME}" .

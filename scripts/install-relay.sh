@@ -14,7 +14,7 @@
 set -euo pipefail
 
 CONTAINER_NAME="cloudgrange-relay"
-IMAGE_BASE="ghcr.io/cloudgrange-cloud/cloudgrange-relay"
+IMAGE_BASE="ghcr.io/cloudgrange/cloudgrange-relay"
 RELEASES_URL="https://api.github.com/repos/cloudgrange-cloud/cloudgrange-relay/releases"
 HEALTH_TIMEOUT=30
 

@@ -1,59 +1,85 @@
 name: Release Appliance
-# Builds the CloudGrange Appliance VHDX on v*.*.* tag push (AB#1858).
+# Builds the CloudGrange Appliance VHDX after the Release Bundle for the same tag succeeds (AB#1858, AB#8129).
 # Requires a Windows self-hosted runner with Hyper-V enabled.
 #
 # The appliance is built by:
-#   1. Running Install-CloudGrange.ps1 in Online mode to create a working cloudgrange-docker VM.
-#   2. Calling Build-CloudGrangeAppliance.ps1 to export, compact, and sign the VHDX.
-#   3. Attaching the VHDX + SHA-256 manifest + cosign signature to the GitHub Release.
+#   1. Downloading and verifying the release's Install-CloudGrange-Bundled.zip (digest-pinned images).
+#   2. Running Install-CloudGrange.ps1 -Mode Bundled -KeepInstallerSshKey to create the source VM.
+#   3. Build-CloudGrangeAppliance.ps1: generalize over SSH, export, compact, scan the VHDX for
+#      install-time secrets (the build FAILS on any finding), then sign.
+#   4. Attaching the VHDX + SHA-256 manifest + secret-scan report + cosign signature to the Release.
 #
 # NOTE: GitHub-hosted runners do not support Hyper-V. A self-hosted Windows runner
 # with Hyper-V enabled is required for this workflow (see docs/self-hosted-runner.md).
+# The runner must have qemu-img available (docs/prerequisites.md); -InstallPinnedQemu installs the
+# pinned, SHA-512-verified build when it is missing.
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  workflow_run:
+    workflows: ['Release Bundle']
+    types: [completed]
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Appliance version (defaults to tag)'
-        required: false
-        default: ''
+      tag:
+        description: 'Release tag to build the appliance from (vX.Y.Z)'
+        required: true
 permissions:
   contents: write
   id-token: write
 jobs:
   build-appliance:
     name: Build Appliance VHDX
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, windows, hyper-v]
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       APPLIANCE_OUTPUT: C:\CloudGrangeAppliance
+      BUNDLE_DIR: C:\CloudGrangeApplianceBundle
+      VM_IP: 192.168.100.10
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Determine version
+      - name: Determine tag and version
         id: version
         shell: pwsh
         run: |
-          $v = '${{ github.event.inputs.version }}'
-          if ([string]::IsNullOrEmpty($v)) {
-            $v = '${{ github.ref_name }}'
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ github.event.inputs.tag }}' } else { '${{ github.event.workflow_run.head_branch }}' }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$') { throw "Not a release tag: $tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.version.outputs.tag }}
+
+      - name: Download and verify the release bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path '${{ env.BUNDLE_DIR }}' | Out-Null
+          gh release download '${{ steps.version.outputs.tag }}' --repo '${{ github.repository }}' --dir '${{ env.BUNDLE_DIR }}' `
+            --pattern 'Install-CloudGrange-Bundled.zip' --pattern 'Install-CloudGrange-Bundled.zip.sha256' --clobber
+          $zip = Join-Path '${{ env.BUNDLE_DIR }}' 'Install-CloudGrange-Bundled.zip'
+          $expected = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0]
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected.ToUpperInvariant()) { throw 'Bundle SHA-256 mismatch' }
+          Expand-Archive -Path $zip -DestinationPath (Join-Path '${{ env.BUNDLE_DIR }}' 'bundle') -Force
+
+      - name: Install source VM from the bundle (Bundled mode)
+        shell: pwsh
+        run: |
+          $bundle = Join-Path '${{ env.BUNDLE_DIR }}' 'bundle'
+          & (Join-Path $bundle 'Install-CloudGrange.ps1') -Mode Bundled -BundlePath $bundle -VmIp '${{ env.VM_IP }}' `
+            -Version '${{ steps.version.outputs.version }}' -AcceptDefaults -InstallPinnedQemu -KeepInstallerSshKey
+
+      - name: Generalize, export, secret-scan and sign appliance VHDX
+        shell: pwsh
+        run: |
+          $key = Join-Path $env:TEMP 'cloudgrange-install-key\installer_ed25519'
+          try {
+            .\Build-CloudGrangeAppliance.ps1 `
+              -OutputPath '${{ env.APPLIANCE_OUTPUT }}' `
+              -Version '${{ steps.version.outputs.version }}' `
+              -SshKeyPath $key -VmIp '${{ env.VM_IP }}'
+          } finally {
+            Remove-Item -Recurse -Force (Split-Path $key) -ErrorAction SilentlyContinue
           }
-          echo "version=$v" >> $env:GITHUB_OUTPUT
-          Write-Host "Appliance version: $v"
-
-      - name: Run Online installer to build source VM
-        shell: pwsh
-        run: |
-          .\Install-CloudGrange.ps1 -Mode Online -AcceptDefaults
-
-      - name: Export and sign appliance VHDX
-        shell: pwsh
-        run: |
-          .\Build-CloudGrangeAppliance.ps1 `
-            -OutputPath '${{ env.APPLIANCE_OUTPUT }}' `
-            -Version '${{ steps.version.outputs.version }}'
 
       - name: List appliance artifacts
         shell: pwsh
@@ -64,18 +90,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx
-            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx.sha256
-            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance-${{ steps.version.outputs.version }}.vhdx.sig
-          tag_name: ${{ github.ref_name }}
-          fail_on_unmatched_files: false
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.vhdx
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.vhdx.sha256
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.vhdx.sig
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.version
+            ${{ env.APPLIANCE_OUTPUT }}/cloudgrange-appliance.secret-scan.txt
+          tag_name: ${{ steps.version.outputs.tag }}
+          fail_on_unmatched_files: true
 
       - name: Cleanup appliance build artifacts
         if: always()
         shell: pwsh
         run: |
-          if (Test-Path '${{ env.APPLIANCE_OUTPUT }}') {
-            Remove-Item '${{ env.APPLIANCE_OUTPUT }}' -Recurse -Force -ErrorAction SilentlyContinue
+          foreach ($p in '${{ env.APPLIANCE_OUTPUT }}', '${{ env.BUNDLE_DIR }}') {
+            if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
           }
-          Stop-VM -Name cloudgrange-docker -Force -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force (Join-Path $env:TEMP 'cloudgrange-install-key') -ErrorAction SilentlyContinue
+          Stop-VM -Name cloudgrange-docker -TurnOff -Force -ErrorAction SilentlyContinue
           Remove-VM -Name cloudgrange-docker -Force -ErrorAction SilentlyContinue

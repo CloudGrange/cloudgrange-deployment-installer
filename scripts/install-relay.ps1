@@ -25,7 +25,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ContainerName  = 'cloudgrange-relay'
-$ImageBase      = 'ghcr.io/cloudgrange-cloud/cloudgrange-relay'
+$ImageBase      = 'ghcr.io/cloudgrange/cloudgrange-relay'
 $ReleasesUrl    = 'https://api.github.com/repos/cloudgrange-cloud/cloudgrange-relay/releases'
 $HealthTimeout  = 30
 

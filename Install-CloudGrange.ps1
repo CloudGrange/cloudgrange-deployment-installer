@@ -21,7 +21,21 @@ param(
     # When not specified and Mode=Bundled, the installer looks in $PSScriptRoot for bundle files.
     [string]$BundlePath = '',
     [switch]$AcceptDefaults,
-    [switch]$Force
+    [switch]$Force,
+    # AB#8129: Hyper-V switch for the VM. When it already exists (for example a switch that
+    # already has WinNAT, which allows only one NAT per host), it is used as-is: no host IP or
+    # NAT changes are made.
+    [string]$SwitchName = 'cloudgrange-internal',
+    # AB#8129: skip the host-wide inbound 443 firewall rule and netsh portproxy to the VM.
+    [switch]$SkipHostPortForward,
+    # AB#8129: air-gapped VM — no default route in cloud-init network-config (Bundled mode only).
+    [switch]$NoDefaultGateway,
+    # AB#8129: explicit opt-in to install the pinned, SHA-512-verified QEMU build when qemu-img
+    # is missing. Without it the installer fails closed (see docs/prerequisites.md).
+    [switch]$InstallPinnedQemu,
+    # AB#8129: keep the ephemeral installer SSH key (path printed) so Build-CloudGrangeAppliance.ps1
+    # can generalize the VM before export. Default: the key is deleted after install.
+    [switch]$KeepInstallerSshKey
 )
 
 Set-StrictMode -Version Latest
@@ -155,7 +169,10 @@ function Invoke-CloudGrangeInstall {
 
     if (-not $useWsl2) {
         Write-Progress-Step "Bootstrapping installer prerequisites (qemu-img, ISO writer)"
-        Initialize-CloudGrangePrereqs
+        Initialize-CloudGrangePrereqs -InstallPinnedQemu:$InstallPinnedQemu
+        if ($NoDefaultGateway -and $Mode -ne 'Bundled') {
+            Write-Error "CG-INST-ERR-012: -NoDefaultGateway requires -Mode Bundled (Online mode needs registry access)."
+        }
 
         # Generate an ephemeral SSH key pair for this install session.
         # The private key is written to a temp file (mode 600) and deleted after install.
@@ -196,13 +213,19 @@ function Invoke-CloudGrangeInstall {
         # New-CloudGrangeVm.ps1 uses Hyper-V cmdlets that require Windows PowerShell (PS5.1).
         # Invoke via powershell.exe so the Hyper-V module loads correctly while the main
         # installer continues to run under PS7.
-        & powershell.exe -NonInteractive -NoProfile -ExecutionPolicy Bypass `
-            -File "$PSScriptRoot\scripts\New-CloudGrangeVm.ps1" `
-            -VmIp $VmIp `
-            -VhdxPath $VhdxPath `
-            -Mode $Mode `
-            -SshPublicKeyFile "$sshKeyPath.pub" `
-            -BundledImagePath $bundledUbuntuPath
+        $vmArgs = @(
+            '-NonInteractive', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', "$PSScriptRoot\scripts\New-CloudGrangeVm.ps1",
+            '-VmIp', $VmIp,
+            '-VhdxPath', $VhdxPath,
+            '-Mode', $Mode,
+            '-SshPublicKeyFile', "$sshKeyPath.pub",
+            '-BundledImagePath', $bundledUbuntuPath,
+            '-SwitchName', $SwitchName
+        )
+        if ($SkipHostPortForward) { $vmArgs += '-SkipHostPortForward' }
+        if ($NoDefaultGateway)    { $vmArgs += '-NoDefaultGateway' }
+        & powershell.exe @vmArgs
         if ($LASTEXITCODE -ne 0) {
             Write-Error "CG-INST-ERR-010: VM provisioning failed (exit $LASTEXITCODE). Check Hyper-V event log for details."
         }
@@ -231,10 +254,19 @@ function Invoke-CloudGrangeInstall {
     } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
         $dockerCeArgs['Credential'] = $vmGuestCred
     }
+    # AB#8129: Bundled mode installs Docker CE from the pinned .deb set in the bundle (no network).
+    if ($Mode -eq 'Bundled') {
+        $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
+        $bundledDebs = Join-Path $bundleRoot 'docker-debs'
+        if (-not (Test-Path (Join-Path $bundledDebs 'SHA256SUMS'))) {
+            Write-Error "CG-INST-ERR-011: Bundled mode requires docker-debs/ in the bundle ($bundledDebs)."
+        }
+        $dockerCeArgs['OfflinePackagesPath'] = $bundledDebs
+    }
     Install-DockerCe @dockerCeArgs @proxyArgs
 
     # Step 6: Deploy Docker Compose stack
-    Write-Progress-Step "Deploying CloudGrange stack (6 containers)"
+    Write-Progress-Step "Deploying CloudGrange Docker Compose stack"
     . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
     $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
     if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
@@ -255,11 +287,10 @@ function Invoke-CloudGrangeInstall {
     Deploy-DockerCompose @composeArgs
 
     # Step 7: Wait for API health, then emit setup URL (AB#1627, ADR-047)
-    # AB#1593: nginx terminates TLS on 443 and proxies to portal on 80 (internal).
-    # The API is directly on port 8081 (not routed through nginx).
-    # Portal URL uses HTTPS via nginx; API health check uses the direct API port.
+    # AB#1593 / AB#8129: nginx terminates TLS on 443 and is the only published entry point. The API
+    # has no host port; /health/ and /api/ reach it through edge nginx -> portal proxy -> API.
     Write-Progress-Step "Waiting for CloudGrange API to become healthy"
-    $apiHealthBase = "http://$VmIp:8081"
+    $apiHealthBase = "https://${VmIp}"
     $portalBase    = "https://$VmIp"
     $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/health/ready" -TimeoutSeconds 600
     if (-not $healthOk) {
@@ -277,14 +308,34 @@ function Invoke-CloudGrangeInstall {
     # Check setup state — print first-run URL if setup is still pending
     $setupPending = $false
     try {
-        $statusResp = Invoke-RestMethod -Uri "$apiHealthBase/api/v1/platform/setup-status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
-        $setupPending = ($statusResp.setupState -eq 'pending')
+        # AB#8129: the API route is /api/v1/setup/status and returns { setupComplete, platformName, publicUrl }.
+        $statusResp = Invoke-RestMethod -Uri "$apiHealthBase/api/v1/setup/status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
+        $setupPending = -not [bool]$statusResp.setupComplete
     } catch {
         # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
     }
 
-    # Clean up the ephemeral SSH key pair after successful install.
+    # AB#8129 / AB#8894: first-run credentials. POST /api/v1/setup requires the one-use setup token
+    # the API wrote to its secrets volume; the realm administrator was created with a random temporary
+    # password. Both are read from inside the VM over SSH and shown ONLY on this console (never in a
+    # URL or a file written by the installer).
+    $setupToken = ''
+    $realmAdminPassword = ''
     if (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
+        $credSsh = @('-i', $sshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR', '-o', 'BatchMode=yes')
+        if ($setupPending) {
+            $setupToken = ((& ssh.exe @credSsh "cloudgrange@$VmIp" 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt') -join '').Trim()
+            if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
+        }
+        $realmAdminPassword = ((& ssh.exe @credSsh "cloudgrange@$VmIp" "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2") -join '').Trim()
+    }
+
+    # Clean up the ephemeral SSH key pair after successful install, unless an appliance build
+    # needs it to generalize the VM (-KeepInstallerSshKey, AB#8129).
+    if ($KeepInstallerSshKey -and -not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
+        Write-Host "  Installer SSH key kept for appliance build: $sshKeyPath" -ForegroundColor Yellow
+        Write-Host "  Build-CloudGrangeAppliance.ps1 removes its authorized_keys entry; delete this key afterwards." -ForegroundColor Yellow
+    } elseif (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
         Remove-Item -LiteralPath $sshKeyPath, "$sshKeyPath.pub" -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $sshKeyDir -Force -Recurse -ErrorAction SilentlyContinue
     }
@@ -298,8 +349,20 @@ function Invoke-CloudGrangeInstall {
         Write-Host "  First-run setup required. Navigate to:" -ForegroundColor Yellow
         Write-Host "    $portalBase/setup" -ForegroundColor White
         Write-Host "  Complete the setup wizard to configure your platform name, timezone, and admin account." -ForegroundColor Gray
+        if ($setupToken) {
+            Write-Host "  One-use setup token (required by POST /api/v1/setup, header X-CloudGrange-Setup-Token):" -ForegroundColor Yellow
+            Write-Host "    $setupToken" -ForegroundColor White
+        } else {
+            Write-Host "  Setup token: read it on the VM with" -ForegroundColor Yellow
+            Write-Host "    sudo docker compose -f /opt/cloudgrange/docker-compose.yml exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt" -ForegroundColor White
+        }
+        Write-Host "  Keep it secret: whoever presents it first completes setup. It is deleted once setup succeeds." -ForegroundColor Yellow
     } else {
         Write-Host "  Sign in at: $portalBase/login" -ForegroundColor Cyan
+    }
+    if ($realmAdminPassword) {
+        Write-Host "  Identity administrator: admin@cloudgrange.local" -ForegroundColor Cyan
+        Write-Host "    Temporary password (must be changed at first sign-in): $realmAdminPassword" -ForegroundColor White
     }
     Write-Host ""
 }
