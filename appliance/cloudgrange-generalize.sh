@@ -56,6 +56,14 @@ if [ -f .env ]; then shred -u .env; fi
 printf 'CLOUDGRANGE_VERSION=%s\n' "${VERSION:-latest}" > .env.appliance
 chmod 644 .env.appliance
 
+echo "[generalize] /opt/cloudgrange root-owned (root services execute its scripts and compose file)"
+chown -R root:root "$COMPOSE_DIR"
+chmod -R go-w "$COMPOSE_DIR"
+if [ -n "$(find "$COMPOSE_DIR" \( ! -user root -o -perm /022 \) -print -quit)" ]; then
+    echo "[generalize] ERROR: $COMPOSE_DIR still has non-root-owned or group/world-writable entries" >&2
+    exit 1
+fi
+
 echo "[generalize] installing first-boot re-keying"
 install -m 0755 "$STAGE_DIR/cloudgrange-firstboot.sh" /usr/local/sbin/cloudgrange-firstboot.sh
 install -m 0644 "$STAGE_DIR/cloudgrange-firstboot.service" /etc/systemd/system/cloudgrange-firstboot.service
@@ -75,9 +83,13 @@ printf '[Service]\nUMask=0077\n' > /etc/systemd/system/hv-kvp-daemon.service.d/1
 systemctl daemon-reload
 systemctl enable cloudgrange-operator-access.service
 systemctl enable hv-kvp-daemon.service 2>/dev/null || { echo "[generalize] ERROR: hv-kvp-daemon (linux-cloud-tools) is not installed" >&2; exit 1; }
-# No KVP values, console banner or "done" marker from the build VM may ship.
+# The shipped image must carry the drop-in and systemd must apply it; refuse to build otherwise.
+grep -qx 'UMask=0077' /etc/systemd/system/hv-kvp-daemon.service.d/10-cloudgrange-umask.conf || { echo "[generalize] ERROR: hv-kvp-daemon UMask drop-in missing" >&2; exit 1; }
+[ "$(systemctl show -p UMask --value hv-kvp-daemon.service)" = "0077" ] || { echo "[generalize] ERROR: hv-kvp-daemon does not run with UMask=0077" >&2; exit 1; }
+# No KVP values, console banner or operator-access state from the build VM may ship.
 systemctl stop cloudgrange-operator-access.service hv-kvp-daemon.service 2>/dev/null || true
-rm -f /var/lib/hyperv/.kvp_pool_* /etc/issue.d/90-cloudgrange.issue /etc/cloudgrange/operator-access-cleared
+rm -f /var/lib/hyperv/.kvp_pool_* /etc/issue.d/90-cloudgrange.issue /etc/cloudgrange/operator-access-cleared \
+    /etc/cloudgrange/operator-access-stale /etc/cloudgrange/operator-access-rotations /etc/cloudgrange/operator-access-window-start
 rm -rf /run/cloudgrange-operator
 
 echo "[generalize] networking -> DHCP"

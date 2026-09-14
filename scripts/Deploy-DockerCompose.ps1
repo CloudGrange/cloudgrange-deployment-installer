@@ -73,6 +73,10 @@ fi
 grep -q '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' .env || echo "CLOUDGRANGE_REALM_ADMIN_PASSWORD=$realmAdminPassword" >> .env
 sed -i '/^CLOUDGRANGE_VERSION=/d' .env && echo "CLOUDGRANGE_VERSION=$Version" >> .env
 chmod 600 .env
+# AB#8129: root services (systemd units, the realm-admin bootstrap) execute files from here, so only root may
+# change them; the cloudgrange account needs no write access at runtime.
+chown -R root:root $composeDir
+chmod -R go-w $composeDir
 $pullOrLoad
 install -m 0644 $composeDir/systemd/cloudgrange.service /etc/systemd/system/cloudgrange.service
 systemctl daemon-reload
@@ -146,19 +150,23 @@ exit 0
         $sshOpts = @('-i', $SshKeyPath, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR')
         $sshTarget = "cloudgrange@$VmIp"
 
-        # Create the compose directory on the guest.
-        & ssh.exe @sshOpts $sshTarget "sudo mkdir -p $composeDir && sudo chown cloudgrange:cloudgrange $composeDir"
+        # AB#8129: /opt/cloudgrange stays root-owned (root services execute its scripts and compose file), so the
+        # unprivileged 'cloudgrange' user uploads into a staging directory and root copies the files into place.
+        $uploadDir = '/var/tmp/cloudgrange-compose-upload'
+        & ssh.exe @sshOpts $sshTarget "rm -rf $uploadDir && mkdir -p $uploadDir && sudo mkdir -p $composeDir"
 
         # Copy each compose file via scp.
         $composeFiles = Get-ChildItem -Path $composeSrc -Recurse -File
         foreach ($f in $composeFiles) {
             $rel = $f.FullName.Substring($composeSrc.Length).TrimStart('\', '/')
-            $destDir = "$composeDir/$(($rel | Split-Path -Parent) -replace '\\','/')".TrimEnd('/')
-            if ($destDir -ne $composeDir) {
+            $destDir = "$uploadDir/$(($rel | Split-Path -Parent) -replace '\\','/')".TrimEnd('/')
+            if ($destDir -ne $uploadDir) {
                 & ssh.exe @sshOpts $sshTarget "mkdir -p $destDir"
             }
-            & scp.exe @sshOpts $f.FullName "${sshTarget}:${composeDir}/$($rel -replace '\\','/')"
+            & scp.exe @sshOpts $f.FullName "${sshTarget}:${uploadDir}/$($rel -replace '\\','/')"
         }
+        & ssh.exe @sshOpts $sshTarget "sudo cp -r $uploadDir/. $composeDir/ && rm -rf $uploadDir && sudo chown -R root:root $composeDir && sudo chmod -R go-w $composeDir"
+        if ($LASTEXITCODE -ne 0) { Write-Error "Installing the compose files into $composeDir failed (exit $LASTEXITCODE)." }
 
         # AB#1852: upload bundled image tar before deploy (bundled/offline mode)
         if (-not [string]::IsNullOrEmpty($BundledImagesPath) -and (Test-Path $BundledImagesPath)) {

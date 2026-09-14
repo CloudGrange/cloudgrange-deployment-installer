@@ -42,9 +42,13 @@ jobs:
 
       - name: Compose hardening gate (AB#8129)
         run: |
-          # cap_drop ALL, no-new-privileges and a healthcheck on every service; no privileged, devices, host
-          # namespaces or docker.sock; read-only roots except the allowlist; host ports only nginx 80/443.
+          # Raw key allowlist (no include/extends/hooks/secrets/configs, no host binds or driver_opts volumes),
+          # then cap_drop ALL, no-new-privileges and a healthcheck on every service; read-only roots except the
+          # allowlist; host ports only nginx 80/443/8443. The gate tests FAIL (not skip) without Docker/PyYAML/root.
+          sudo apt-get install -y --no-install-recommends python3-yaml
+          test -z "${CLOUDGRANGE_TEST_ALLOW_SKIP:-}"
           python3 scripts/Test-ComposeHardening.py compose
+          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_install_scripts.py'
           python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_kvp_writer.py'
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_operator_access.py'

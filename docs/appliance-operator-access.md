@@ -57,11 +57,14 @@ Or open the VM console, where the login banner shows the setup token and the tem
 
 ## While setup is pending: re-publication and rotation
 
-- **New token.** If the API issues a new setup token (the API's token lasts 24 hours and a new one is issued at the next API start), the service publishes the new token to KVP and the banner within one poll (15 seconds).
-- **72-hour window.** If setup has not completed within 72 hours of first publication, the service rotates both credentials and publishes them again; `Import-CloudGrangeAppliance.ps1` or the KVP query shows the current values.
-  - It restarts the API once the setup token has expired, so the API issues a new one.
-  - It resets the identity administrator's password to a new random temporary value, but only while that password is still the temporary one. A password the operator already chose is never overwritten; the temporary password is then just removed from KVP and the banner.
-- **Settings.** Override the window with `CLOUDGRANGE_SETUP_WINDOW_SECONDS` in a drop-in for `cloudgrange-operator-access.service`. The window start is kept in `/etc/cloudgrange/operator-access-window-start`, so it survives reboots.
+- **No expired token is ever published.** The API's setup token lasts 24 hours, and the API issues a new one at its next start. Before every publication (and on every 15-second poll) the service checks the token's age. Once it has expired, the service restarts the API first, at most once an hour, and publishes the new token. If no fresh token is available, the token is withdrawn from KVP and the banner (which then says it is being re-issued) until one is.
+- **New token.** Any new token the API issues is published to KVP and the banner within one poll.
+- **72-hour window.** Every 72 hours without setup, the service resets the identity administrator's password to a new random temporary value and publishes it. This only happens while that password is still the temporary one (`UPDATE_PASSWORD` required). A password the operator already chose is never overwritten; the temporary password is then just removed from KVP and the banner.
+- **Ceiling: publication stops.** After 2 rotations (9 days without setup), the service withdraws the token, the temporary password and the SSH key from KVP and the banner, sets `CloudGrange.State` to `setup-stale`, and writes `/etc/cloudgrange/operator-access-stale`. Nothing is published again, also after reboots, until an administrator re-arms it.
+  - Over SSH with the operator key saved at import: `sudo rm /etc/cloudgrange/operator-access-stale /etc/cloudgrange/operator-access-rotations /etc/cloudgrange/operator-access-window-start && sudo systemctl start cloudgrange-operator-access`.
+  - Without the key, recover through the Hyper-V host (see *Lost SSH key*).
+- **Settings.** In a drop-in for `cloudgrange-operator-access.service`: `CLOUDGRANGE_SETUP_WINDOW_SECONDS` (default 259200), `CLOUDGRANGE_MAX_ROTATIONS` (default 2), `CLOUDGRANGE_TOKEN_MAX_AGE_SECONDS` (default 86400), `CLOUDGRANGE_TOKEN_RESTART_BACKOFF_SECONDS` (default 3600). The window start and rotation count are kept under `/etc/cloudgrange`, so they survive reboots.
+- **Keycloak session.** Rotation and the realm bootstrap log in to Keycloak's master realm with `kcadm`. Its session file is deleted from the Keycloak container right after use, and also when the script fails.
 
 ## After setup completes
 

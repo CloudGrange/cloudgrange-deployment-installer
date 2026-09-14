@@ -51,8 +51,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # PyYAML for the raw compose allowlist. The gate tests FAIL (not skip) if Docker, PyYAML or root is
+          # missing; CLOUDGRANGE_TEST_ALLOW_SKIP must never be set here.
+          sudo apt-get install -y --no-install-recommends python3-yaml
+          test -z "${CLOUDGRANGE_TEST_ALLOW_SKIP:-}"
           # Compose hardening and image-pin gates (planted regressions in test_compose_gates.py).
           python3 scripts/Test-ComposeHardening.py compose
+          sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_install_scripts.py'
           python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
           # KVP writer and operator-access cleanup run as root (the pool must be root-owned).
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_kvp_writer.py'
