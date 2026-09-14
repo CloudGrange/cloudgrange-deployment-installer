@@ -27,7 +27,9 @@ if [ -z "$REALM_ADMIN_PASSWORD" ] || [ -z "$KC_CLI_USER" ] || [ -z "$KC_CLI_PASS
 fi
 export KC_CLI_PASSWORD
 
-kc() { docker compose --env-file .env exec -T -e KC_CLI_PASSWORD keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+# --config in /tmp (a tmpfs): Keycloak runs as a dedicated uid whose home (/) is not writable, so kcadm's
+# default ~/.keycloak/kcadm.config cannot be created.
+kc() { docker compose --env-file .env exec -T -e KC_CLI_PASSWORD keycloak /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm-cloudgrange.config; }
 
 echo "[realm-admin] waiting for Keycloak and the '$REALM' realm"
 for _ in $(seq 1 90); do

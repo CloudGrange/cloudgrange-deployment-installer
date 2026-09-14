@@ -42,6 +42,7 @@ param(
     [int]$PrefixLength = 24,
     [ValidatePattern('^$|^(\d{1,3}\.){3}\d{1,3}$')]
     [string]$Gateway = '',
+    [ValidatePattern('^(\d{1,3}\.){3}\d{1,3}$')]
     [string[]]$DnsServers = @(),
 
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]{0,62}$')]

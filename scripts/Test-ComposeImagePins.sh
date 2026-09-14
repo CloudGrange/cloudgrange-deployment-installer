@@ -9,7 +9,16 @@ set -euo pipefail
 COMPOSE_DIR=${1:?usage: Test-ComposeImagePins.sh <compose-dir>}
 # Placeholder for the one required interpolation (Keycloak hostname); it does not affect image names.
 export CLOUDGRANGE_HOSTNAME=${CLOUDGRANGE_HOSTNAME:-pin-gate.invalid}
-images=$( { docker compose -f "$COMPOSE_DIR/docker-compose.yml" config --images 2> >(grep -v 'level=warning' >&2); grep -vE '^\s*(#|$)' "$COMPOSE_DIR/helper-images.txt"; } | sort -u)
+# Render separately and fail closed: an invalid compose file must not pass with only the helper image checked.
+config_err=$(mktemp)
+trap 'rm -f "$config_err"' EXIT
+if ! compose_images=$(docker compose -f "$COMPOSE_DIR/docker-compose.yml" config --images 2>"$config_err"); then
+    echo "PIN-GATE FAIL: docker compose config failed for $COMPOSE_DIR/docker-compose.yml:" >&2
+    grep -v 'level=warning' "$config_err" >&2 || true
+    exit 1
+fi
+[ -n "$compose_images" ] || { echo "PIN-GATE FAIL: docker compose config resolved no images" >&2; exit 1; }
+images=$( { printf '%s\n' "$compose_images"; grep -vE '^\s*(#|$)' "$COMPOSE_DIR/helper-images.txt"; } | sort -u)
 [ -n "$images" ] || { echo "PIN-GATE FAIL: no images resolved" >&2; exit 1; }
 bad=0
 while IFS= read -r image; do

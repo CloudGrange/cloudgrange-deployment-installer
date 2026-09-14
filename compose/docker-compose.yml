@@ -233,7 +233,10 @@ services:
     <<: *hardening
     command: start --import-realm
     restart: always
-    # Writable root: `start` re-augments the server into /opt/keycloak/lib on first start. Runs as uid 1000.
+    # Writable root: `start` re-augments the server into /opt/keycloak/lib on first start.
+    # Dedicated uid, not the image's 1000: uid 1000 is the VM's passwordless-sudo account, so a container
+    # escape must not land there. Group 0 keeps write access to the group-writable /opt/keycloak tree.
+    user: "10002:0"
     tmpfs:
       - /tmp
     environment:

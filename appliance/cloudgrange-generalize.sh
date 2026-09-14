@@ -69,6 +69,9 @@ install -d -m 0755 /usr/local/lib/cloudgrange
 install -m 0755 "$STAGE_DIR/cloudgrange-kvp.py" /usr/local/lib/cloudgrange/cloudgrange-kvp.py
 install -m 0755 "$STAGE_DIR/cloudgrange-operator-access.sh" /usr/local/sbin/cloudgrange-operator-access.sh
 install -m 0644 "$STAGE_DIR/cloudgrange-operator-access.service" /etc/systemd/system/cloudgrange-operator-access.service
+# KVP pools are root-only inside the guest (they hold setup credentials until setup completes).
+install -d -m 0755 /etc/systemd/system/hv-kvp-daemon.service.d
+printf '[Service]\nUMask=0077\n' > /etc/systemd/system/hv-kvp-daemon.service.d/10-cloudgrange-umask.conf
 systemctl daemon-reload
 systemctl enable cloudgrange-operator-access.service
 systemctl enable hv-kvp-daemon.service 2>/dev/null || { echo "[generalize] ERROR: hv-kvp-daemon (linux-cloud-tools) is not installed" >&2; exit 1; }

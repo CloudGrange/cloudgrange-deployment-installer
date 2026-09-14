@@ -35,6 +35,12 @@ cat /run/cloudgrange-operator/operator_ed25519.pub >> /home/cloudgrange/.ssh/aut
 chown cloudgrange:cloudgrange /home/cloudgrange/.ssh/authorized_keys
 chmod 600 /home/cloudgrange/.ssh/authorized_keys
 rm -f /run/cloudgrange-operator/operator_ed25519.pub
+# The KVP pools hold the setup credentials until setup completes: root-only inside the guest. hv_kvp_daemon
+# creates them 0755/0644 under the default umask, so run it with UMask=0077 and fix any existing files.
+install -d -m 0755 /etc/systemd/system/hv-kvp-daemon.service.d
+printf '[Service]\nUMask=0077\n' > /etc/systemd/system/hv-kvp-daemon.service.d/10-cloudgrange-umask.conf
+systemctl daemon-reload
+if [ -d /var/lib/hyperv ]; then chmod 0700 /var/lib/hyperv; find /var/lib/hyperv -maxdepth 1 -name '.kvp_pool_*' -type f -exec chmod 0600 {} +; fi
 systemctl enable --now hv-kvp-daemon.service 2>/dev/null || echo "[firstboot] WARNING: hv-kvp-daemon is not available; use the local console banner"
 
 echo "[firstboot] waiting for an IPv4 address"

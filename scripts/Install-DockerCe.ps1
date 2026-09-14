@@ -86,6 +86,12 @@ systemctl start docker
 # package was installed, so replay its add event before starting the daemon.
 udevadm trigger --action=add --subsystem-match=misc 2>/dev/null || true
 udevadm settle 2>/dev/null || true
+# The KVP pools hold appliance setup credentials until setup completes, so they must be root-only inside the
+# guest. hv_kvp_daemon creates /var/lib/hyperv 0755 and the pool files 0644 under the default umask.
+install -d -m 0755 /etc/systemd/system/hv-kvp-daemon.service.d
+printf '[Service]\nUMask=0077\n' > /etc/systemd/system/hv-kvp-daemon.service.d/10-cloudgrange-umask.conf
+systemctl daemon-reload
+if [ -d /var/lib/hyperv ]; then chmod 0700 /var/lib/hyperv; find /var/lib/hyperv -maxdepth 1 -name '.kvp_pool_*' -type f -exec chmod 0600 {} +; fi
 systemctl enable hv-kvp-daemon.service 2>/dev/null || echo "WARNING: hv-kvp-daemon.service is not available"
 systemctl restart hv-kvp-daemon.service 2>/dev/null || echo "WARNING: hv-kvp-daemon.service did not start"
 
