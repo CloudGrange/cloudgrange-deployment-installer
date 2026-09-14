@@ -195,6 +195,38 @@ class ComposeGateTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("PIN-GATE FAIL", r.stderr)
 
+    def stamp_first_party(self, text):
+        # What Set-FirstPartyImagePins.sh does at release time, with a placeholder digest (no pull needed).
+        for svc in ("api", "portal", "relay"):
+            old = "image: ghcr.io/cloudgrange/cloudgrange-%s:${CLOUDGRANGE_VERSION:-latest}\n" % svc
+            self.assertIn(old, text)
+            text = text.replace(old, "image: ghcr.io/cloudgrange/cloudgrange-%s:1.2.3@sha256:%s\n" % (svc, "a" * 64), 1)
+        return text
+
+    def pin_gate(self):
+        return subprocess.run(["bash", PINS, self.compose_dir], capture_output=True, text=True)
+
+    def test_pin_gate_passes_a_release_stamped_compose_file(self):
+        self.plant(self.stamp_first_party)
+        r = self.pin_gate()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("nginx:1.31.5-alpine@sha256:", r.stdout)
+
+    def test_pin_gate_fails_on_a_moving_tag(self):
+        # S01 planted regression: a vendor image on a moving tag (no digest) must fail the release gate.
+        nginx_line = re.search(r"(?m)^    image: nginx:1\.31\.5-alpine@sha256:[0-9a-f]{64}\n", self.original).group(0)
+        self.plant(lambda text: self.stamp_first_party(text).replace(nginx_line, "    image: nginx:latest\n", 1))
+        r = self.pin_gate()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("PIN-GATE FAIL: not digest-pinned: nginx:latest", r.stderr)
+        self.assertNotIn("nginx:latest", r.stdout)
+
+    def test_pin_gate_fails_on_an_unstamped_first_party_image(self):
+        # The committed compose uses ${CLOUDGRANGE_VERSION:-latest}; a bundle must never ship it unstamped.
+        r = self.pin_gate()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("PIN-GATE FAIL: not digest-pinned: ghcr.io/cloudgrange/cloudgrange-api:latest", r.stderr)
+
     def test_nginx_configuration_is_valid_and_publishes_only_agent_routes_on_8443(self):
         conf = os.path.join(REPO, "compose", "nginx", "nginx.conf")
         with open(conf) as f:
