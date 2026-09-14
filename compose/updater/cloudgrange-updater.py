@@ -399,6 +399,9 @@ class Updater:
             except UpdateError as rerr:
                 job.update(state="failed", message="%s. Automatic rollback also failed (%s): %s" % (failure, rerr.step, rerr))
                 return
+            # The restored backup is the running release again: it is not a rollback target any more.
+            self.state["backups"] = [b for b in self.state.get("backups") or [] if b.get("path") != backup["path"]]
+            shutil.rmtree(backup["path"], ignore_errors=True)
             job.update(state="rolled-back", message="%s. Restored %s and its database." % (failure, backup["version"]))
             return
 

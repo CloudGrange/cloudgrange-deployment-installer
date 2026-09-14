@@ -226,6 +226,20 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(status["currentVersion"], OLD)
         calls = self.docker_calls()
         self.assertLess(calls.index("dropdb"), calls.index("pg_restore"))
+        self.assertIsNone(status["rollbackAvailable"], "the restored backup is the running release, not a rollback target")
+
+    def test_after_an_automatic_rollback_manual_rollback_goes_to_the_release_before(self):
+        self.apply(self.bundle(version=NEW))
+        self.assertEqual(self.run_updater()["currentVersion"], NEW)
+        open(os.path.join(self.fake, "unhealthy_3.0.0"), "w").close()
+        failed = self.apply(self.bundle(version="3.0.0"))
+        status = self.run_updater()
+        self.assertEqual(self.job(status, failed)["state"], "rolled-back")
+        self.assertEqual(status["rollbackAvailable"]["version"], OLD)
+        rid = self.request({"action": "rollback"})
+        status = self.run_updater()
+        self.assertEqual(self.job(status, rid)["state"], "succeeded")
+        self.assertEqual(self.env_version(), OLD)
 
     def test_zip_path_traversal_is_rejected(self):
         rid = self.apply(self.bundle(extra=[("../escaped.txt", b"x")]))
