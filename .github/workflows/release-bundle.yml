@@ -59,8 +59,9 @@ jobs:
       - name: Generate SHA-256 manifest
         run: |
           cd bundle
-          # Generate SHA256SUMS relative to the bundle root
-          find . -type f | sort | while read -r f; do
+          # Generate SHA256SUMS relative to the bundle root. Exclude the manifest itself: the
+          # redirect creates it before find runs, so it would list a hash of a partial file.
+          find . -type f ! -name SHA256SUMS | sort | while read -r f; do
             sha256sum "$f" | sed 's|  \./|  |'
           done > SHA256SUMS
           echo "SHA256SUMS generated:"
