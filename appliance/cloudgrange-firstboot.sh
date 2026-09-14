@@ -18,6 +18,19 @@ COMPOSE_DIR=/opt/cloudgrange
 exec >> /var/log/cloudgrange-firstboot.log 2>&1
 echo "[firstboot] start $(date -u +%FT%TZ)"
 
+echo "[firstboot] hostname"
+# Every imported copy gets its own name instead of the build VM's (cloudgrange-docker).
+NIC=$(ip -o link show | awk -F': ' '$2 !~ /^(lo|docker|br-|veth)/ {print $2; exit}')
+MAC=$(tr -d ':' < "/sys/class/net/${NIC%%@*}/address" 2>/dev/null || true)
+if [ ${#MAC} -ge 4 ]; then NEW_HOSTNAME="cloudgrange-${MAC: -4}"; else NEW_HOSTNAME="cloudgrange-$(openssl rand -hex 2)"; fi
+hostnamectl set-hostname "$NEW_HOSTNAME"
+if grep -q '^127\.0\.1\.1' /etc/hosts; then
+    sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $NEW_HOSTNAME/" /etc/hosts
+else
+    echo "127.0.1.1 $NEW_HOSTNAME" >> /etc/hosts
+fi
+echo "[firstboot] hostname: $NEW_HOSTNAME"
+
 echo "[firstboot] SSH host keys and machine-id"
 ssh-keygen -A
 if [ ! -s /etc/machine-id ] || grep -q uninitialized /etc/machine-id; then

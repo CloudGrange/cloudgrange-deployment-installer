@@ -48,6 +48,8 @@ dc() { docker compose --env-file .env "$@"; }
 api() { dc exec -T cloudgrange-api "$@"; }
 env_value() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }
 setup_complete() { api curl -sf http://localhost:8080/api/v1/setup/status 2>/dev/null | grep -q '"setupComplete":true'; }
+# Whether first-run setup asks for the one-use token. It does not by default (CLOUDGRANGE_REQUIRE_SETUP_TOKEN).
+token_required() { api curl -sf http://localhost:8080/api/v1/setup/status 2>/dev/null | grep -q '"setupTokenRequired":true'; }
 kvp_set() { printf '%s' "$2" | "$KVP" set "$1"; }
 read_token() {
     local t
@@ -69,10 +71,13 @@ wait_api() {
 
 LAST_API_RESTART=0
 FRESH_TOKEN=''
+TOKEN_REQUIRED=0
 # Sets FRESH_TOKEN to an unexpired token and returns 0, or clears it and returns 1. An expired or missing
 # token triggers one API restart (the API issues a new token at startup), at most once per backoff period.
 ensure_fresh_token() {
     local t age now
+    # No token is issued unless the platform requires one: never restart the API looking for it.
+    if [ "$TOKEN_REQUIRED" -ne 1 ]; then FRESH_TOKEN=''; return 1; fi
     t=$(read_token)
     age=$(token_age)
     if [ -n "$t" ] && [ "$age" -ge 0 ] && [ "$age" -lt "$TOKEN_MAX_AGE_SECONDS" ]; then FRESH_TOKEN=$t; return 0; fi
@@ -99,7 +104,7 @@ write_banner() {
         echo "    Setup wizard ............ https://$ADDRESS/setup"
         if [ -n "$TOKEN" ]; then
             echo "    One-use setup token ..... $TOKEN"
-        else
+        elif [ "$TOKEN_REQUIRED" -eq 1 ]; then
             echo "    One-use setup token ..... (being re-issued; check again in a few minutes)"
         fi
         if [ -n "$REALM_ADMIN_PASSWORD" ]; then
@@ -220,18 +225,29 @@ wait_api || true
 if setup_complete; then clear_access; exit 0; fi
 
 TOKEN=''
-for _ in $(seq 1 120); do
-    [ -n "$(read_token)" ] && break
-    sleep 5
-done
-if [ -z "$(read_token)" ]; then log "ERROR: the setup token is not available yet"; exit 1; fi
+if token_required; then TOKEN_REQUIRED=1; fi
+if [ "$TOKEN_REQUIRED" -eq 1 ]; then
+    for _ in $(seq 1 120); do
+        [ -n "$(read_token)" ] && break
+        sleep 5
+    done
+    if [ -z "$(read_token)" ]; then log "ERROR: the setup token is not available yet"; exit 1; fi
+else
+    log "the platform does not require a setup token; publishing the setup URL only"
+fi
 REALM_ADMIN_PASSWORD=$(env_value CLOUDGRANGE_REALM_ADMIN_PASSWORD)
 ADDRESS=$(env_value CLOUDGRANGE_HOSTNAME)
 
 mkdir -p "$STATE_DIR"
 [ -s "$WINDOW_FILE" ] || date +%s > "$WINDOW_FILE"
 [ -s "$ROTATIONS_FILE" ] || echo 0 > "$ROTATIONS_FILE"
-if ensure_fresh_token; then TOKEN=$FRESH_TOKEN; else TOKEN=''; log "no unexpired setup token yet; publishing without a token"; fi
+if [ "$TOKEN_REQUIRED" -ne 1 ]; then
+    TOKEN=''
+elif ensure_fresh_token; then
+    TOKEN=$FRESH_TOKEN
+else
+    TOKEN=''; log "no unexpired setup token yet; publishing without a token"
+fi
 publish
 log "published setup credentials to KVP and the console banner; waiting for setup to complete"
 
