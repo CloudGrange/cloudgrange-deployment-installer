@@ -14,10 +14,11 @@
 #   sudo ./Install-CloudGrange-Linux.sh --hostname cloudgrange.example.com [--version 2609.0.0]
 #
 # What this does NOT do: create a VM, touch Hyper-V, or require a Windows host at all.
-# What it DOES assume: Docker Engine + the Compose plugin are already installed
-# (see https://docs.docker.com/engine/install/ for your distro) — this script does not
-# install Docker itself, to avoid silently reconfiguring package repos on someone's
-# existing server.
+# Prerequisites (Docker Engine + Compose plugin, openssl, jq) are checked and installed
+# automatically if missing: Docker via the official https://get.docker.com convenience
+# script (auto-detects apt/dnf/yum), openssl/jq via whichever of apt-get/dnf/yum is
+# present. Review get.docker.com's script before running this on a server with other
+# workloads if you want full control over what it changes.
 
 set -euo pipefail
 
@@ -61,12 +62,38 @@ echo "  Compose directory  : $COMPOSE_DIR"
 echo "  Version            : $VERSION"
 echo ""
 
-# ── Step 1: prerequisites ───────────────────────────────────────────────────
+# ── Step 1: prerequisites (checked, and installed if missing) ──────────────
+# AB#9149: install Docker Engine via its official convenience script (handles
+# apt/dnf/yum distro detection itself and includes the Compose plugin), and
+# openssl/jq via whichever native package manager is present.
 echo "Checking prerequisites..."
-command -v docker >/dev/null 2>&1 || { echo "ERROR: docker is not installed. Install Docker Engine first: https://docs.docker.com/engine/install/" >&2; exit 1; }
-docker compose version >/dev/null 2>&1 || { echo "ERROR: the 'docker compose' plugin is not installed (docker-compose-plugin)." >&2; exit 1; }
-command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl is required and was not found." >&2; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required and was not found." >&2; exit 1; }
+
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+    echo "  Docker (and/or the Compose plugin) not found — installing via https://get.docker.com ..."
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable --now docker
+fi
+command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker install failed — docker still not found on PATH." >&2; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "ERROR: Docker installed but the 'docker compose' plugin is still missing." >&2; exit 1; }
+
+install_pkg() {
+    local pkg=$1
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y -qq "$pkg"
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y -q "$pkg"
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y -q "$pkg"
+    else
+        echo "ERROR: no supported package manager (apt-get/dnf/yum) found to install '$pkg'. Install it manually and re-run." >&2
+        exit 1
+    fi
+}
+
+command -v openssl >/dev/null 2>&1 || { echo "  openssl not found — installing..."; install_pkg openssl; }
+command -v jq >/dev/null 2>&1 || { echo "  jq not found — installing..."; install_pkg jq; }
+command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl install failed." >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq install failed." >&2; exit 1; }
 echo "  OK: docker, docker compose, openssl, jq all present."
 
 # ── Step 2: install the compose stack ───────────────────────────────────────
