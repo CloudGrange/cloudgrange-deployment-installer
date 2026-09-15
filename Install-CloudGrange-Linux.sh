@@ -145,25 +145,47 @@ docker volume inspect cloudgrange_nginx_certs >/dev/null 2>&1 && docker run --rm
         exit 0
     ' || true
 
-cat > "$CERT_DIR/openssl.cnf" <<OPENSSL_EOF
-[req]
-distinguished_name = req_dn
-x509_extensions    = v3_req
-prompt             = no
+# AB#9149 — the cert must cover the box's real routable IP too, not just 127.0.0.1,
+# otherwise browsing to https://<server-ip>/ fails certificate validation even though
+# https://<hostname>/ works. Detect every non-loopback IPv4 address on the host and add
+# each as a SAN entry, alongside the --hostname value itself in case it's an IP.
+mapfile -t HOST_IPS < <(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u)
 
-[req_dn]
-CN = $HOSTNAME_ARG
-
-[v3_req]
-subjectAltName = @alt_names
-keyUsage       = keyEncipherment, dataEncipherment
-extendedKeyUsage = serverAuth
-
-[alt_names]
-DNS.1 = $HOSTNAME_ARG
-DNS.2 = localhost
-IP.1  = 127.0.0.1
-OPENSSL_EOF
+{
+    echo "[req]"
+    echo "distinguished_name = req_dn"
+    echo "x509_extensions    = v3_req"
+    echo "prompt             = no"
+    echo ""
+    echo "[req_dn]"
+    echo "CN = $HOSTNAME_ARG"
+    echo ""
+    echo "[v3_req]"
+    echo "subjectAltName = @alt_names"
+    echo "keyUsage       = digitalSignature, keyEncipherment, dataEncipherment"
+    echo "extendedKeyUsage = serverAuth"
+    echo ""
+    echo "[alt_names]"
+    echo "DNS.1 = $HOSTNAME_ARG"
+    echo "DNS.2 = localhost"
+    ip_index=1
+    echo "IP.$ip_index = 127.0.0.1"
+    for ip in "${HOST_IPS[@]}"; do
+        ip_index=$((ip_index + 1))
+        echo "IP.$ip_index = $ip"
+    done
+    # If --hostname was itself passed as an IP (not a DNS name), make sure it's covered too.
+    if [[ "$HOSTNAME_ARG" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        already_present=false
+        for ip in "${HOST_IPS[@]}" "127.0.0.1"; do
+            [ "$ip" = "$HOSTNAME_ARG" ] && already_present=true
+        done
+        if [ "$already_present" = false ]; then
+            ip_index=$((ip_index + 1))
+            echo "IP.$ip_index = $HOSTNAME_ARG"
+        fi
+    fi
+} > "$CERT_DIR/openssl.cnf"
 
 openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
     -keyout "$CERT_DIR/cloudgrange.key" \

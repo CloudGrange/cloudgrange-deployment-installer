@@ -92,7 +92,7 @@ CN = $Hostname
 
 [v3_req]
 subjectAltName = @alt_names
-keyUsage       = keyEncipherment, dataEncipherment
+keyUsage       = digitalSignature, keyEncipherment, dataEncipherment
 extendedKeyUsage = serverAuth
 
 [alt_names]
