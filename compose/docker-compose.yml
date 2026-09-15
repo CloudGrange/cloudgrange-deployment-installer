@@ -72,9 +72,9 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__Default=${CLOUDGRANGE_DB_CONNECTION:-Host=postgres;Port=5432;Database=${POSTGRES_DB:-cloudgrange};Username=${POSTGRES_USER:-cloudgrange};Password=${POSTGRES_PASSWORD}}
       - OpenTelemetry__Endpoint=${CLOUDGRANGE_OTLP_ENDPOINT:-http://otel-collector:4317}
-      # AB#2348 / BUG-4: default portal URL so the API health monitor can probe portal:80
+      # AB#2348 / BUG-4: default portal URL so the API health monitor can probe portal:8080
       # over the internal Docker network. Override CLOUDGRANGE_PORTAL_URL only if the portal runs out-of-stack.
-      - CLOUDGRANGE_PORTAL_URL=${CLOUDGRANGE_PORTAL_URL:-http://cloudgrange-portal:80}
+      - CLOUDGRANGE_PORTAL_URL=${CLOUDGRANGE_PORTAL_URL:-http://cloudgrange-portal:8080}
       # AB#8129 / ADR-008: local Keycloak. Authority uses the in-network service name.
       - Keycloak__Authority=${CLOUDGRANGE_KEYCLOAK_AUTHORITY:-http://keycloak:8080/realms/cloudgrange}
       - Keycloak__ClientId=${CLOUDGRANGE_KEYCLOAK_CLIENT_ID:-cloudgrange-api}
@@ -109,18 +109,13 @@ services:
     image: ghcr.io/cloudgrange/cloudgrange-portal:${CLOUDGRANGE_VERSION:-latest}
     <<: *hardening
     restart: always
-    # Writable root: the entrypoint injects runtime config into index.html and the nginx conf at start.
-    # nginx master (root) binds :80 and switches its workers to the nginx user.
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-      - NET_BIND_SERVICE
+    # AB#9172: image runs as the unprivileged nginx user (nginxinc/nginx-unprivileged) on :8080 —
+    # no root capabilities needed to bind or to rewrite index.html/the nginx conf at start.
     tmpfs:
       - /tmp
-    # AB#1593: port 443 is handled by the nginx TLS terminator; port 80 is internal only.
+    # AB#1593: port 443 is handled by the nginx TLS terminator; port 8080 is internal only.
     expose:
-      - "80"
+      - "8080"
     environment:
       # Required by the portal entrypoint: nginx reverse-proxies /api/, /hubs/, /health/ here.
       - CLOUDGRANGE_API_UPSTREAM=http://cloudgrange-api:8080
@@ -130,7 +125,7 @@ services:
       cloudgrange-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "-o", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "curl", "-sf", "-o", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 15s
       timeout: 5s
       retries: 5
