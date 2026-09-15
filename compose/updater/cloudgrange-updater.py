@@ -451,7 +451,12 @@ class Updater:
         h = hashlib.sha256()
         total = 0
         try:
-            with urllib.request.urlopen(url, timeout=60) as resp, open(zpath, "wb") as dst:
+            # AB#9149: Cloudflare's bot protection in front of the R2 download host blocks the
+            # default urllib User-Agent (Python-urllib/x.y) with a 403 — confirmed live on a real
+            # appliance update attempt (curl to the same URL succeeded; the bare urlopen() call
+            # did not). A real, identifiable UA is required.
+            reqobj = urllib.request.Request(url, headers={"User-Agent": "CloudGrange-Updater/1.0"})
+            with urllib.request.urlopen(reqobj, timeout=60) as resp, open(zpath, "wb") as dst:
                 for block in iter(lambda: resp.read(CHUNK), b""):
                     total += len(block)
                     if total > MAX_BUNDLE_BYTES:
