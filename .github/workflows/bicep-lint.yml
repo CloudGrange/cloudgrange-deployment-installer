@@ -23,29 +23,34 @@ permissions:
 jobs:
   bicep-lint:
     name: Bicep lint and CAF naming
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hcs]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Azure CLI + Bicep
+      # The hcs self-hosted runner has no Azure CLI: use the standalone Bicep CLI, pinned.
+      - name: Install Bicep CLI
+        env:
+          BICEP_VERSION: v0.47.16
         run: |
-          # az bicep install ensures the latest stable Bicep is available
-          az bicep install
-          az bicep version
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/bicep" "https://github.com/Azure/bicep/releases/download/${BICEP_VERSION}/bicep-linux-x64"
+          chmod +x "$RUNNER_TEMP/bicep"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bicep" --version
 
       # Step 1: az bicep build — must exit 0 (per ADR-048 and standing feedback rule)
       - name: Bicep lint and build
-        run: az bicep build --stdout --file iac/main.bicep
+        run: bicep build iac/main.bicep --stdout
 
       # Also lint sub-modules individually so errors in them surface with accurate paths
       - name: Bicep lint — resources.bicep
-        run: az bicep build --stdout --file iac/resources.bicep
+        run: bicep build iac/resources.bicep --stdout
 
       - name: Bicep lint — monitoring.bicep
-        run: az bicep build --stdout --file iac/monitoring.bicep
+        run: bicep build iac/monitoring.bicep --stdout
 
       - name: Bicep lint — pg-aad-admin.bicep
-        run: az bicep build --stdout --file iac/pg-aad-admin.bicep
+        run: bicep build iac/pg-aad-admin.bicep --stdout
 
       # Step 2: CAF naming check
       # Reads main.parameters.example.json and verifies that any non-empty name

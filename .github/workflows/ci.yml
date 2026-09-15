@@ -9,7 +9,7 @@ permissions:
 jobs:
   qualify:
     # Established CloudGrange fallback pending F01 runner admission.
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64, hcs]
     timeout-minutes: 30
     defaults:
       run:

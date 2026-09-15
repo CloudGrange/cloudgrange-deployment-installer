@@ -49,7 +49,7 @@ env:
 jobs:
   fresh-onprem:
     name: Provision VM + install + smoke + cleanup
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hcs]
     steps:
       - uses: actions/checkout@v4
 
