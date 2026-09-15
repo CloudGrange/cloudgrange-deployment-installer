@@ -23,7 +23,7 @@ permissions:
 jobs:
   bicep-lint:
     name: Bicep lint and CAF naming
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hcs]
     steps:
       - uses: actions/checkout@v4
 

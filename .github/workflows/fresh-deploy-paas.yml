@@ -39,7 +39,7 @@ env:
 jobs:
   fresh-deploy:
     name: Provision + smoke + cleanup
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hcs]
     steps:
       - uses: actions/checkout@v4
 
