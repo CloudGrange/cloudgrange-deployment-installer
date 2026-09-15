@@ -48,8 +48,14 @@ fi
 build_image() { # <service> <repository>
   local svc=$1 repo=$2 ctx="$WORK/ctx-$1"
   mkdir -p "$ctx"
-  if [ -n "$(git_ -C "$ROOT/$repo" status --porcelain)" ]; then echo "WARNING: $repo has uncommitted changes; they are included" >&2; fi
-  tar --exclude=.git --exclude='*/bin' --exclude='*/obj' --exclude=node_modules --exclude=dist -C "$ROOT/$repo" -cf - . | tar -xf - -C "$ctx"
+  if [ -n "$(git_ -c core.autocrlf=true -C "$ROOT/$repo" status --porcelain)" ]; then echo "WARNING: $repo has uncommitted changes; they are NOT included" >&2; fi
+  # Build from committed content (git archive), never the working tree: a Windows checkout has CRLF line endings, and
+  # a CRLF entrypoint.sh makes the container fail to start ("exec /docker/entrypoint.sh: no such file or directory").
+  git_ -C "$ROOT/$repo" archive --format=tar HEAD | tar -xf - -C "$ctx"
+  if grep -rlI $'\r$' "$ctx" --include='*.sh' --include=Dockerfile --include='*.conf' | head -5 | grep .; then
+    echo "image $svc: files above have CRLF line endings in the repository" >&2
+    exit 1
+  fi
   if (cd "$ctx" && docker buildx build --progress=plain --load "${secret[@]}" -t "ghcr.io/cloudgrange/cloudgrange-$svc:$VERSION" .) > "$OUT/logs/image-$svc.log" 2>&1; then
     echo "image $svc $(docker image inspect -f '{{.Id}}' "ghcr.io/cloudgrange/cloudgrange-$svc:$VERSION" | cut -c1-19) from $repo@$(git_ -C "$ROOT/$repo" rev-parse --short HEAD)"
   else
@@ -64,9 +70,25 @@ build_image portal cloudgrange-portal
 build_image relay cloudgrange-runtime-relay
 rm -f "$WORK/nuget_token"
 
+# Smoke test: the portal must start and answer its compose healthcheck under the compose hardening options.
+docker rm -f cg-release-smoke >/dev/null 2>&1 || true
+docker run -d --name cg-release-smoke --security-opt no-new-privileges:true --cap-drop ALL \
+  --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add NET_BIND_SERVICE --tmpfs /tmp \
+  --add-host cloudgrange-api:127.0.0.1 -e CLOUDGRANGE_API_UPSTREAM=http://cloudgrange-api:8080 -e CLOUDGRANGE_API_URL= \
+  "ghcr.io/cloudgrange/cloudgrange-portal:$VERSION" >/dev/null
+ok=""
+for _ in $(seq 1 20); do
+  if docker exec cg-release-smoke curl -sf -o /dev/null http://127.0.0.1/ 2>/dev/null; then ok=1; break; fi
+  sleep 1
+done
+if [ -z "$ok" ]; then docker logs cg-release-smoke 2>&1 | tail -15 >&2; docker rm -f cg-release-smoke >/dev/null; echo "portal smoke test FAILED" >&2; exit 1; fi
+docker rm -f cg-release-smoke >/dev/null
+echo "portal smoke test passed"
+
 B="$WORK/bundle"
-mkdir -p "$B/docs" "$B/docker-debs"
-cd "$INSTALLER"
+mkdir -p "$B/docs" "$B/docker-debs" "$WORK/installer"
+git_ -C "$INSTALLER" archive --format=tar HEAD | tar -xf - -C "$WORK/installer"
+cd "$WORK/installer"
 cp Install-CloudGrange.ps1 verify-bundle.ps1 New-SelfSignedCert.ps1 Uninstall-CloudGrange.ps1 Update-CloudGrange.ps1 "$B/"
 cp -r scripts/ "$B/scripts/"
 cp -r compose/ "$B/compose/"
@@ -75,9 +97,9 @@ rm -f "$B/compose/.env"
 find "$B" -type f \( -name '*.sh' -o -name '*.py' -o -name '*.service' -o -name '*.yml' -o -name '*.conf' \) -exec sed -i 's/\r$//' {} +
 sha256sum Install-CloudGrange.ps1 | awk '{print toupper($1)"  Install-CloudGrange.ps1"}' > "$B/cloudgrange-installer.sha256"
 
-bash "$INSTALLER/scripts/Set-FirstPartyImagePins.sh" "$B/compose/docker-compose.yml" "$VERSION"
-bash "$INSTALLER/scripts/Test-ComposeImagePins.sh" "$B/compose" > "$WORK/images.txt"
-python3 "$INSTALLER/scripts/Test-ComposeHardening.py" "$B/compose" | tail -1
+bash "$WORK/installer/scripts/Set-FirstPartyImagePins.sh" "$B/compose/docker-compose.yml" "$VERSION"
+bash "$WORK/installer/scripts/Test-ComposeImagePins.sh" "$B/compose" > "$WORK/images.txt"
+python3 "$WORK/installer/scripts/Test-ComposeHardening.py" "$B/compose" | tail -1
 
 : > "$WORK/save.txt"
 while read -r img; do
