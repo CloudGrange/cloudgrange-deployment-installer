@@ -83,7 +83,9 @@ services:
       # AB#8129: in-app updates (Platform administration -> Updates).
       - CLOUDGRANGE_IMAGE_TAG=${CLOUDGRANGE_VERSION:-latest}
       - CLOUDGRANGE_UPDATES_DIR=/var/lib/cloudgrange/updates
-      - CLOUDGRANGE_UPDATE_CHANNEL_URL=${CLOUDGRANGE_UPDATE_CHANNEL_URL:-}
+      # Release announcements (new versions, security fixes) come from this channel; set it empty in .env to turn
+      # checking off (air-gapped installs update by uploading a release bundle).
+      - CLOUDGRANGE_UPDATE_CHANNEL_URL=${CLOUDGRANGE_UPDATE_CHANNEL_URL-https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json}
     volumes:
       # The API's master encryption key (secrets.key, used for the identity-provider secrets it stores) and
       # the one-use setup token. Not a PostgresEncryptedSecretsProvider (not implemented yet, story S-secrets).
