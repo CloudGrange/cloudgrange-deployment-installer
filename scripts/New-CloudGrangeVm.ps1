@@ -21,6 +21,12 @@ param(
     # powershell.exe -File to avoid argument-splitting on the space inside the key string.
     [string]$SshPublicKeyFile = '',
     [string]$SwitchName       = 'cloudgrange-internal',
+    # AB#9185 fix: was hardcoded to 'cloudgrange-docker' below regardless of caller, so a
+    # -Engine K3s install (Install-CloudGrange.ps1 passes Deploy-K3sHelm a VmName of
+    # 'cloudgrange-k3s') would still provision/replace a Hyper-V VM literally named
+    # cloudgrange-docker — silently colliding with (and on rerun, deleting) any existing
+    # Compose VM of that name. Found via real Hyper-V testing before it ever shipped.
+    [string]$VmName           = 'cloudgrange-docker',
     [switch]$SkipHostPortForward,
     [switch]$NoDefaultGateway
 )
@@ -41,6 +47,9 @@ function New-CloudGrangeVm {
         [string]$SshPublicKey = '',
         # AB#8129: an existing switch is used as-is (no host IP or NAT changes).
         [string]$SwitchName = 'cloudgrange-internal',
+        # AB#9185: caller-supplied VM name — see the script-level param comment above for why
+        # this can no longer be silently hardcoded.
+        [string]$VmName = 'cloudgrange-docker',
         # AB#8129: skip the host-wide inbound 443 firewall rule and netsh portproxy.
         [switch]$SkipHostPortForward,
         # AB#8129: air-gapped VM. No default route or public DNS in cloud-init network-config;
@@ -50,7 +59,7 @@ function New-CloudGrangeVm {
 
     $ErrorActionPreference = 'Stop'
 
-    $vmName     = 'cloudgrange-docker'
+    $vmName     = $VmName
     $switchName = $SwitchName
     # Gateway/host IP and NAT prefix derive from the VM IP (/24) instead of a fixed 192.168.100.x.
     $subnetBase = $VmIp -replace '\.\d+$', ''
@@ -279,7 +288,7 @@ echo "cloudgrange-runcmd-done $(date)" >> $LOG
 
     $userData = @"
 #cloud-config
-hostname: cloudgrange-docker
+hostname: $vmName
 manage_etc_hosts: true
 users:
   - name: cloudgrange
@@ -299,8 +308,8 @@ runcmd:
 
     # AB#8129: unique instance-id per provisioning so cloud-init per-instance state is never reused.
     $metaData = @"
-instance-id: cloudgrange-docker-$([guid]::NewGuid().ToString('N'))
-local-hostname: cloudgrange-docker
+instance-id: $vmName-$([guid]::NewGuid().ToString('N'))
+local-hostname: $vmName
 "@
 
     # network-config: separate file for the NoCloud datasource.
@@ -420,5 +429,5 @@ if ($MyInvocation.InvocationName -ne '.') {
     . "$PSScriptRoot\CloudGrange-Common.ps1"
     New-CloudGrangeVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
         -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath `
-        -SwitchName $SwitchName -SkipHostPortForward:$SkipHostPortForward -NoDefaultGateway:$NoDefaultGateway
+        -SwitchName $SwitchName -VmName $VmName -SkipHostPortForward:$SkipHostPortForward -NoDefaultGateway:$NoDefaultGateway
 }
