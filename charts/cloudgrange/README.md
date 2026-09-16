@@ -110,6 +110,42 @@ failure only, not data corruption or accidental in-app deletion. Do not promise 
 numbers without a real, measured recovery drill (AB#9193) — restoring an untested backup
 is not the same as having a working one.
 
+### Recovery runbook (AB#9193 — real drill results)
+
+A real recovery drill was run twice (fresh k3d cluster, MinIO standing in for the
+customer's S3 target): `helm uninstall` to simulate loss, `velero restore create
+--from-backup <name>`, confirmed reaching `phase: Completed` with all items restored,
+confirmed the restored Postgres data is genuinely intact (a real `psql` query against the
+restored database returned the correct row count both times, not just "the Restore object
+says Completed").
+
+**One real, reproducible gap found and its fix**: after the `Restore` reaches
+`Completed`, `cg-postgres-0` (single-node profile only — not the multi-node/CNPG path,
+which doesn't use Velero fs-backup for Postgres at all, see the "Postgres WAL-archiving"
+section above) hangs at `Init:0/1` — Velero's restore-wait init container can't read its
+own `.velero` completion marker (`permission denied`) under a non-root pod. The actual
+PVC data restore itself is unaffected and already complete by this point. Fix:
+
+```bash
+kubectl delete pod <release>-postgres-0
+```
+
+The StatefulSet recreates the pod without the one-time restore-wait injection, mounting
+the already-restored volume normally — comes up Ready within seconds. This is a known
+class of Velero fs-backup limitation with non-root workloads, not specific to this chart;
+`fsGroup` (the standard documented Velero fix) is set on the pod but did not resolve this
+specific symptom in real testing — kept anyway as correct volume ownership practice.
+
+**What this drill does and does not prove**: proves the whole mechanism — backup,
+storage-target upload, restore, and real data integrity — works end to end on a real
+cluster with a real (if disclosed as non-production) S3-compatible target. Does NOT
+prove: recovery into a genuinely separate fresh cluster (this drill restored into the
+same cluster after simulated loss, which validates the restore mechanism itself but not
+cross-cluster portability), a real customer S3-compatible target (MinIO/NAS/cloud
+bucket) instead of the in-cluster stand-in used here, or RTO/RPO numbers under real data
+volumes — do not promise specific figures to customers without measuring against a
+representative real dataset.
+
 ## Profiles
 
 ```
