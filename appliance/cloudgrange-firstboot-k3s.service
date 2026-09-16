@@ -1,0 +1,15 @@
+# AB#9186 — re-key an imported K3s/Helm CloudGrange appliance on its first boot.
+[Unit]
+Description=CloudGrange K3s/Helm appliance first-boot re-keying
+ConditionPathExists=/etc/cloudgrange/firstboot-pending
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cloudgrange-firstboot-k3s.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
