@@ -25,6 +25,16 @@ helm install cert-manager charts/vendor/cert-manager-v1.21.2.tgz \
 helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-single-node.yaml --wait
 ```
 
+**On `values-multi-node.yaml` (AB#9190)**: CloudNativePG (the HA Postgres operator) needs
+the same separate-release-first treatment, for the same CRD-validation reason:
+
+```bash
+helm install cnpg charts/vendor/cloudnative-pg-0.29.0.tgz --namespace cnpg-system --create-namespace --wait
+helm install cert-manager charts/vendor/cert-manager-v1.21.2.tgz \
+  --set crds.enabled=true --namespace cert-manager --create-namespace --wait
+helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-multi-node.yaml --wait
+```
+
 ## Profiles
 
 ```
