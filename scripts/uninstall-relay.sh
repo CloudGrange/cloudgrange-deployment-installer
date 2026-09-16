@@ -32,4 +32,4 @@ docker rm "${CONTAINER_NAME}"
 
 echo ""
 echo "Relay agent removed. The container image is still cached locally."
-echo "To also remove the image, run:  docker rmi ghcr.io/cloudgrange-cloud/cloudgrange-relay"
+echo "To also remove the image, run:  docker rmi ghcr.io/cloudgrange/cloudgrange-relay"

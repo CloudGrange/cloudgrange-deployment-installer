@@ -296,8 +296,8 @@ var kvDisplayTag = { DisplayName: keyVaultDisplayName }
 var imagesArePrivate = !empty(ghcrToken)
 var _apiImageTagEff    = empty(apiImageTag)    ? imageTag : apiImageTag
 var _portalImageTagEff = empty(portalImageTag) ? imageTag : portalImageTag
-var apiImage    = 'ghcr.io/cloudgrange-cloud/cloudgrange-api:${_apiImageTagEff}'
-var portalImage = 'ghcr.io/cloudgrange-cloud/cloudgrange-portal:${_portalImageTagEff}'
+var apiImage    = 'ghcr.io/cloudgrange/cloudgrange-api:${_apiImageTagEff}'
+var portalImage = 'ghcr.io/cloudgrange/cloudgrange-portal:${_portalImageTagEff}'
 var pgFqdn = '${postgresServerNameEffective}.postgres.database.azure.com'
 var oidcPreseed = !empty(entraClientId)
 // AB#2379 — use entraAuthorityBase parameter instead of hardcoded public cloud URL.

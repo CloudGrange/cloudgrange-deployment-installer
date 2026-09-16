@@ -5,8 +5,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.42.1.51946",
-      "templateHash": "8842258598462945811"
+      "version": "0.44.1.10279",
+      "templateHash": "9463947828934552556"
     }
   },
   "parameters": {
@@ -76,7 +76,7 @@
     },
     "imageTag": {
       "type": "string",
-      "defaultValue": "main",
+      "defaultValue": "v1.0.0",
       "metadata": {
         "description": "Default container image tag. Used for both API and portal unless overridden."
       }
@@ -173,13 +173,13 @@
     },
     "postgresPublicNetworkAccess": {
       "type": "string",
-      "defaultValue": "Disabled",
+      "defaultValue": "Enabled",
       "allowedValues": [
         "Enabled",
         "Disabled"
       ],
       "metadata": {
-        "description": "PostgreSQL public network access. Disabled requires private endpoint (Phase V VNet integration). Default is Disabled — set to Enabled only when a private endpoint is not yet in place."
+        "description": "PostgreSQL public network access. Enabled (default) allows ACA containers via the AllowAllAzureServices firewall rule. Disabled requires private endpoint — only set when VNet integration is in place (Phase V+)."
       }
     },
     "keyVaultSku": {
@@ -915,8 +915,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.42.1.51946",
-              "templateHash": "14164939566307797246"
+              "version": "0.44.1.10279",
+              "templateHash": "14730518918541717088"
             }
           },
           "functions": [
@@ -1454,8 +1454,8 @@
             "imagesArePrivate": "[not(empty(parameters('ghcrToken')))]",
             "_apiImageTagEff": "[if(empty(parameters('apiImageTag')), parameters('imageTag'), parameters('apiImageTag'))]",
             "_portalImageTagEff": "[if(empty(parameters('portalImageTag')), parameters('imageTag'), parameters('portalImageTag'))]",
-            "apiImage": "[format('ghcr.io/cloudgrange-cloud/cloudgrange-api:{0}', variables('_apiImageTagEff'))]",
-            "portalImage": "[format('ghcr.io/cloudgrange-cloud/cloudgrange-portal:{0}', variables('_portalImageTagEff'))]",
+            "apiImage": "[format('ghcr.io/cloudgrange/cloudgrange-api:{0}', variables('_apiImageTagEff'))]",
+            "portalImage": "[format('ghcr.io/cloudgrange/cloudgrange-portal:{0}', variables('_portalImageTagEff'))]",
             "pgFqdn": "[format('{0}.postgres.database.azure.com', variables('postgresServerNameEffective'))]",
             "oidcPreseed": "[not(empty(parameters('entraClientId')))]",
             "_entraAuthorityBase": "[if(endsWith(parameters('entraAuthorityBase'), '/'), substring(parameters('entraAuthorityBase'), 0, sub(length(parameters('entraAuthorityBase')), 1)), parameters('entraAuthorityBase'))]",
@@ -2087,8 +2087,8 @@
                   "metadata": {
                     "_generator": {
                       "name": "bicep",
-                      "version": "0.42.1.51946",
-                      "templateHash": "14132465443236640768"
+                      "version": "0.44.1.10279",
+                      "templateHash": "15995823785103241426"
                     }
                   },
                   "parameters": {
@@ -2171,8 +2171,8 @@
                   "metadata": {
                     "_generator": {
                       "name": "bicep",
-                      "version": "0.42.1.51946",
-                      "templateHash": "3294391807761074077"
+                      "version": "0.44.1.10279",
+                      "templateHash": "12136345471817930611"
                     }
                   },
                   "parameters": {
@@ -2562,8 +2562,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.42.1.51946",
-              "templateHash": "15710916980291272465"
+              "version": "0.44.1.10279",
+              "templateHash": "6936035826280555458"
             }
           },
           "parameters": {
