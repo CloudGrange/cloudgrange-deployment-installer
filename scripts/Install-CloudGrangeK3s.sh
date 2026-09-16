@@ -196,10 +196,17 @@ do_ready() {
     }
     k3s kubectl get pods -o wide
     local unexpected
+    # NO per-pod exemptions here, ever. This check previously excluded
+    # `cloudgrange-portal-*` from the not-Ready test, which meant a portal stuck in
+    # CreateContainerConfigError still passed this gate — the installer printed
+    # "install complete" over a broken install, on a real customer server. A readiness
+    # gate that is taught to ignore the component that is failing is worse than no gate,
+    # because it converts a visible failure into a silent one. If a pod cannot become
+    # Ready, fix the pod; do not narrow the check.
     unexpected="$(k3s kubectl get pods --no-headers | awk '
         $2 != "Completed" && $3 != "Completed" {
             split($2, r, "/");
-            if (r[1] != r[2] && $1 !~ /^cloudgrange-portal-/) print $1": "$2" "$3;
+            if (r[1] != r[2]) print $1": "$2" "$3;
         }')"
     if [ -n "$unexpected" ]; then
         echo "unexpected not-Ready pods:" >&2
