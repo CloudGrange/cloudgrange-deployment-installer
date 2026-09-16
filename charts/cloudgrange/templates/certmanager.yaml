@@ -1,0 +1,27 @@
+{{- /* AB#9179: replaces the install-time OpenSSL self-signed cert generation
+(New-SelfSignedCert.ps1 / Install-CloudGrange-Linux.sh) with cert-manager. Default issuer
+is self-signed, matching today's behavior exactly — customers upgrade to ACME/Let's
+Encrypt or their own CA by pointing Values.certManager.issuer at a different ClusterIssuer,
+without any chart changes. */ -}}
+{{- if .Values.certManager.installOperator }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+spec:
+  secretName: {{ .Release.Name }}-tls
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+    kind: ClusterIssuer
+  dnsNames:
+    - {{ .Values.global.hostname | quote }}
+  duration: 2160h    # 90d
+  renewBefore: 360h  # 15d
+{{- end }}
