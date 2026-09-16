@@ -102,7 +102,26 @@ run_stage() {
 # --- Stages ------------------------------------------------------------------
 do_prereqs_checked() {
     command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
-    command -v helm >/dev/null || { echo "helm is required (see charts/cloudgrange/README.md)" >&2; exit 1; }
+    # AB#9182/9183 real bug: this stage used to HARD-FAIL if helm wasn't already on the
+    # VM, with no install step for it anywhere in this script or Install-CloudGrange-Linux.sh
+    # -- every real fresh-Ubuntu-24.04 install (helm is not preinstalled) failed at the very
+    # first stage. Found only by actually running the full Windows-orchestrated -> Hyper-V
+    # VM -> real K3s/Helm install end to end (AB#9185 real test), not by lint/template/k3d.
+    # Fix: install a pinned, checksum-verified Helm build, same pattern as the pinned
+    # SHA-512-verified QEMU build (New-CloudGrangeVm.ps1 / CloudGrange-Prereqs.ps1).
+    if ! command -v helm >/dev/null 2>&1; then
+        local helm_version="v3.22.0"
+        local helm_tar="helm-${helm_version}-linux-amd64.tar.gz"
+        local tmp_dir
+        tmp_dir="$(mktemp -d)"
+        curl -sfL "https://get.helm.sh/${helm_tar}" -o "$tmp_dir/${helm_tar}"
+        curl -sfL "https://get.helm.sh/${helm_tar}.sha256sum" -o "$tmp_dir/${helm_tar}.sha256sum"
+        (cd "$tmp_dir" && sha256sum -c "${helm_tar}.sha256sum")
+        tar -xzf "$tmp_dir/${helm_tar}" -C "$tmp_dir"
+        install -m 0755 "$tmp_dir/linux-amd64/helm" /usr/local/bin/helm
+        rm -rf "$tmp_dir"
+        command -v helm >/dev/null || { echo "helm install failed" >&2; exit 1; }
+    fi
     if [ ! -f "$CHARTS_DIR/vendor/cert-manager-v1.21.2.tgz" ]; then
         echo "vendored cert-manager chart missing: $CHARTS_DIR/vendor/cert-manager-v1.21.2.tgz" >&2
         exit 1

@@ -6,6 +6,15 @@ release-bundle upload route, sent straight to the API so a multi-GB upload isn't
 through the portal (same special case the edge nginx.conf carves out). No LAN-agent 8443
 route here — the relay's own LoadBalancer Service (AB#9177) already exposes that directly,
 Traefik was never in that path even in Compose (a separate nginx server block on 8443). */ -}}
+{{- /* AB#9183 real bug, found via a real Windows-orchestrated -> Hyper-V VM install: an
+Ingress `spec.rules[].host` MUST be a DNS name — Kubernetes flat-out rejects an IP address
+there ("must be a DNS name, not an IP address"). Install-CloudGrange.ps1's own default flow
+passes the VM's IP as the hostname (no real DNS name exists yet at install time on-prem, a
+completely normal case, not an edge case) — every real install using that default failed
+this exact way. Fix: omit `host` entirely (an empty/absent host matches ALL incoming Host
+headers) when global.hostname isn't a DNS name, so IP-based access keeps working; a real
+DNS hostname still gets the more specific host-matched rule. */ -}}
+{{- $isIp := regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` .Values.global.hostname }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -20,7 +29,9 @@ spec:
     - hosts: [{{ .Values.global.hostname | quote }}]
       secretName: {{ .Release.Name }}-tls
   rules:
-    - host: {{ .Values.global.hostname | quote }}
+    - {{- if not $isIp }}
+      host: {{ .Values.global.hostname | quote }}
+      {{- end }}
       http:
         paths:
           - path: /api/v1/platform/update/upload
