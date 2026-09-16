@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-keycloak
+  labels:
+    app.kubernetes.io/name: cloudgrange-keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudgrange-keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudgrange-keycloak
+    spec:
+      # `start` re-augments the server into /opt/keycloak/lib on first start — writable root,
+      # matching the Compose service's dedicated-uid rationale (never the image's uid 1000).
+      securityContext:
+        runAsUser: 10002
+        runAsGroup: 0
+      containers:
+        - name: keycloak
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          args: ["start", "--import-realm"]
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: management, containerPort: 9000 }
+          env:
+            - name: KC_DB
+              value: "postgres"
+            - name: KC_DB_URL
+              value: "jdbc:postgresql://{{ .Release.Name }}-postgres:5432/cloudgrange"
+            - name: KC_DB_USERNAME
+              value: "cloudgrange"
+            - name: KC_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: postgres-password } }
+            - name: KC_HOSTNAME
+              value: "https://{{ .Values.global.hostname }}"
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: "xforwarded"
+            - name: KC_HTTP_PORT
+              value: "8080"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: keycloak-admin-user } }
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: keycloak-admin-password } }
+            - name: KEYCLOAK_API_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: keycloak-api-client-secret } }
+            - name: CLOUDGRANGE_HOSTNAME
+              value: {{ .Values.global.hostname | quote }}
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import/cloudgrange-realm.json
+              subPath: cloudgrange-realm.json
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /health/ready, port: management }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 10
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: realm-import
+          configMap:
+            name: {{ .Release.Name }}-keycloak-realm

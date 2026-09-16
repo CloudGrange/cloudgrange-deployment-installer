@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-loki-config
+data:
+  local-config.yaml: |-
+{{ .Files.Get "files/loki-config.yml" | indent 4 }}

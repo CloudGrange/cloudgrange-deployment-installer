@@ -1,0 +1,6 @@
+apiVersion: v2
+name: relay
+description: CloudGrange site relay (cloudgrange-runtime-relay)
+type: application
+version: 0.1.0
+appVersion: "2609.0.0"

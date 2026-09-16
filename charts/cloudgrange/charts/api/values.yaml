@@ -1,0 +1,16 @@
+replicaCount: 1
+image:
+  repository: cloudgrange-api
+port: 8080
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 768Mi }
+persistence:
+  secrets:
+    size: 256Mi
+  updates:
+    size: 8Gi
+updateChannelUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json"
+redis:
+  enabled: false
+  connectionString: ""

@@ -1,0 +1,52 @@
+{{- /* AB#9177: single-node profile only — a 1-replica StatefulSet + PVC. The
+multi-node/ha profile (AB#9190) replaces this with the CloudNativePG operator; guard
+below so this template is inert once that lands and highAvailability.enabled flips. */ -}}
+{{- if not .Values.highAvailability.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels:
+    app.kubernetes.io/name: cloudgrange-postgres
+spec:
+  serviceName: {{ .Release.Name }}-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudgrange-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudgrange-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "cloudgrange"
+            - name: POSTGRES_USER
+              value: "cloudgrange"
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: postgres-password } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "cloudgrange", "-d", "cloudgrange"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+{{- end }}

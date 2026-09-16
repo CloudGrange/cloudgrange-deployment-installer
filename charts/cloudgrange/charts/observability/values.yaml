@@ -1,0 +1,14 @@
+otelCollector:
+  image: otel/opentelemetry-collector-contrib:0.160.0
+prometheus:
+  image: prom/prometheus:v3.14.0
+  persistence: { size: 5Gi }
+loki:
+  image: grafana/loki:3.7.7
+  persistence: { size: 5Gi }
+grafana:
+  image: grafana/grafana:12.1.1
+  persistence: { size: 1Gi }
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 512Mi }

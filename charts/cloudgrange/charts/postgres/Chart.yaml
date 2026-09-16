@@ -1,0 +1,6 @@
+apiVersion: v2
+name: postgres
+description: CloudGrange PostgreSQL datastore
+type: application
+version: 0.1.0
+appVersion: "17.11"

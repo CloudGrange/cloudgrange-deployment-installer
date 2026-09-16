@@ -1,0 +1,18 @@
+apiVersion: v2
+name: cloudgrange
+description: CloudGrange platform — umbrella chart (AB#9171)
+type: application
+version: 0.1.0
+appVersion: "2609.0.0"
+icon: https://cloudgrange.com/favicon.svg
+# Subcharts are plain subdirectories under charts/ (api, portal, relay, postgres,
+# keycloak, observability). Declared below purely so `helm lint` doesn't flag them as
+# "missing" — Helm resolves them from the subdirectories directly; no `helm dependency
+# build`/`update` step or network access is needed (nothing is pulled from a repository).
+dependencies:
+  - { name: api,           version: 0.1.0 }
+  - { name: portal,        version: 0.1.0 }
+  - { name: relay,         version: 0.1.0 }
+  - { name: postgres,      version: 0.1.0 }
+  - { name: keycloak,      version: 0.1.0 }
+  - { name: observability, version: 0.1.0 }

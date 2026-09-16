@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-keycloak-realm
+data:
+  cloudgrange-realm.json: |-
+{{ .Files.Get "files/cloudgrange-realm.json" | indent 4 }}

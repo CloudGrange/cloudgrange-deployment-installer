@@ -1,0 +1,14 @@
+{{- if not .Values.highAvailability.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels:
+    app.kubernetes.io/name: cloudgrange-postgres
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: cloudgrange-postgres
+  ports:
+    - port: 5432
+{{- end }}

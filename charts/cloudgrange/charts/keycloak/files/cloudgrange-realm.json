@@ -1,0 +1,86 @@
+{
+  "realm": "cloudgrange",
+  "enabled": true,
+  "displayName": "CloudGrange",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      { "name": "PlatformAdmin", "description": "Full platform administrator access" },
+      { "name": "OrgAdmin",      "description": "Organization administrator access" },
+      { "name": "OrgViewer",     "description": "Organization read-only access" },
+      { "name": "Auditor",       "description": "Audit log read access" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "cloudgrange-portal",
+      "name": "CloudGrange Portal",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "https://${CLOUDGRANGE_HOSTNAME}/*"
+      ],
+      "webOrigins": [
+        "https://${CLOUDGRANGE_HOSTNAME}"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://${CLOUDGRANGE_HOSTNAME}/*"
+      },
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "org_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org_id",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "realm_roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "realm_roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "cloudgrange-api",
+      "name": "CloudGrange API",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KEYCLOAK_API_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "protocol": "openid-connect"
+    }
+  ]
+}
