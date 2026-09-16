@@ -48,6 +48,17 @@ spec:
               value: "cloudgrange"
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: postgres-password } }
+            # AB#9187 real bug, found via a live AKS test: Azure Disk CSI (and many other
+            # real CSI provisioners) creates a `lost+found` directory at the volume root —
+            # initdb refuses to initialize a non-empty directory ("directory ... exists but
+            # is not empty"), so the pod crash-looped forever on Azure Disk storage. K3s's
+            # local-path-provisioner (used in every k3d test this session) happens not to
+            # create one, which is exactly why this was never caught until a real cloud
+            # disk was actually used. Standard fix (the official postgres image's own
+            # documented recommendation for this situation): point PGDATA at a subdirectory
+            # of the mount instead of the mount root itself.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
           readinessProbe:

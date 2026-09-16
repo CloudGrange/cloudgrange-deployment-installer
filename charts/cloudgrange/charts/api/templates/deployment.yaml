@@ -43,6 +43,14 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+        # AB#9187 real bug, found via a live AKS test: without fsGroup, the api-secrets
+        # PVC (mounted at /etc/cloudgrange) came up root-owned on Azure Disk CSI storage —
+        # unlike on-prem local-path-provisioner volumes, which happened to already be
+        # writable — and the app crashed on startup trying to create
+        # /etc/cloudgrange/dataprotection-keys ("Permission denied"). fsGroup makes
+        # kubelet chown the volume to this GID at mount time on any provisioner; harmless
+        # and a no-op where it was already correctly owned.
+        fsGroup: 1000
       containers:
         - name: api
           image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
