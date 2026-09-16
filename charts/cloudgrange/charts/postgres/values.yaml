@@ -16,3 +16,13 @@ highAvailability:
   # CloudNativePG's own maintained image (NOT the vanilla postgres image above — it
   # needs CNPG's bundled instance-manager tooling). Version-matched to 17.11.
   image: ghcr.io/cloudnative-pg/postgresql:17.11
+
+# AB#9192: CNPG's own built-in Barman Cloud WAL-archiving/backup — the Postgres-specific
+# second recovery path (see templates/cluster.yaml). No safe default target/credentials;
+# a customer-specific decision, same as backup.* at the umbrella chart level.
+backup:
+  enabled: false
+  destinationPath: ""
+  endpointURL: ""
+  credentialsSecretName: ""
+  schedule: "0 0 2 * * *"

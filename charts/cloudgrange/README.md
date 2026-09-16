@@ -57,6 +57,95 @@ supplies a real range. Without it the relay's Service simply stays `Pending`, wh
 the existing documented single-node behavior — nothing breaks, the relay is still
 reachable from inside the cluster.
 
+## Backup / disaster recovery (AB#9192)
+
+**HA is not DR.** `values-multi-node.yaml` (AB#9190) protects against a single node or
+component failing — it does not protect against the whole site/VM/host being lost. That
+needs backups that exist somewhere other than the primary install, which is what this
+section covers. Two independent, complementary mechanisms, both off by default (no safe
+generic backup-target default — this is a real customer-network decision, same as
+`metallb.addressPool` above):
+
+1. **Velero** (whole-namespace, cluster state + PVCs) — a SEPARATE Helm release, same
+   CRD-ordering pattern as cert-manager/CNPG/MetalLB. It ships CRDs
+   (`Backup`/`Restore`/`Schedule`/`BackupStorageLocation`) our own `Schedule` resource
+   (`templates/velero-schedule.yaml`, gated by `backup.enabled`) depends on:
+
+   ```bash
+   # velero-credentials is an AWS-style credentials file (INI format, "default" profile) —
+   # works for real AWS S3 or any S3-compatible target (MinIO, an on-prem NAS with an S3
+   # gateway, Azure Blob via its S3-compatible API). No safe generic value; customer- or
+   # install-time-supplied.
+   kubectl create secret generic velero-credentials -n velero --create-namespace \
+     --from-file=cloud=/path/to/credentials-file
+   helm install velero charts/vendor/velero-12.2.0.tgz --namespace velero \
+     --set-file credentials.secretContents.cloud=/path/to/credentials-file \
+     --set configuration.backupStorageLocation[0].name=default \
+     --set configuration.backupStorageLocation[0].provider=aws \
+     --set configuration.backupStorageLocation[0].bucket=<bucket-name> \
+     --set configuration.backupStorageLocation[0].config.region=<region-or-any-string-for-non-AWS> \
+     --set configuration.backupStorageLocation[0].config.s3Url=<https://s3-endpoint-for-non-AWS> \
+     --set deployNodeAgent=true \
+     --wait
+   helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-single-node.yaml \
+     --set backup.enabled=true \
+     --wait
+   ```
+
+2. **Postgres WAL-archiving/backup** (multi-node/ha profile only, CloudNativePG's own
+   built-in Barman Cloud integration — `spec.backup.barmanObjectStore` on the `Cluster` CR
+   plus a `ScheduledBackup` CR, both in `charts/postgres/templates/cluster.yaml`, gated by
+   `postgres.backup.enabled`). A second, *independent* recovery path per the plan: WAL-based
+   point-in-time recovery is materially better than restoring a Velero volume snapshot for
+   database-corruption scenarios. **Correction to the original plan doc**: it named
+   pgBackRest as CNPG's mechanism — CNPG has never shipped that; its actual built-in
+   integration is Barman Cloud, which is what this chart uses. Configure via
+   `postgres.backup.{destinationPath,endpointURL,credentialsSecretName,schedule}` and a
+   Secret (`ACCESS_KEY_ID`/`ACCESS_SECRET_KEY` keys) the customer's S3-compatible target
+   requires — can point at the same target as Velero above, or a different one.
+
+**Appliance/VHDX customers who don't set up a backup target**: fall back to documenting
+Hyper-V-level VM export/checkpoint as the minimum viable DR story — protects against host
+failure only, not data corruption or accidental in-app deletion. Do not promise RPO/RTO
+numbers without a real, measured recovery drill (AB#9193) — restoring an untested backup
+is not the same as having a working one.
+
+### Recovery runbook (AB#9193 — real drill results)
+
+A real recovery drill was run twice (fresh k3d cluster, MinIO standing in for the
+customer's S3 target): `helm uninstall` to simulate loss, `velero restore create
+--from-backup <name>`, confirmed reaching `phase: Completed` with all items restored,
+confirmed the restored Postgres data is genuinely intact (a real `psql` query against the
+restored database returned the correct row count both times, not just "the Restore object
+says Completed").
+
+**One real, reproducible gap found and its fix**: after the `Restore` reaches
+`Completed`, `cg-postgres-0` (single-node profile only — not the multi-node/CNPG path,
+which doesn't use Velero fs-backup for Postgres at all, see the "Postgres WAL-archiving"
+section above) hangs at `Init:0/1` — Velero's restore-wait init container can't read its
+own `.velero` completion marker (`permission denied`) under a non-root pod. The actual
+PVC data restore itself is unaffected and already complete by this point. Fix:
+
+```bash
+kubectl delete pod <release>-postgres-0
+```
+
+The StatefulSet recreates the pod without the one-time restore-wait injection, mounting
+the already-restored volume normally — comes up Ready within seconds. This is a known
+class of Velero fs-backup limitation with non-root workloads, not specific to this chart;
+`fsGroup` (the standard documented Velero fix) is set on the pod but did not resolve this
+specific symptom in real testing — kept anyway as correct volume ownership practice.
+
+**What this drill does and does not prove**: proves the whole mechanism — backup,
+storage-target upload, restore, and real data integrity — works end to end on a real
+cluster with a real (if disclosed as non-production) S3-compatible target. Does NOT
+prove: recovery into a genuinely separate fresh cluster (this drill restored into the
+same cluster after simulated loss, which validates the restore mechanism itself but not
+cross-cluster portability), a real customer S3-compatible target (MinIO/NAS/cloud
+bucket) instead of the in-cluster stand-in used here, or RTO/RPO numbers under real data
+volumes — do not promise specific figures to customers without measuring against a
+representative real dataset.
+
 ## Profiles
 
 ```

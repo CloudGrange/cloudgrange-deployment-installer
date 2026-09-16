@@ -31,6 +31,44 @@ spec:
         # subchart's secretKeyRef already uses — one Secret, two audiences.
         name: {{ $.Release.Name }}-secrets
   resources: {{ toYaml .Values.resources | nindent 4 }}
+  {{- /* AB#9192: Postgres's own independent recovery path (distinct from Velero's
+  cluster/PVC-level backup) — CNPG's BUILT-IN Barman Cloud WAL-archiving/backup, via
+  spec.backup.barmanObjectStore (confirmed in the vendored 0.29.0 CRD; NOT the separate
+  ObjectStore-CRD/plugin mechanism newer CNPG versions also support, and NOT pgBackRest —
+  correcting the plan doc's original text, which named pgBackRest; CNPG has never shipped
+  that, it uses Barman Cloud). Gated off by default — no safe default S3-compatible
+  target/credentials, same reasoning as metallb.addressPool (AB#9191). */ -}}
+  {{- if .Values.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.destinationPath | quote }}
+      endpointURL: {{ .Values.backup.endpointURL | quote }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.backup.credentialsSecretName }}
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ .Values.backup.credentialsSecretName }}
+          key: ACCESS_SECRET_KEY
+      wal:
+        compression: gzip
+  {{- end }}
+{{- end }}
+---
+{{- /* Scheduled logical/WAL backup — the "second, independent recovery path" the plan
+calls out (point-in-time recovery from WAL beats restoring a Velero volume snapshot for
+database corruption scenarios). Same gate as spec.backup above; both need the same
+S3-compatible target. */ -}}
+{{- if and .Values.highAvailability.enabled .Values.backup.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $.Release.Name }}-postgres-backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ $.Release.Name }}-postgres
 {{- end }}
 ---
 {{- /* Service alias: every other subchart already points at "<release>-postgres" —

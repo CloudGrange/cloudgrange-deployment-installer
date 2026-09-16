@@ -19,6 +19,23 @@ spec:
       labels:
         app.kubernetes.io/name: cloudgrange-postgres
     spec:
+      # AB#9193: a real Velero fs-backup recovery drill (run twice, reproduced both times)
+      # found this StatefulSet's pod (single-node, non-CNPG path only) hangs at Init:0/1
+      # after a Restore reaches Completed -- Velero's restore-wait init container polls a
+      # `.velero/<uid>` marker file under an ephemeral `/restores` staging path the
+      # node-agent controls, and gets "permission denied" reading it. Tried the standard
+      # documented Velero fix (pod-level fsGroup, below) -- it did NOT resolve this in
+      # real re-testing; the staging path is outside fsGroup's reach (it's not the PVC
+      # mount itself). Kept anyway as good practice (correct group ownership for the
+      # actual data volume), but the REAL, verified fix is operational: once the Restore
+      # object shows phase=Completed, `kubectl delete pod cg-postgres-0` -- the actual PVC
+      # byte-level data is already fully restored to disk by that point (proven via a real
+      # `psql` query against the restored DB returning the correct row count, twice); only
+      # the pod's own one-time readiness signal is stuck, and recreating the pod without
+      # the ephemeral restore-wait injection mounts the (already-restored) volume normally
+      # and comes up Ready within seconds. Documented in README.md's DR runbook.
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: postgres
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
