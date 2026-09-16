@@ -1,0 +1,15 @@
+# AKS overlay skeleton. Full implementation (Azure Disk/Files CSI storage classes, Key
+# Vault CSI driver for secrets, Azure LoadBalancer annotations) is AB#9187 — this file
+# documents the intended overrides so the umbrella chart's shape doesn't need to change
+# again when that work lands.
+global:
+  cloud: true
+postgres:
+  persistence:
+    storageClass: managed-csi  # AB#9187: Azure Disk CSI storage class
+relay:
+  service:
+    type: LoadBalancer  # AKS's native LB — no MetalLB needed here, unlike bare K3s
+# AB#9187 also replaces templates/secrets.yaml's --set-based placeholder with the Key
+# Vault CSI driver / External Secrets Operator, sourcing the master key from Azure Key
+# Vault instead of a plain Kubernetes Secret populated at install time.

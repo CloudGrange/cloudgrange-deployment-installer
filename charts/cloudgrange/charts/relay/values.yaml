@@ -1,0 +1,18 @@
+replicaCount: 1
+image:
+  repository: cloudgrange-relay
+port: 8443
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { memory: 384Mi }
+persistence:
+  identity:
+    size: 128Mi
+displayName: site-relay
+clusterId: default
+# AB#9173/gap #4: MetalLB (bare-metal) or the cloud LB (AKS) assigns this a real routable
+# address so agents on the customer LAN/AD subnet can reach it — see AB#9191 (MetalLB) and
+# values-azure.yaml. Single-node on-prem installs without MetalLB set up yet can leave this
+# Pending; the relay is still reachable from inside the cluster (portal/API talk to it there).
+service:
+  type: LoadBalancer

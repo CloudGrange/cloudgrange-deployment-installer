@@ -1,0 +1,6 @@
+apiVersion: v2
+name: portal
+description: CloudGrange web portal (cloudgrange-portal)
+type: application
+version: 0.1.0
+appVersion: "2609.0.0"

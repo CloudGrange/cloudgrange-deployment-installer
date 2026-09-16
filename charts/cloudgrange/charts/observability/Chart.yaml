@@ -1,0 +1,6 @@
+apiVersion: v2
+name: observability
+description: CloudGrange observability stack — OTel collector, Prometheus, Loki, Grafana (ADR-016)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

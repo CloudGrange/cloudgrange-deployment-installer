@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-otel-collector
+  labels: { app.kubernetes.io/name: cloudgrange-otel-collector }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: cloudgrange-otel-collector } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: cloudgrange-otel-collector } }
+    spec:
+      containers:
+        - name: otel-collector
+          image: {{ .Values.otelCollector.image }}
+          args: ["--config=/etc/otel/config.yaml"]
+          volumeMounts:
+            - { name: config, mountPath: /etc/otel }
+          readinessProbe:
+            httpGet: { path: /, port: 13133 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap: { name: {{ .Release.Name }}-otel-collector-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-otel-collector
+  labels: { app.kubernetes.io/name: cloudgrange-otel-collector }
+spec:
+  selector: { app.kubernetes.io/name: cloudgrange-otel-collector }
+  ports:
+    - { name: grpc, port: 4317 }
+    - { name: http, port: 4318 }

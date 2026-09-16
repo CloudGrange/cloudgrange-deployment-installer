@@ -1,0 +1,30 @@
+# Base defaults, shared by every profile. A profile file (values-single-node.yaml,
+# values-multi-node.yaml, values-azure.yaml) is layered on top via -f at install time —
+# see charts/cloudgrange/README.md.
+global:
+  deployment:
+    # single-node | multi-node — controls replica counts, Postgres HA, and whether the
+    # relay's Redis-backed dispatch bus is enabled (AB#9174). See values-*.yaml.
+    profile: single-node
+  # The public hostname the appliance/cluster is reachable at — used for Keycloak's issuer
+  # and TLS SAN (cert-manager wiring lands in AB#9179).
+  hostname: cloudgrange.local
+  image:
+    registry: ghcr.io/cloudgrange
+    tag: latest
+    pullPolicy: IfNotPresent
+  # AKS overlay (values-azure.yaml) flips this — swaps local-path/Postgres-in-cluster for
+  # Azure Disk/Files CSI + managed identity, per AB#9187.
+  cloud: false
+
+# AB#9177 placeholder — see templates/secrets.yaml. Pass real values via --set or a
+# separate, un-committed values file (e.g. `helm install -f values-secrets.local.yaml`).
+# AB#9178 replaces this whole block with a generated-server-side bootstrap hook Job.
+secrets:
+  postgresPassword: ""
+  keycloakAdminUser: "admin"
+  keycloakAdminPassword: ""
+  keycloakApiClientSecret: ""
+  grafanaAdminPassword: ""
+  relayEnrollmentToken: ""
+  realmAdminPassword: ""

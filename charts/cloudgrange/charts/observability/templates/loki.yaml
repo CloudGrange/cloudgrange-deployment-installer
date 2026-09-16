@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-loki
+  labels: { app.kubernetes.io/name: cloudgrange-loki }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: cloudgrange-loki } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: cloudgrange-loki } }
+    spec:
+      containers:
+        - name: loki
+          image: {{ .Values.loki.image }}
+          args: ["-config.file=/etc/loki/local-config.yaml"]
+          volumeMounts:
+            - { name: config, mountPath: /etc/loki }
+            - { name: data, mountPath: /loki }
+          readinessProbe:
+            httpGet: { path: /ready, port: 3100 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap: { name: {{ .Release.Name }}-loki-config }
+        - name: data
+          persistentVolumeClaim: { claimName: {{ .Release.Name }}-loki-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-loki-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: {{ .Values.loki.persistence.size }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-loki
+  labels: { app.kubernetes.io/name: cloudgrange-loki }
+spec:
+  selector: { app.kubernetes.io/name: cloudgrange-loki }
+  ports:
+    - { port: 3100 }

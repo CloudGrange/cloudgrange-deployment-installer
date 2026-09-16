@@ -1,0 +1,13 @@
+image:
+  repository: postgres
+  tag: 17.11-alpine
+resources:
+  requests: { cpu: 200m, memory: 256Mi }
+  limits: { memory: 1Gi }
+persistence:
+  size: 10Gi
+  storageClass: ""
+# AB#9190 (later): multi-node/ha profile swaps this single-Pod StatefulSet for the
+# CloudNativePG operator. Not built by AB#9177 — single-node only for now.
+highAvailability:
+  enabled: false

@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-relay
+  labels:
+    app.kubernetes.io/name: cloudgrange-relay
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudgrange-relay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudgrange-relay
+    spec:
+      # AB#9173: the relay already binds k.ListenAnyIP() — no host networking needed. It
+      # reaches customer Hyper-V hosts via plain outbound HTTPS:5986 egress, independent of
+      # this Deployment's network mode.
+      #
+      # No pod-level runAsNonRoot here (unlike api/portal): the relay's Dockerfile sets
+      # `USER relay`, a symbolic (non-numeric) username — proven via a real k3d install
+      # that Kubernetes refuses to start ANY pod with runAsNonRoot: true unless the image's
+      # user is numeric, since it can't statically verify a symbolic user is non-root
+      # without pulling /etc/passwd ("cannot verify user is non-root"). The container is
+      # still genuinely non-root (trusts the image's own USER relay); pinning a numeric
+      # UID in cloudgrange-runtime-relay's Dockerfile (matching portal's fix pattern) is a
+      # small follow-up to get full Restricted Pod Security Standard compliance here too.
+      containers:
+        - name: relay
+          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.port }}
+          env:
+            - name: RELAY_PAAS_URL
+              value: "http://{{ .Release.Name }}-api:8080"
+            - name: RELAY_ENROLLMENT_TOKEN
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: relay-enrollment-token } }
+            - name: RELAY_DISPLAY_NAME
+              value: {{ .Values.displayName | quote }}
+            - name: RELAY_CLUSTER_ID
+              value: {{ .Values.clusterId | quote }}
+            - name: RELAY_LISTEN_PORT
+              value: {{ .Values.port | quote }}
+            - name: RELAY_IDENTITY_DIR
+              value: "/var/lib/cloudgrange-relay/identity"
+          volumeMounts:
+            - { name: identity, mountPath: /var/lib/cloudgrange-relay/identity }
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - { name: identity, persistentVolumeClaim: { claimName: "{{ .Release.Name }}-relay-identity" } }

@@ -1,0 +1,16 @@
+# Default profile — one K3s node, everything in this file matches base values.yaml.
+# `helm install cloudgrange charts/cloudgrange -f values-single-node.yaml`
+global:
+  deployment:
+    profile: single-node
+api:
+  replicaCount: 1
+  redis:
+    enabled: false
+portal:
+  replicaCount: 1
+relay:
+  replicaCount: 1
+postgres:
+  highAvailability:
+    enabled: false
