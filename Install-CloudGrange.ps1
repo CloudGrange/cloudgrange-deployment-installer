@@ -8,10 +8,15 @@
 param(
     [ValidateSet('Online', 'Bundled', 'Appliance')]
     [string]$Mode = 'Online',
-    # AB#9185: Compose (default, unchanged) or K3s/Helm — runs in parallel per the
-    # platform-restructure plan's rollout order; Compose is not retired this release.
+    # AB#9185/9183: K3s/Helm is the deployment model for this product. Compose remains
+    # reachable with -Engine Compose until AB#9189 retires it, and is still the only
+    # engine that supports -Mode Bundled (the K3s bundle has no offline images yet), but
+    # it is no longer the default — leaving the default on Compose meant every install
+    # that did not pass -Engine silently deployed the stack the restructure replaced.
+    # Install-CloudGrange-Linux.sh's own default was flipped for the same reason; these
+    # two entry points must agree.
     [ValidateSet('Compose', 'K3s')]
-    [string]$Engine = 'Compose',
+    [string]$Engine = 'K3s',
     [string]$VmIp = '192.168.100.10',
     [string]$VhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx',
     # AB#1585 — Proxy support. Format: http://host:port or http://user:pass@host:port
@@ -44,6 +49,18 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# -Mode Bundled is a fully offline install, and the K3s bundle has no offline container
+# images yet (AB#9184's disclosed gap), so K3s cannot serve it. Since -Engine now defaults
+# to K3s, an offline caller who never passed -Engine would hit a hard error for a default
+# they did not choose. Fall back to Compose in exactly that case — the default was implicit
+# AND the mode demands offline — while an EXPLICIT `-Engine K3s -Mode Bundled` still fails
+# loudly below, because that combination genuinely cannot work and silently downgrading a
+# deliberate choice would be worse.
+if ($Mode -eq 'Bundled' -and -not $PSBoundParameters.ContainsKey('Engine')) {
+    Write-Warning "-Mode Bundled is offline-only and the K3s bundle does not ship offline images yet; using -Engine Compose. Pass -Engine K3s -Mode Online for the K3s/Helm deployment."
+    $Engine = 'Compose'
+}
 
 . "$PSScriptRoot\scripts\CloudGrange-Common.ps1"
 . "$PSScriptRoot\scripts\CloudGrange-Prereqs.ps1"
