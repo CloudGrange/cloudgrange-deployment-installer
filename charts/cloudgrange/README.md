@@ -152,12 +152,42 @@ representative real dataset.
 helm install cloudgrange . -f values-single-node.yaml
 ```
 
-- `values-single-node.yaml` — the only currently fully-deployable profile. One K3s node,
-  Postgres as a single-Pod StatefulSet, no Redis.
-- `values-multi-node.yaml` — skeleton only. Real multi-replica/HA support (Redis dispatch
-  bus, CloudNativePG-backed Postgres) is AB#9190.
-- `values-azure.yaml` — skeleton only. Real AKS overlay (Azure Disk/Files CSI, Key Vault
-  CSI) is AB#9187.
+- `values-single-node.yaml` — one K3s node, Postgres as a single-Pod StatefulSet, no Redis.
+- `values-multi-node.yaml` — real multi-replica/HA (AB#9190): 2x api/portal, Redis-backed
+  relay dispatch, CloudNativePG-backed Postgres. See the CloudNativePG install-sequence
+  note above.
+- `values-azure.yaml` — real AKS overlay (AB#9187): Azure Disk/Files CSI, Key Vault CSI
+  via Workload Identity. See "AKS overlay" below for the full cluster-side setup this
+  profile assumes (it's more involved than the on-prem profiles' vendored-chart pattern,
+  since Azure AD Workload Identity needs a federated credential tied to the specific
+  AKS cluster's own OIDC issuer URL, which doesn't exist until the cluster does).
+
+### AKS overlay (AB#9187)
+
+Unlike cert-manager/CNPG/MetalLB/Velero, there's no chart-installable piece here — the
+prerequisites are real Azure resources and cluster-level configuration this chart
+deliberately does not provision (Azure resource creation is a confirm-first action, out
+of scope for a Helm chart). Required, in order:
+
+1. An AKS cluster created with `--enable-oidc-issuer --enable-workload-identity` (both
+   required for Workload Identity; cannot be added to values-azure.yaml since it's a
+   cluster-creation-time flag, not a chart concern) and the
+   `azureKeyvaultSecretsProvider`/Secrets Store CSI Driver add-on enabled
+   (`--enable-addons azure-keyvault-secrets-provider`).
+2. A user-assigned managed identity (UAMI), granted `get`/`list` on Secrets in the target
+   Key Vault (an access policy, or an RBAC role assignment if the vault uses
+   `enableRbacAuthorization`).
+3. A **federated identity credential** on that UAMI: subject
+   `system:serviceaccount:<release-namespace>:<release-name>-workload-identity` (the
+   exact ServiceAccount `templates/aks/serviceaccount.yaml` creates), issuer = the AKS
+   cluster's own OIDC issuer URL (`az aks show --query oidcIssuerProfile.issuerUrl`),
+   audience `api://AzureADTokenExchange`. **Found missing entirely via a real AKS test**:
+   the chart's `SecretProviderClass` set a `clientID` but nothing on the pod side
+   originally established a federated identity to use it with — fixed by adding the
+   `azure.workload.identity/use: "true"` pod label (`charts/api/templates/deployment.yaml`)
+   and the ServiceAccount above; this federated-credential step is the piece that still
+   has to happen outside the chart, once, per cluster.
+4. Install: `helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-azure.yaml --set global.aks.keyVaultName=<vault> --set global.aks.tenantId=<tenant> --set global.aks.managedIdentityClientId=<uami-client-id> --wait`
 
 ## Secrets
 
