@@ -9,26 +9,39 @@
 # see compose/docker-compose.yml and scripts/Deploy-DockerCompose.ps1 for the proven
 # reference logic this script mirrors.
 #
+# AB#9183: --engine k3s switches to the K3s/Helm path (scripts/Install-CloudGrangeK3s.sh)
+# instead of Docker Compose — the canonical target per the platform restructure plan
+# (cloudgrange-internal/pmo/plans/2026-09-15-platform-restructure-helm-k8s.md), running
+# in parallel with Compose for this release cycle per that plan's own rollout order.
+# --engine compose (the default, unchanged) is not going away this release — do not
+# remove it until AB#9189 explicitly retires it after K3s/Helm has proven out.
+#
 # Usage (run as root, from the extracted install bundle — this script expects a
-# sibling ./compose directory, exactly like the bundle New-ReleaseBundle.sh produces):
+# sibling ./compose directory for --engine compose, or a sibling ./charts and
+# ./scripts/Install-CloudGrangeK3s.sh for --engine k3s, exactly like the bundle
+# New-ReleaseBundle.sh produces):
 #   sudo ./Install-CloudGrange-Linux.sh --hostname cloudgrange.example.com [--version 2609.0.0]
+#   sudo ./Install-CloudGrange-Linux.sh --hostname cloudgrange.example.com --engine k3s
 #
 # What this does NOT do: create a VM, touch Hyper-V, or require a Windows host at all.
-# Prerequisites (Docker Engine + Compose plugin, openssl, jq) are checked and installed
-# automatically if missing: Docker via the official https://get.docker.com convenience
-# script (auto-detects apt/dnf/yum), openssl/jq via whichever of apt-get/dnf/yum is
-# present. Review get.docker.com's script before running this on a server with other
-# workloads if you want full control over what it changes.
+# --engine compose prerequisites (Docker Engine + Compose plugin, openssl, jq) are
+# checked and installed automatically if missing: Docker via the official
+# https://get.docker.com convenience script (auto-detects apt/dnf/yum), openssl/jq via
+# whichever of apt-get/dnf/yum is present. Review get.docker.com's script before running
+# this on a server with other workloads if you want full control over what it changes.
+# --engine k3s prerequisites (K3s itself, helm) are handled by
+# scripts/Install-CloudGrangeK3s.sh — see that script for what it installs.
 
 set -euo pipefail
 
 HOSTNAME_ARG=""
 VERSION="latest"
 COMPOSE_DIR="/opt/cloudgrange"
+ENGINE="compose"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange]" >&2
+    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange] [--engine compose|k3s]" >&2
     exit 2
 }
 
@@ -37,16 +50,31 @@ while [ $# -gt 0 ]; do
         --hostname)    HOSTNAME_ARG=$2; shift 2 ;;
         --version)     VERSION=$2; shift 2 ;;
         --compose-dir) COMPOSE_DIR=$2; shift 2 ;;
+        --engine)      ENGINE=$2; shift 2 ;;
         -h|--help)     usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
 done
 
 [ -n "$HOSTNAME_ARG" ] || { echo "ERROR: --hostname is required (the FQDN or IP you'll browse to)." >&2; usage; }
+case "$ENGINE" in
+    compose|k3s) ;;
+    *) echo "ERROR: --engine must be 'compose' or 'k3s' (got: $ENGINE)" >&2; usage ;;
+esac
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "ERROR: this installer must run as root (sudo $0 ...)." >&2
     exit 1
+fi
+
+# AB#9183: --engine k3s delegates entirely to Install-CloudGrangeK3s.sh, which has its
+# own prereqs/bundle-layout checks (a sibling ./charts directory) and its own
+# checkpointed, resumable install flow (AB#9182) — nothing below this point applies to
+# that path, so hand off immediately rather than duplicating logic.
+if [ "$ENGINE" = "k3s" ]; then
+    K3S_INSTALLER="$SCRIPT_DIR/scripts/Install-CloudGrangeK3s.sh"
+    [ -x "$K3S_INSTALLER" ] || { echo "ERROR: expected $K3S_INSTALLER (is this an extracted install bundle?)" >&2; exit 1; }
+    exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG" --version "$VERSION"
 fi
 
 if [ ! -d "$SCRIPT_DIR/compose" ]; then
