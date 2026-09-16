@@ -42,3 +42,17 @@ secretsBootstrap:
   # the bootstrap script's shell script can't even start ("no such file or directory").
   # alpine/k8s bundles kubectl on top of a real Alpine shell + coreutils (head/base64/tr).
   image: docker.io/alpine/k8s:1.31.1
+
+# AB#9191: MetalLB itself is a SEPARATE Helm release (charts/vendor/metallb-0.16.1.tgz),
+# installed before this chart, same reasoning as cert-manager/CloudNativePG (README.md) —
+# it ships its own CRDs (IPAddressPool, L2Advertisement) that this chart's own
+# IPAddressPool/L2Advertisement resources depend on existing first. This flag only gates
+# whether OUR OWN pool/advertisement config renders. Only meaningful on bare-metal K3s
+# (single-node or multi-node); AKS has its own native LoadBalancer, so values-azure.yaml
+# leaves this off. addressPool is a customer-specific LAN range with no safe generic
+# default — leaving it empty and metallb.enabled=false is correct until the customer's
+# network team supplies a real free range; the relay's LoadBalancer Service simply stays
+# Pending until then (documented in charts/relay/values.yaml).
+metallb:
+  enabled: false
+  addressPool: []

@@ -1,0 +1,24 @@
+{{- /* AB#9191: MetalLB's own operator/CRDs are a separate Helm release (README.md) —
+these two resources are OUR config of it, rendered only once metallb.enabled=true and a
+real addressPool has been supplied (see values.yaml comment). */ -}}
+{{- if and .Values.metallb.enabled .Values.metallb.addressPool }}
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: {{ .Release.Name }}-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    {{- range .Values.metallb.addressPool }}
+    - {{ . }}
+    {{- end }}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: {{ .Release.Name }}-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - {{ .Release.Name }}-pool
+{{- end }}

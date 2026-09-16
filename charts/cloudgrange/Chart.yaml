@@ -27,3 +27,8 @@ dependencies:
 # are validated. This is cert-manager's own documented, standard pattern for every chart
 # that depends on it: install cert-manager as its own separate Helm release FIRST, then
 # install charts (like this one) that use its CRDs. See README.md's install sequence.
+# AB#9190: CloudNativePG (charts/vendor/cloudnative-pg-0.29.0.tgz) and AB#9191: MetalLB
+# (charts/vendor/metallb-0.16.1.tgz) are NOT dependencies here for the exact same reason —
+# both ship their own CRDs (Cluster/... and IPAddressPool/L2Advertisement respectively)
+# that our own templates (postgres/templates/cluster.yaml, templates/metallb.yaml)
+# reference. Same fix, applied proactively this time: separate release, installed first.
