@@ -14,9 +14,19 @@ OUT="${1:-$CHARTS_DIR/manifest.json}"
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 
+# When called from a reproducible-build pipeline (scripts/New-ReleaseBundleK3s.sh),
+# SOURCE_DATE_EPOCH makes "generated" deterministic too — a live wall-clock timestamp
+# here would otherwise make the bundle it's part of non-reproducible even though every
+# other input is pinned. Found by actually diffing two consecutive bundle builds: same
+# source, same version, different SHA-256, because this field differed by seconds.
+GENERATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+    GENERATED="$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+fi
+
 {
     echo "{"
-    echo "  \"generated\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+    echo "  \"generated\": \"$GENERATED\","
     echo "  \"components\": {"
     first=true
     for f in "$CHARTS_DIR"/vendor/*.tgz; do
