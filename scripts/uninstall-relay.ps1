@@ -6,6 +6,10 @@
 #
 # Usage:
 #   .\uninstall-relay.ps1
+#
+# This does NOT remove the "cloudgrange-relay-identity" volume, so re-running install-relay.ps1
+# later reuses the same enrolled identity instead of needing a fresh enrollment token. Remove it
+# explicitly with `docker volume rm cloudgrange-relay-identity` if you want a clean re-enroll.
 
 [CmdletBinding()]
 param()
