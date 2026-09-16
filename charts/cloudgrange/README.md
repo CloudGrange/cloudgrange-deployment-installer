@@ -35,6 +35,28 @@ helm install cert-manager charts/vendor/cert-manager-v1.21.2.tgz \
 helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-multi-node.yaml --wait
 ```
 
+**MetalLB (AB#9191, bare-metal on-prem only — skip entirely on AKS, which has its own
+native LoadBalancer)**: needed once there's more than one node for the relay's
+`LoadBalancer` Service (`charts/relay/values.yaml`) to resolve to a real routable address
+instead of staying `Pending`. Same separate-release-first pattern as cert-manager/CNPG —
+MetalLB ships its own CRDs (`IPAddressPool`, `L2Advertisement`) that this chart's own
+`templates/metallb.yaml` config depends on:
+
+```bash
+helm install metallb charts/vendor/metallb-0.16.1.tgz --namespace metallb-system --create-namespace --wait
+helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-multi-node.yaml \
+  --set metallb.enabled=true \
+  --set metallb.addressPool='{192.168.1.240-192.168.1.250}' \
+  --wait
+```
+
+`metallb.addressPool` is a customer-specific LAN address range with no safe generic
+default (it must be free/unused addresses on the customer's own network) — leave
+`metallb.enabled=false` (the default in every profile) until the customer's network team
+supplies a real range. Without it the relay's Service simply stays `Pending`, which is
+the existing documented single-node behavior — nothing breaks, the relay is still
+reachable from inside the cluster.
+
 ## Profiles
 
 ```
