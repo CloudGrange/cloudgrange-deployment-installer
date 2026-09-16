@@ -2,7 +2,7 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "Deploys CloudGrange to Azure Container Apps. See https://github.com/cloudgrange-cloud/cloudgrange-installer for full documentation."
+    "description": "Deploys CloudGrange to Azure Container Apps. See https://github.com/CloudGrange/cloudgrange-deployment-installer for full documentation."
   },
   "parameters": {
     "location": {
@@ -110,8 +110,8 @@
     "aceEnvName":   "[concat('cae-', variables('suffix'))]",
     "apiAppName":   "[concat('ca-', variables('workload'), '-api-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
     "portalAppName":"[concat('ca-', variables('workload'), '-portal-', parameters('environment'), '-', variables('regionCode'), '-', variables('instance'))]",
-    "apiImage":     "[concat('ghcr.io/cloudgrange-cloud/cloudgrange-api:', parameters('imageTag'))]",
-    "portalImage":  "[concat('ghcr.io/cloudgrange-cloud/cloudgrange-portal:', parameters('imageTag'))]",
+    "apiImage":     "[concat('ghcr.io/cloudgrange/cloudgrange-api:', parameters('imageTag'))]",
+    "portalImage":  "[concat('ghcr.io/cloudgrange/cloudgrange-portal:', parameters('imageTag'))]",
     "allTags": "[createObject('Environment', parameters('environment'), 'Workload', 'cloudgrange', 'CostCenter', parameters('costCenter'), 'Owner', parameters('ownerEmail'), 'BusinessUnit', parameters('costCenter'), 'DataClassification', 'Internal', 'Criticality', 'Low', 'ManagedBy', 'arm')]"
   },
   "resources": [
