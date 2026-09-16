@@ -15,8 +15,14 @@ spec:
         app.kubernetes.io/name: cloudgrange-portal
     spec:
       # AB#9172: nginxinc/nginx-unprivileged image, uid 101 — no root capabilities needed.
+      # runAsUser must be set explicitly: with only runAsNonRoot, Kubernetes refuses to
+      # start a container whose image declares a non-numeric USER (CreateContainerConfigError,
+      # "cannot verify user is non-root"). The image now declares USER 101 too, but pinning
+      # it here keeps the chart correct against any image that regresses to a named user.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 101
+        fsGroup: 101
       containers:
         - name: portal
           image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
