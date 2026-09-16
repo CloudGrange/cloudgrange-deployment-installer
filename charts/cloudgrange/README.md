@@ -57,6 +57,59 @@ supplies a real range. Without it the relay's Service simply stays `Pending`, wh
 the existing documented single-node behavior — nothing breaks, the relay is still
 reachable from inside the cluster.
 
+## Backup / disaster recovery (AB#9192)
+
+**HA is not DR.** `values-multi-node.yaml` (AB#9190) protects against a single node or
+component failing — it does not protect against the whole site/VM/host being lost. That
+needs backups that exist somewhere other than the primary install, which is what this
+section covers. Two independent, complementary mechanisms, both off by default (no safe
+generic backup-target default — this is a real customer-network decision, same as
+`metallb.addressPool` above):
+
+1. **Velero** (whole-namespace, cluster state + PVCs) — a SEPARATE Helm release, same
+   CRD-ordering pattern as cert-manager/CNPG/MetalLB. It ships CRDs
+   (`Backup`/`Restore`/`Schedule`/`BackupStorageLocation`) our own `Schedule` resource
+   (`templates/velero-schedule.yaml`, gated by `backup.enabled`) depends on:
+
+   ```bash
+   # velero-credentials is an AWS-style credentials file (INI format, "default" profile) —
+   # works for real AWS S3 or any S3-compatible target (MinIO, an on-prem NAS with an S3
+   # gateway, Azure Blob via its S3-compatible API). No safe generic value; customer- or
+   # install-time-supplied.
+   kubectl create secret generic velero-credentials -n velero --create-namespace \
+     --from-file=cloud=/path/to/credentials-file
+   helm install velero charts/vendor/velero-12.2.0.tgz --namespace velero \
+     --set-file credentials.secretContents.cloud=/path/to/credentials-file \
+     --set configuration.backupStorageLocation[0].name=default \
+     --set configuration.backupStorageLocation[0].provider=aws \
+     --set configuration.backupStorageLocation[0].bucket=<bucket-name> \
+     --set configuration.backupStorageLocation[0].config.region=<region-or-any-string-for-non-AWS> \
+     --set configuration.backupStorageLocation[0].config.s3Url=<https://s3-endpoint-for-non-AWS> \
+     --set deployNodeAgent=true \
+     --wait
+   helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-single-node.yaml \
+     --set backup.enabled=true \
+     --wait
+   ```
+
+2. **Postgres WAL-archiving/backup** (multi-node/ha profile only, CloudNativePG's own
+   built-in Barman Cloud integration — `spec.backup.barmanObjectStore` on the `Cluster` CR
+   plus a `ScheduledBackup` CR, both in `charts/postgres/templates/cluster.yaml`, gated by
+   `postgres.backup.enabled`). A second, *independent* recovery path per the plan: WAL-based
+   point-in-time recovery is materially better than restoring a Velero volume snapshot for
+   database-corruption scenarios. **Correction to the original plan doc**: it named
+   pgBackRest as CNPG's mechanism — CNPG has never shipped that; its actual built-in
+   integration is Barman Cloud, which is what this chart uses. Configure via
+   `postgres.backup.{destinationPath,endpointURL,credentialsSecretName,schedule}` and a
+   Secret (`ACCESS_KEY_ID`/`ACCESS_SECRET_KEY` keys) the customer's S3-compatible target
+   requires — can point at the same target as Velero above, or a different one.
+
+**Appliance/VHDX customers who don't set up a backup target**: fall back to documenting
+Hyper-V-level VM export/checkpoint as the minimum viable DR story — protects against host
+failure only, not data corruption or accidental in-app deletion. Do not promise RPO/RTO
+numbers without a real, measured recovery drill (AB#9193) — restoring an untested backup
+is not the same as having a working one.
+
 ## Profiles
 
 ```

@@ -1,0 +1,25 @@
+{{- /* AB#9192: Velero itself (chart-level Backup/Restore/Schedule CRDs) is a SEPARATE
+Helm release (charts/vendor/velero-12.2.0.tgz), installed before this chart, same
+CRD-ordering pattern as cert-manager/CloudNativePG/MetalLB — see README.md's install
+sequence, including how to point it at a customer-supplied S3-compatible target (MinIO,
+an on-prem NAS with an S3 gateway, or a cloud bucket). This Schedule is OUR config of it:
+a recurring backup of this release's own namespace (chart-managed resources + PVCs, via
+Velero's node-agent/fs-backup path enabled at the Velero release's own install time).
+
+This is the HA-vs-DR distinction from the plan: values-multi-node.yaml (AB#9190) protects
+against a single node/component failing; this backup protects against the whole
+site/cluster being lost. Gated off by default — no safe default backup target. */ -}}
+{{- if .Values.backup.enabled }}
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: {{ .Release.Name }}-backup
+  namespace: velero
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  template:
+    includedNamespaces:
+      - {{ .Release.Namespace }}
+    ttl: {{ .Values.backup.ttl }}
+    defaultVolumesToFsBackup: true
+{{- end }}

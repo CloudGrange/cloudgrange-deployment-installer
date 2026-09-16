@@ -56,3 +56,21 @@ secretsBootstrap:
 metallb:
   enabled: false
   addressPool: []
+
+# AB#9192: Velero itself is a SEPARATE Helm release (charts/vendor/velero-12.2.0.tgz),
+# installed before this chart, same CRD-ordering pattern as cert-manager/CNPG/MetalLB —
+# it ships its own CRDs (Backup, Restore, Schedule, BackupStorageLocation) that this
+# chart's own Schedule resource depends on existing first. This flag only gates whether
+# OUR OWN Schedule config renders (templates/velero-schedule.yaml) — Velero's actual
+# storage target (S3-compatible bucket/endpoint/credentials) is configured at the Velero
+# release's OWN install time (README.md), not here, since that's a customer-network
+# decision with no safe generic default (same reasoning as metallb.addressPool). `ttl` is
+# Velero's own retention format (e.g. "720h" = 30 days). `schedule` here is standard
+# 5-field cron (Velero's Schedule CRD) — NOT the same field format as
+# charts/postgres/values.yaml's backup.schedule, which is CNPG's 6-field (seconds-first)
+# cron for its own independent Postgres WAL-backup path; the two are separate mechanisms
+# covering different data (whole-namespace/PVC snapshot vs. Postgres logical/WAL).
+backup:
+  enabled: false
+  schedule: "0 2 * * *"
+  ttl: "720h"
