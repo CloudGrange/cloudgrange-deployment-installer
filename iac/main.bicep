@@ -1,6 +1,14 @@
 // Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
+// AB#9188: Azure Container Apps is the SECONDARY Azure path, kept working (see
+// AB#9176's image-org fix) but not actively developed further — AKS running the same
+// Helm chart as on-prem (charts/cloudgrange, values-azure.yaml, AB#9187) is the primary
+// Azure profile, per cloudgrange-internal/pmo/plans/2026-09-15-platform-restructure-helm-k8s.md.
+// ACA cannot run Helm charts or raw Kubernetes manifests at all (its own deployment
+// schema), so "the same solution everywhere" is only actually true on AKS. New Azure
+// feature work belongs in the AKS overlay, not here.
+//
 // CloudGrange PaaS (Model B) entry point — subscription-scoped.
 // Follows ADR-048 (Azure resource naming and tagging standard):
 //   - Default names: <type-abbr>-<workload>-<env>-<region>-<instance>
