@@ -8,6 +8,10 @@
 param(
     [ValidateSet('Online', 'Bundled', 'Appliance')]
     [string]$Mode = 'Online',
+    # AB#9185: Compose (default, unchanged) or K3s/Helm — runs in parallel per the
+    # platform-restructure plan's rollout order; Compose is not retired this release.
+    [ValidateSet('Compose', 'K3s')]
+    [string]$Engine = 'Compose',
     [string]$VmIp = '192.168.100.10',
     [string]$VhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx',
     # AB#1585 — Proxy support. Format: http://host:port or http://user:pass@host:port
@@ -235,56 +239,72 @@ function Invoke-CloudGrangeInstall {
         Install-Wsl2Fallback
     }
 
-    # Step 5: Install Docker CE (AB#1585 — proxy forwarded)
-    # Wait for SSH to be available before connecting (VM may still be running cloud-init).
+    # Step 5-6: install the runtime and deploy the stack. AB#9185: the K3s/Helm engine
+    # skips Docker CE + Compose entirely — Install-CloudGrangeK3s.sh (run remotely by
+    # Deploy-K3sHelm.ps1) installs K3s itself and does the chart install in one step.
     if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
         Write-Progress-Step "Waiting for VM SSH to become available"
         $sshReady = Wait-ForTcp -HostName $VmIp -Port 22 -TimeoutSeconds 300
         if (-not $sshReady) {
-            Write-Warning "SSH not reachable within 5 minutes. Docker CE install may fail."
+            Write-Warning "SSH not reachable within 5 minutes. Install may fail."
         } else {
             Write-Host "  SSH available at $VmIp" -ForegroundColor Green
         }
     }
-    Write-Progress-Step "Installing Docker CE"
-    . "$PSScriptRoot\scripts\Install-DockerCe.ps1"
-    $dockerCeArgs = @{ VmName = 'cloudgrange-docker'; UseWsl2 = $useWsl2; VmIp = $VmIp }
-    if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
-        $dockerCeArgs['SshKeyPath'] = $sshKeyPath
-    } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
-        $dockerCeArgs['Credential'] = $vmGuestCred
-    }
-    # AB#8129: Bundled mode installs Docker CE from the pinned .deb set in the bundle (no network).
-    if ($Mode -eq 'Bundled') {
-        $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
-        $bundledDebs = Join-Path $bundleRoot 'docker-debs'
-        if (-not (Test-Path (Join-Path $bundledDebs 'SHA256SUMS'))) {
-            Write-Error "CG-INST-ERR-011: Bundled mode requires docker-debs/ in the bundle ($bundledDebs)."
-        }
-        $dockerCeArgs['OfflinePackagesPath'] = $bundledDebs
-    }
-    Install-DockerCe @dockerCeArgs @proxyArgs
 
-    # Step 6: Deploy Docker Compose stack
-    Write-Progress-Step "Deploying CloudGrange Docker Compose stack"
-    . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
-    $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
-    if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
-        $composeArgs['SshKeyPath'] = $sshKeyPath
-    } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
-        $composeArgs['Credential'] = $vmGuestCred
-    }
-    # AB#1852: in Bundled mode, pass the pre-saved images tar path
-    if ($Mode -eq 'Bundled') {
-        $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
-        $bundledImageTar = Join-Path $bundleRoot 'cloudgrange-images.tar'
-        if (Test-Path $bundledImageTar) {
-            $composeArgs['BundledImagesPath'] = $bundledImageTar
-        } else {
-            Write-Warning "Bundled images tar not found at $bundledImageTar — falling back to docker pull"
+    if ($Engine -eq 'K3s') {
+        if ($Mode -eq 'Bundled') {
+            Write-Error "CG-INST-ERR-013: -Engine K3s does not yet support -Mode Bundled (no offline container images in the K3s bundle yet — AB#9184's known gap). Use -Mode Online, or -Engine Compose for a fully offline install."
         }
+        Write-Progress-Step "Deploying CloudGrange via K3s/Helm"
+        . "$PSScriptRoot\scripts\Deploy-K3sHelm.ps1"
+        $k3sArgs = @{ VmName = 'cloudgrange-k3s'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+        if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
+            $k3sArgs['SshKeyPath'] = $sshKeyPath
+        } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
+            $k3sArgs['Credential'] = $vmGuestCred
+        }
+        Deploy-K3sHelm @k3sArgs
+    } else {
+        Write-Progress-Step "Installing Docker CE"
+        . "$PSScriptRoot\scripts\Install-DockerCe.ps1"
+        $dockerCeArgs = @{ VmName = 'cloudgrange-docker'; UseWsl2 = $useWsl2; VmIp = $VmIp }
+        if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
+            $dockerCeArgs['SshKeyPath'] = $sshKeyPath
+        } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
+            $dockerCeArgs['Credential'] = $vmGuestCred
+        }
+        # AB#8129: Bundled mode installs Docker CE from the pinned .deb set in the bundle (no network).
+        if ($Mode -eq 'Bundled') {
+            $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
+            $bundledDebs = Join-Path $bundleRoot 'docker-debs'
+            if (-not (Test-Path (Join-Path $bundledDebs 'SHA256SUMS'))) {
+                Write-Error "CG-INST-ERR-011: Bundled mode requires docker-debs/ in the bundle ($bundledDebs)."
+            }
+            $dockerCeArgs['OfflinePackagesPath'] = $bundledDebs
+        }
+        Install-DockerCe @dockerCeArgs @proxyArgs
+
+        Write-Progress-Step "Deploying CloudGrange Docker Compose stack"
+        . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
+        $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+        if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
+            $composeArgs['SshKeyPath'] = $sshKeyPath
+        } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
+            $composeArgs['Credential'] = $vmGuestCred
+        }
+        # AB#1852: in Bundled mode, pass the pre-saved images tar path
+        if ($Mode -eq 'Bundled') {
+            $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
+            $bundledImageTar = Join-Path $bundleRoot 'cloudgrange-images.tar'
+            if (Test-Path $bundledImageTar) {
+                $composeArgs['BundledImagesPath'] = $bundledImageTar
+            } else {
+                Write-Warning "Bundled images tar not found at $bundledImageTar — falling back to docker pull"
+            }
+        }
+        Deploy-DockerCompose @composeArgs
     }
-    Deploy-DockerCompose @composeArgs
 
     # Step 7: Wait for API health, then emit setup URL (AB#1627, ADR-047)
     # AB#1593 / AB#8129: nginx terminates TLS on 443 and is the only published entry point. The API
@@ -323,11 +343,21 @@ function Invoke-CloudGrangeInstall {
     $realmAdminPassword = ''
     if (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
         $credSsh = Get-CloudGrangeSshOptions -KeyPath $sshKeyPath
-        if ($setupPending) {
-            $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
-            if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
+        if ($Engine -eq 'K3s') {
+            # AB#9185: the K3s engine's API pod and its bootstrap secrets Secret (AB#9178)
+            # replace the Compose engine's docker-compose-exec and .env file reads above.
+            if ($setupPending) {
+                $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'sudo k3s kubectl exec deploy/cloudgrange-api -- cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
+                if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
+            }
+            $realmAdminPassword = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", "sudo k3s kubectl get secret cloudgrange-secrets -o jsonpath='{.data.realm-admin-password}' | base64 -d")) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
+        } else {
+            if ($setupPending) {
+                $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
+                if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
+            }
+            $realmAdminPassword = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2")) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
         }
-        $realmAdminPassword = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2")) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
     }
 
     # Clean up the ephemeral SSH key pair after successful install, unless an appliance build
