@@ -92,10 +92,16 @@ def stage_real_install():
         run(["helm", "install", "cg", CHART_PATH, "-f", f"{CHART_PATH}/{DEPLOYABLE_PROFILE}",
              "--timeout", "4m", "--wait"], check=False)
 
-        # helm --wait can time out on a single known-stale image (the portal, until its
-        # :latest is republished past AB#9172) without every OTHER pod actually failing —
-        # give the cluster a few more seconds to settle, then check pod readiness directly
+        # Give the cluster a few seconds to settle, then check pod readiness directly
         # rather than trusting --wait's single pass/fail.
+        #
+        # NO per-pod exemptions below, ever. This gate used to classify any not-Ready
+        # cloudgrange-portal pod as "known/expected ... not a chart defect" and still print
+        # "Stage 3 PASSED". The portal was genuinely broken on Kubernetes the whole time
+        # (a non-numeric image USER, which K8s cannot verify against runAsNonRoot), and this
+        # exemption — plus matching ones in the installer's own two gates — is why it
+        # reached a customer's real server with "install complete" printed over it.
+        # A gate taught to ignore the component that is failing is worse than no gate.
         time.sleep(10)
         result = run(["kubectl", "get", "pods", "--no-headers"], check=False)
         lines = [l for l in result.stdout.splitlines() if l.strip()]
@@ -112,17 +118,10 @@ def stage_real_install():
             if n != m:
                 failures.append(f"{name}: {ready} {status}")
 
-        known_stale_portal = [f for f in failures if f.startswith("cg-portal")]
-        unexpected = [f for f in failures if not f.startswith("cg-portal")]
+        if failures:
+            raise SystemExit(f"GATE FAIL: pods not Ready: {failures}")
 
-        if known_stale_portal:
-            print(f"Known/expected not-ready: {known_stale_portal} "
-                  "(portal :latest predates AB#9172's non-root fix — not a chart defect)")
-
-        if unexpected:
-            raise SystemExit(f"GATE FAIL: unexpected pods not Ready: {unexpected}")
-
-        print("Stage 3 PASSED (all pods Ready except the known-stale portal image).")
+        print("Stage 3 PASSED (every pod Ready).")
     finally:
         subprocess.run(["k3d", "cluster", "delete", cluster], capture_output=True)
 
