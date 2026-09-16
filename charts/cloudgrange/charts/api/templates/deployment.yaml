@@ -27,7 +27,20 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: cloudgrange-api
+        {{- if $.Values.global.aks.enabled }}
+        # AB#9187 fix: found via a real AKS test that the CSI SecretProviderClass (which
+        # sets clientID for Azure AD Workload Identity) had no actual workload-identity
+        # wiring on this pod — the CSI driver would fail to authenticate to Key Vault with
+        # no pod-managed-identity, VM-managed-identity, or federated workload identity
+        # configured. This label + the ServiceAccount below (templates/aks/serviceaccount.yaml)
+        # are the other required half of workload identity, paired with a federated
+        # credential on the UAMI (created at cluster-setup time, not by this chart).
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
+      {{- if $.Values.global.aks.enabled }}
+      serviceAccountName: {{ $.Release.Name }}-workload-identity
+      {{- end }}
       securityContext:
         runAsNonRoot: true
       containers:
