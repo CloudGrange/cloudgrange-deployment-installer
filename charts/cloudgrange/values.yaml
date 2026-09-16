@@ -13,6 +13,20 @@ global:
     registry: ghcr.io/cloudgrange
     tag: latest
     pullPolicy: IfNotPresent
+  # This chart installs on ANY conformant Kubernetes, not just the bundled K3s. The
+  # ingress controller differs per distribution, so never hardcode it:
+  #   K3s (default here)    className: traefik
+  #   microk8s              className: public      (enable:  microk8s enable ingress)
+  #   ingress-nginx         className: nginx
+  #   AKS App Gateway       className: azure-application-gateway
+  #   EKS ALB               className: alb
+  # Set className to "" (empty) to omit it entirely and let a default IngressClass claim
+  # the resource. annotations are controller-specific and are applied verbatim, so nothing
+  # Traefik-only is ever imposed on a cluster running something else.
+  ingress:
+    className: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
   # AKS overlay (values-azure.yaml) flips this — swaps local-path/Postgres-in-cluster for
   # Azure Disk/Files CSI + managed identity, per AB#9187.
   cloud: false

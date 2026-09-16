@@ -15,16 +15,29 @@ this exact way. Fix: omit `host` entirely (an empty/absent host matches ALL inco
 headers) when global.hostname isn't a DNS name, so IP-based access keeps working; a real
 DNS hostname still gets the more specific host-matched rule. */ -}}
 {{- $isIp := regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` .Values.global.hostname }}
+{{- /* The ingress class MUST be configurable. This chart is meant to install on ANY
+conformant Kubernetes — microk8s, EKS, AKS, an existing cluster the customer already runs —
+not only on K3s. It previously hardcoded `ingressClassName: traefik` plus Traefik-only
+annotations, so on any cluster whose controller is nginx/public/azure/alb the Ingress was
+simply never claimed by a controller and the product was unreachable, with no error to
+explain it. `global.ingress.className` defaults to traefik (K3s's built-in, which the
+bundled single-node install uses) and is overridden with
+`--set global.ingress.className=public` (microk8s), `nginx`, `azure/application-gateway`,
+etc. Controller-specific annotations come from `global.ingress.annotations` so they are
+never imposed on a controller that does not understand them. */ -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ .Release.Name }}
+  {{- $ann := .Values.global.ingress.annotations | default dict }}
+  {{- if $ann }}
   annotations:
-    # Traefik's default backend timeout (90s) matches the edge nginx's proxy_read_timeout
-    # for the portal route; the large-upload path below needs much longer.
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    {{- toYaml $ann | nindent 4 }}
+  {{- end }}
 spec:
-  ingressClassName: traefik
+  {{- with .Values.global.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
   tls:
     - hosts: [{{ .Values.global.hostname | quote }}]
       secretName: {{ .Release.Name }}-tls
