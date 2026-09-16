@@ -61,7 +61,8 @@ REJECT_REASONS = {
 }
 CAP_ADD_ALLOWED = {
     "nginx": {"CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"},
-    "cloudgrange-portal": {"CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"},
+    # AB#9172: cloudgrange-portal now runs unprivileged on :8080 (nginxinc/nginx-unprivileged) — no
+    # root capabilities needed to bind or to rewrite index.html/the nginx conf at start.
     "postgres": {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"},
 }
 WRITABLE_ROOT_ALLOWED = {"cloudgrange-portal", "keycloak"}
