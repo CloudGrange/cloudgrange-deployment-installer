@@ -27,6 +27,17 @@ set -euo pipefail
 STATE_FILE="${CLOUDGRANGE_INSTALL_STATE:-/opt/cloudgrange/.install-state.json}"
 CHARTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/charts"
 HOSTNAME_VALUE="${CLOUDGRANGE_HOSTNAME:-cloudgrange.local}"
+VERSION_VALUE="${CLOUDGRANGE_VERSION:-latest}"
+
+# AB#9183: --hostname/--version give this script the same CLI contract as
+# Install-CloudGrange-Linux.sh, which delegates to this script under --engine k3s.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --hostname) HOSTNAME_VALUE=$2; shift 2 ;;
+        --version)  VERSION_VALUE=$2; shift 2 ;;
+        *) echo "Unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
@@ -137,6 +148,7 @@ do_chart_installed() {
     helm upgrade --install cloudgrange "$CHARTS_DIR/cloudgrange" \
         -f "$CHARTS_DIR/cloudgrange/values-single-node.yaml" \
         --set "global.hostname=$HOSTNAME_VALUE" \
+        --set "global.image.tag=$VERSION_VALUE" \
         --timeout 5m --wait || true
 }
 
