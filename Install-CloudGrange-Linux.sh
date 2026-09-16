@@ -37,7 +37,11 @@ set -euo pipefail
 HOSTNAME_ARG=""
 VERSION="latest"
 COMPOSE_DIR="/opt/cloudgrange"
-ENGINE="compose"
+# K3s/Helm is THE deployment model for this product — that was the whole point of the
+# platform restructure. Compose remains reachable with --engine compose until AB#9189
+# retires it, but it is no longer what a customer gets by default: leaving the default on
+# compose meant every real install silently ran the stack the restructure replaced.
+ENGINE="k3s"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {

@@ -159,13 +159,14 @@ do_certmanager_installed() {
 
 do_chart_installed() {
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-    # --wait can time out on the one currently-known issue (the published portal
-    # :latest image predates AB#9172's non-root fix) without every OTHER pod actually
-    # failing — same tolerance scripts/Test-HelmChart.py already applies. Don't treat
-    # that single known failure as blocking this checkpoint; do_ready below still
-    # fails hard on any OTHER pod not becoming Ready.
+    # There is NO tolerated "known failing pod" here any more. This previously carried a
+    # deliberate allowance for the portal image predating AB#9172's non-root fix, paired
+    # with a portal exemption in do_ready — so a broken portal passed both gates and the
+    # installer printed "install complete" over a dead container on a real customer
+    # server. The portal image and chart are fixed; the allowance is gone. If a pod fails,
+    # the install fails. Never re-add a per-component exemption to make a run go green.
     #
-    # AB#9183 real bug, found via a real install: this blanket `|| true` also swallowed
+    # AB#9183 real bug, found via a real install: a blanket `|| true` here also swallowed
     # a genuine template-validation error (an invalid Ingress) that meant helm never
     # created that resource AT ALL — chart-installed still got marked done, so the
     # checkpoint state claimed success for a step that silently dropped a resource.
@@ -178,7 +179,7 @@ do_chart_installed() {
         -f "$CHARTS_DIR/cloudgrange/values-single-node.yaml" \
         --set "global.hostname=$HOSTNAME_VALUE" \
         --set "global.image.tag=$VERSION_VALUE" \
-        --timeout 5m --wait || true
+        --timeout 5m --wait || log "WARNING: 'helm upgrade --install --wait' did not succeed — continuing only far enough for the checks below to report exactly what is wrong; do_ready fails the install if any pod is not Ready"
     helm status cloudgrange >/dev/null 2>&1 || {
         echo "helm upgrade --install failed completely (no release exists) — see the error above" >&2
         exit 1
