@@ -214,6 +214,17 @@ function Invoke-CloudGrangeInstall {
             $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
             $bundledUbuntuPath = Join-Path $bundleRoot 'ubuntu-24.04-cloudimg.img'
         }
+        # AB#9185 fix: New-CloudGrangeVm.ps1 used to hardcode the VM name to
+        # cloudgrange-docker regardless of -Engine, so a K3s install would provision (and on
+        # rerun, silently delete/replace) a Hyper-V VM literally named cloudgrange-docker —
+        # colliding with any existing Compose VM of that name. Give each engine its own VM
+        # name and VHDX path; only override the VHDX default (never an explicit -VhdxPath
+        # the caller supplied) so a user-specified path is still honored for either engine.
+        $effectiveVmName = if ($Engine -eq 'K3s') { 'cloudgrange-k3s' } else { 'cloudgrange-docker' }
+        $effectiveVhdxPath = $VhdxPath
+        if ($Engine -eq 'K3s' -and $VhdxPath -eq 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx') {
+            $effectiveVhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-k3s.vhdx'
+        }
         # New-CloudGrangeVm.ps1 uses Hyper-V cmdlets that require Windows PowerShell (PS5.1).
         # Invoke via powershell.exe so the Hyper-V module loads correctly while the main
         # installer continues to run under PS7.
@@ -221,11 +232,12 @@ function Invoke-CloudGrangeInstall {
             '-NonInteractive', '-NoProfile', '-ExecutionPolicy', 'Bypass',
             '-File', "$PSScriptRoot\scripts\New-CloudGrangeVm.ps1",
             '-VmIp', $VmIp,
-            '-VhdxPath', $VhdxPath,
+            '-VhdxPath', $effectiveVhdxPath,
             '-Mode', $Mode,
             '-SshPublicKeyFile', "$sshKeyPath.pub",
             '-BundledImagePath', $bundledUbuntuPath,
-            '-SwitchName', $SwitchName
+            '-SwitchName', $SwitchName,
+            '-VmName', $effectiveVmName
         )
         if ($SkipHostPortForward) { $vmArgs += '-SkipHostPortForward' }
         if ($NoDefaultGateway)    { $vmArgs += '-NoDefaultGateway' }
