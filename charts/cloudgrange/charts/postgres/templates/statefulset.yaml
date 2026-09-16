@@ -41,6 +41,7 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        labels: { app.kubernetes.io/part-of: cloudgrange }
       spec:
         accessModes: [ReadWriteOnce]
         {{- if .Values.persistence.storageClass }}

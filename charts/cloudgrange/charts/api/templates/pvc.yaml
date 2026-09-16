@@ -2,6 +2,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ .Release.Name }}-api-secrets
+  labels: { app.kubernetes.io/part-of: cloudgrange }
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -12,6 +13,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ .Release.Name }}-api-updates
+  labels: { app.kubernetes.io/part-of: cloudgrange }
 spec:
   accessModes: [ReadWriteOnce]
   resources:

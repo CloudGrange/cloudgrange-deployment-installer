@@ -55,6 +55,45 @@ race against both the shared Secret and the Postgres StatefulSet not existing ye
 fresh install. The advisory lock is what actually makes concurrent-pod migrations
 race-safe; see the comment at the top of `charts/api/templates/deployment.yaml`.
 
+## Install qualification (AB#9182)
+
+`scripts/Install-CloudGrangeK3s.sh` is the qualification-gate installer: it wraps the
+two-step sequence above in a resumable, checkpointed process. Each named stage
+(`prereqs-checked` → `k3s-installed` → `certmanager-installed` → `chart-installed` →
+`ready`) is recorded to a JSON state file (`$CLOUDGRANGE_INSTALL_STATE`, default
+`/opt/cloudgrange/.install-state.json`) only AFTER it actually succeeds — an
+interrupted run (Ctrl-C, crash, network drop) simply re-runs from the first incomplete
+stage on the next invocation, never redoing completed work or trusting a partial write.
+Real interrupt-and-resume testing (kill the process mid-`k3s-installed`, confirm resume
+correctly skips the completed stages and retries only the interrupted one) is how two
+real bugs were caught before this ever ships: a `stage_done` check that never matched
+Python's indented JSON output, and a `helm install` that left a failed release blocking
+every subsequent retry with "name already in use" — fixed by using
+`helm upgrade --install` everywhere, which is idempotent regardless of prior state.
+
+`scripts/New-ArtifactManifest.sh` produces a plain SHA-256 digest manifest
+(`charts/manifest.json`) for the vendored artifacts and the chart's own tracked
+contents — a hash-verified bundle, not a cryptographically signed one (signing needs
+key-management infrastructure this product doesn't have; a hash check answers "did the
+right bytes arrive" without that cost). Confirmed reproducible: re-running it twice on
+an unchanged tree produces identical digests.
+
+## Uninstall / retention
+
+`helm uninstall cloudgrange` removes the release's Deployments/Services/Secret/etc. but
+**leaves PersistentVolumeClaims behind** — this is Kubernetes' own default behavior
+(PVCs are never owned by a Helm release's garbage collection), matching how Postgres,
+Keycloak, Grafana, Prometheus and Loki data already survives a Compose `docker compose
+down` today. This is intentional, not an oversight — it means an accidental
+`helm uninstall` doesn't silently destroy customer data.
+
+For a full purge (e.g. decommissioning an appliance for good), delete the PVCs
+explicitly and separately:
+
+```bash
+kubectl delete pvc -l app.kubernetes.io/part-of=cloudgrange
+```
+
 ## Not yet wired up (separate ADO items)
 
 - Ingress routing via Traefik (AB#9180) — `cg-tls` (the cert-manager-issued Secret) is ready for an Ingress to reference once this lands
