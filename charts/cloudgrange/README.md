@@ -10,10 +10,25 @@ instead of Docker Compose).
 Prometheus + Loki + Grafana, ADR-016) — plain subdirectories under `charts/`, no
 `helm dependency build` step needed.
 
+## Install sequence
+
+cert-manager (AB#9179) must be installed as its OWN, separate Helm release, BEFORE this
+chart — a real k3d install proved Helm can't validate our own `ClusterIssuer`/`Certificate`
+resources in the same install as a subchart that introduces those CRDs ("ensure CRDs are
+installed first"), which is cert-manager's own standard documented pattern regardless.
+The chart is vendored at `charts/vendor/cert-manager-v1.21.2.tgz` — no internet access
+needed at install time.
+
+```bash
+helm install cert-manager charts/vendor/cert-manager-v1.21.2.tgz \
+  --set crds.enabled=true --namespace cert-manager --create-namespace --wait
+helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-single-node.yaml --wait
+```
+
 ## Profiles
 
 ```
-helm install cloudgrange . -f values-single-node.yaml --set secrets.postgresPassword=<...> ...
+helm install cloudgrange . -f values-single-node.yaml
 ```
 
 - `values-single-node.yaml` — the only currently fully-deployable profile. One K3s node,
@@ -42,8 +57,7 @@ race-safe; see the comment at the top of `charts/api/templates/deployment.yaml`.
 
 ## Not yet wired up (separate ADO items)
 
-- TLS / cert-manager (AB#9179)
-- Ingress routing via Traefik (AB#9180)
+- Ingress routing via Traefik (AB#9180) — `cg-tls` (the cert-manager-issued Secret) is ready for an Ingress to reference once this lands
 - MetalLB for the relay's on-prem `LoadBalancer` Service (AB#9191)
 - Local verification gate script (`helm lint`/`template`/real K3s smoke install) — AB#9181
 

@@ -16,3 +16,13 @@ dependencies:
   - { name: postgres,      version: 0.1.0 }
   - { name: keycloak,      version: 0.1.0 }
   - { name: observability, version: 0.1.0 }
+# AB#9179: cert-manager is deliberately NOT a dependency here, even though it's bundled
+# (see charts/cert-manager-v1.21.2.tgz, a sibling of this directory). A real k3d install
+# proved Helm can't validate CRD-typed resources (our own ClusterIssuer/Certificate below)
+# in the SAME install as a subchart that introduces those CRDs — "no matches for kind
+# ClusterIssuer in version cert-manager.io/v1, ensure CRDs are installed first" — Helm
+# builds every object from the whole combined release manifest before applying any of it,
+# so a subchart's CRDs aren't registered with the API server yet when our own templates
+# are validated. This is cert-manager's own documented, standard pattern for every chart
+# that depends on it: install cert-manager as its own separate Helm release FIRST, then
+# install charts (like this one) that use its CRDs. See README.md's install sequence.
