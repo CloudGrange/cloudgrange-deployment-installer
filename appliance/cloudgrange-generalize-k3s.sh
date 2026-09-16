@@ -48,7 +48,19 @@ echo "[generalize-k3s] stopping K3s and wiping its data directory"
 # environment — in its metadata store's free pages; wiping the whole data directory,
 # not just `helm uninstall`, is what actually removes install-time secrets from disk,
 # the same reasoning cloudgrange-generalize.sh applies to /var/lib/docker.
-systemctl stop k3s.service 2>/dev/null || true
+#
+# AB#9186 real bug, found via a real appliance build: a plain `systemctl stop k3s.service`
+# does NOT unmount the bind mounts kubelet creates under /var/lib/kubelet/pods/*/volumes
+# (and /run/k3s) for every running pod's volumes — `rm -rf` then fails on every one of
+# them with "Device or resource busy", aborting generalization. K3s ships its own
+# k3s-killall.sh specifically to stop every k3s-related process AND unmount everything it
+# mounted (this is also what k3s-uninstall.sh calls internally) — use that instead of a
+# bare service stop.
+if [ -x /usr/local/bin/k3s-killall.sh ]; then
+    /usr/local/bin/k3s-killall.sh
+else
+    systemctl stop k3s.service 2>/dev/null || true
+fi
 rm -rf /var/lib/rancher/k3s /etc/rancher/k3s /var/lib/kubelet
 
 echo "[generalize-k3s] /opt/cloudgrange root-owned (if the compose fallback path ever ran here too)"
@@ -70,6 +82,18 @@ install -d -m 0755 /usr/local/lib/cloudgrange
 install -m 0755 "$STAGE_DIR/cloudgrange-kvp.py" /usr/local/lib/cloudgrange/cloudgrange-kvp.py
 install -m 0755 "$STAGE_DIR/cloudgrange-operator-access.sh" /usr/local/sbin/cloudgrange-operator-access.sh
 install -m 0644 "$STAGE_DIR/cloudgrange-operator-access.service" /etc/systemd/system/cloudgrange-operator-access.service
+# AB#9186 real bug, found via a real appliance build: the Ubuntu 24.04 cloud image
+# New-CloudGrangeVm.ps1 provisions does NOT ship linux-cloud-tools-virtual (the package
+# providing hv-kvp-daemon) — this used to hard-fail here instead of installing it. Install
+# it if missing rather than requiring some other, undocumented base image to have it
+# already; this VM has internet access at generalize time (same assumption the rest of
+# the install already makes).
+if ! systemctl list-unit-files hv-kvp-daemon.service >/dev/null 2>&1; then
+    echo "[generalize-k3s] hv-kvp-daemon not present — installing linux-cloud-tools-virtual"
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq -y linux-cloud-tools-virtual linux-cloud-tools-"$(uname -r)" 2>/dev/null \
+        || DEBIAN_FRONTEND=noninteractive apt-get install -qq -y linux-cloud-tools-virtual
+fi
 install -d -m 0755 /etc/systemd/system/hv-kvp-daemon.service.d
 printf '[Service]\nUMask=0077\n' > /etc/systemd/system/hv-kvp-daemon.service.d/10-cloudgrange-umask.conf
 systemctl daemon-reload
