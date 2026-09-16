@@ -1,0 +1,91 @@
+{{- /* Creates the first CloudGrange realm administrator (realm role PlatformAdmin).
+
+This is the Kubernetes port of the Compose engine's cloudgrange-realm-admin.service
+(compose/keycloak/bootstrap-realm-admin.sh), which the K3s/Helm path never had. The realm
+import ships NO users by design, and nothing else in this chart creates one — the
+secrets-bootstrap Job only generates the realm-admin *password*, never the account it
+belongs to. Without this Job a K3s install has a password for a user that does not exist.
+Found by diffing what the Compose installer sets up against what the K3s installer sets up:
+Compose installs three systemd units (stack, realm-admin, updater) and the K3s path had
+ported none of the latter two.
+
+post-install/post-upgrade hook, not pre-install: it must run AFTER Keycloak is serving and
+the realm has been imported, so it cannot be a pre-install hook (those run before any
+normal chart resource exists). The script polls for readiness itself rather than trusting
+ordering.
+
+Idempotent — exits 0 when the user already exists, so re-running helm upgrade is safe and
+never resets a password the operator has already changed. */ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-realm-admin
+  labels:
+    app.kubernetes.io/part-of: cloudgrange
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudgrange-realm-admin
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: realm-admin
+          image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          env:
+            # Secrets reach the container as environment variables and are never placed on a
+            # command line, matching the Compose script's handling. kcadm reads the master
+            # login password from KC_CLI_PASSWORD; the new user's password goes over stdin.
+            - name: KC_CLI_USER
+              valueFrom:
+                secretKeyRef: { name: {{ .Release.Name }}-secrets, key: keycloak-admin-user }
+            - name: KC_CLI_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Release.Name }}-secrets, key: keycloak-admin-password }
+            - name: REALM_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Release.Name }}-secrets, key: realm-admin-password }
+            - name: KC_SERVER
+              value: "http://{{ .Release.Name }}-keycloak:8080"
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              REALM=cloudgrange
+              ADMIN_USER=admin@cloudgrange.local
+              # --config in /tmp: Keycloak's uid has no writable home, so kcadm cannot create
+              # its default ~/.keycloak/kcadm.config.
+              CFG=/tmp/kcadm-cloudgrange.config
+              kc() { /opt/keycloak/bin/kcadm.sh "$@" --config "$CFG"; }
+              # The session file holds a master-realm admin token — remove it on any exit.
+              trap 'rm -f "$CFG"' EXIT
+
+              echo "[realm-admin] waiting for Keycloak and the '$REALM' realm at $KC_SERVER"
+              for _ in $(seq 1 90); do
+                if kc config credentials --server "$KC_SERVER" --realm master --user "$KC_CLI_USER" >/dev/null 2>&1 \
+                   && kc get "realms/$REALM" --fields realm >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 5
+              done
+              kc get "realms/$REALM" --fields realm >/dev/null
+
+              if kc get users -r "$REALM" -q "username=$ADMIN_USER" -q exact=true --fields id | grep -q '"id"'; then
+                echo "[realm-admin] $ADMIN_USER already exists; nothing to do"
+                exit 0
+              fi
+
+              echo "[realm-admin] creating $ADMIN_USER (PlatformAdmin, temporary random password)"
+              printf '{"username":"%s","email":"%s","enabled":true,"emailVerified":true,"attributes":{"org_id":["00000000-0000-0000-0000-000000000001"]},"credentials":[{"type":"password","value":"%s","temporary":true}]}' \
+                "$ADMIN_USER" "$ADMIN_USER" "$REALM_ADMIN_PASSWORD" | kc create users -r "$REALM" -f - >/dev/null
+              kc add-roles -r "$REALM" --uusername "$ADMIN_USER" --rolename PlatformAdmin
+              echo "[realm-admin] done"
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 256Mi }
