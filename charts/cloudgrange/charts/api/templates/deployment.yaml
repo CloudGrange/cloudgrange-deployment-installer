@@ -76,6 +76,15 @@ spec:
           volumeMounts:
             - { name: api-secrets, mountPath: /etc/cloudgrange }
             - { name: platform-updates, mountPath: /var/lib/cloudgrange/updates }
+            {{- if .Values.global.aks.enabled }}
+            # AB#9187: mounting the SecretProviderClass volume is what triggers the
+            # Secrets Store CSI Driver to sync Key Vault values into the regular
+            # {{ .Release.Name }}-secrets Secret (secretObjects, see
+            # templates/aks/secretproviderclass.yaml) — the api pod doesn't read files
+            # from this mount directly, every env var below still comes from
+            # secretKeyRef against that synced Secret, unchanged from the on-prem path.
+            - { name: azure-kv, mountPath: /mnt/azure-kv, readOnly: true }
+            {{- end }}
           readinessProbe:
             httpGet: { path: /health/ready, port: {{ .Values.port }} }
             initialDelaySeconds: 10
@@ -88,3 +97,11 @@ spec:
       volumes:
         - { name: api-secrets, persistentVolumeClaim: { claimName: "{{ .Release.Name }}-api-secrets" } }
         - { name: platform-updates, persistentVolumeClaim: { claimName: "{{ .Release.Name }}-api-updates" } }
+        {{- if .Values.global.aks.enabled }}
+        - name: azure-kv
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Release.Name }}-azure-kv
+        {{- end }}
