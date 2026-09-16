@@ -17,14 +17,13 @@ global:
   # Azure Disk/Files CSI + managed identity, per AB#9187.
   cloud: false
 
-# AB#9177 placeholder — see templates/secrets.yaml. Pass real values via --set or a
-# separate, un-committed values file (e.g. `helm install -f values-secrets.local.yaml`).
-# AB#9178 replaces this whole block with a generated-server-side bootstrap hook Job.
-secrets:
-  postgresPassword: ""
-  keycloakAdminUser: "admin"
-  keycloakAdminPassword: ""
-  keycloakApiClientSecret: ""
-  grafanaAdminPassword: ""
-  relayEnrollmentToken: ""
-  realmAdminPassword: ""
+# AB#9178: the 6 bootstrap secrets (postgres-password, keycloak-admin-user/-password,
+# keycloak-api-client-secret, grafana-admin-password, relay-enrollment-token,
+# realm-admin-password) are generated server-side by templates/secrets-bootstrap-job.yaml
+# on first install and never overwritten by helm upgrade — nothing to set here.
+secretsBootstrap:
+  # Bitnami's free-tier images no longer publish version-pinned tags (digest-only as of
+  # late 2025). rancher/kubectl was the next try but ships kubectl only — no /bin/sh, so
+  # the bootstrap script's shell script can't even start ("no such file or directory").
+  # alpine/k8s bundles kubectl on top of a real Alpine shell + coreutils (head/base64/tr).
+  image: docker.io/alpine/k8s:1.31.1
