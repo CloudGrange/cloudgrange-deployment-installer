@@ -12,5 +12,6 @@ persistence:
     size: 8Gi
 updateChannelUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json"
 redis:
+  # AB#9190: the connection string is built in the template from the release name, not
+  # read from a value — see deployment.yaml. This flag alone gates whether it's set.
   enabled: false
-  connectionString: ""

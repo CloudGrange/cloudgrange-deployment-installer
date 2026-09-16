@@ -69,9 +69,13 @@ spec:
             - name: CLOUDGRANGE_UPDATE_CHANNEL_URL
               value: {{ .Values.updateChannelUrl | quote }}
             {{- if .Values.redis.enabled }}
+            {{- /* AB#9190: the release name is only known at template-render time, so
+            the Redis host is built here, not hardcoded into a values file — earlier
+            values-multi-node.yaml had a REDIS_SERVICE_DNS_NAME:6379 placeholder for
+            exactly this reason (couldn't know the real DNS name until now). */}}
             # AB#9174 — multi-node/ha profile only.
             - name: Redis__ConnectionString
-              value: {{ .Values.redis.connectionString | quote }}
+              value: "{{ $.Release.Name }}-redis:6379"
             {{- end }}
           volumeMounts:
             - { name: api-secrets, mountPath: /etc/cloudgrange }

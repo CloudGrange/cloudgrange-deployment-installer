@@ -1,0 +1,51 @@
+{{- /* AB#9190: multi-node/ha profile only. Requires the CloudNativePG operator already
+installed as its OWN separate Helm release (charts/vendor/cloudnative-pg-0.29.0.tgz) —
+same reasoning as cert-manager (AB#9179): Helm can't validate a CRD-typed resource (this
+Cluster) in the same install as a subchart that introduces those CRDs. See
+charts/cloudgrange/README.md's install sequence. */ -}}
+{{- if .Values.highAvailability.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $.Release.Name }}-postgres
+spec:
+  instances: {{ .Values.highAvailability.instances }}
+  # CloudNativePG requires its own specially-built images (bundled instance-manager
+  # tooling, specific PGDATA layout) — NOT the vanilla postgres:17.11-alpine image the
+  # single-node StatefulSet above uses. Caught before ever testing this: reusing
+  # .Values.image would have shipped a Cluster CR referencing an image CNPG can't
+  # actually run. Verified this exact tag exists (docker manifest inspect) before using it.
+  imageName: "{{ .Values.highAvailability.image }}"
+  storage:
+    size: {{ .Values.persistence.size }}
+    {{- if .Values.persistence.storageClass }}
+    storageClass: {{ .Values.persistence.storageClass }}
+    {{- end }}
+  bootstrap:
+    initdb:
+      database: cloudgrange
+      owner: cloudgrange
+      secret:
+        # AB#9178's bootstrap Secret carries username/password under those exact keys
+        # (added in AB#9190) alongside the existing postgres-password key every other
+        # subchart's secretKeyRef already uses — one Secret, two audiences.
+        name: {{ $.Release.Name }}-secrets
+  resources: {{ toYaml .Values.resources | nindent 4 }}
+{{- end }}
+---
+{{- /* Service alias: every other subchart already points at "<release>-postgres" —
+CloudNativePG creates its own "<cluster>-rw" (read-write primary) Service, so a plain
+alias Service keeps every existing ConnectionStrings__Default/KC_DB_URL/etc. unchanged
+regardless of which Postgres path is active. */ -}}
+{{- if .Values.highAvailability.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-postgres
+  labels: { app.kubernetes.io/name: cloudgrange-postgres }
+spec:
+  # ExternalName is pure DNS CNAME resolution — no `ports:` field (K8s ignores it for
+  # this Service type); every consumer already connects on :5432 explicitly.
+  type: ExternalName
+  externalName: {{ $.Release.Name }}-postgres-rw.{{ $.Release.Namespace }}.svc.cluster.local
+{{- end }}

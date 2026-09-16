@@ -1,0 +1,60 @@
+{{- /* AB#9190: single-instance Redis for the multi-node profile — backs AB#9174's
+cross-pod relay dispatch bus. Not Sentinel/clustered yet: Redis here is a pub/sub
+relay-dispatch cache, not the system of record (Postgres owns job state), so a single
+instance restarting on pod-eviction is a brief dispatch-latency blip, not a durability
+loss — RedisRelayDispatchBus/RelayPresenceStore already treat "no receiver" as
+NoRelayConnected (a safe, already-handled outcome, AB#9174), not a crash. Full
+Sentinel/cluster HA for Redis itself is a real future refinement once this simpler
+version has proven out, matching the "inexpensive first, more robust as validated
+need shows up" approach already applied elsewhere in this restructure. */ -}}
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-redis
+  labels: { app.kubernetes.io/name: cloudgrange-redis }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: cloudgrange-redis } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: cloudgrange-redis } }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+      containers:
+        - name: redis
+          image: {{ .Values.image }}
+          args: ["--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: "{{ $.Release.Name }}-redis-data" }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $.Release.Name }}-redis-data
+  labels: { app.kubernetes.io/part-of: cloudgrange }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: {{ .Values.persistence.size }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-redis
+  labels: { app.kubernetes.io/name: cloudgrange-redis }
+spec:
+  selector: { app.kubernetes.io/name: cloudgrange-redis }
+  ports:
+    - { port: 6379 }
+{{- end }}

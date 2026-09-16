@@ -7,7 +7,12 @@ resources:
 persistence:
   size: 10Gi
   storageClass: ""
-# AB#9190 (later): multi-node/ha profile swaps this single-Pod StatefulSet for the
-# CloudNativePG operator. Not built by AB#9177 — single-node only for now.
+# AB#9190: multi-node/ha profile swaps the single-Pod StatefulSet above for the
+# CloudNativePG operator (charts/postgres/templates/cluster.yaml), installed as its own
+# separate Helm release first — same CRD-ordering reasoning as cert-manager (AB#9179).
 highAvailability:
   enabled: false
+  instances: 3
+  # CloudNativePG's own maintained image (NOT the vanilla postgres image above — it
+  # needs CNPG's bundled instance-manager tooling). Version-matched to 17.11.
+  image: ghcr.io/cloudnative-pg/postgresql:17.11

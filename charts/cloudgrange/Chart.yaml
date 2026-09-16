@@ -16,6 +16,7 @@ dependencies:
   - { name: postgres,      version: 0.1.0 }
   - { name: keycloak,      version: 0.1.0 }
   - { name: observability, version: 0.1.0 }
+  - { name: redis,         version: 0.1.0 }
 # AB#9179: cert-manager is deliberately NOT a dependency here, even though it's bundled
 # (see charts/cert-manager-v1.21.2.tgz, a sibling of this directory). A real k3d install
 # proved Helm can't validate CRD-typed resources (our own ClusterIssuer/Certificate below)

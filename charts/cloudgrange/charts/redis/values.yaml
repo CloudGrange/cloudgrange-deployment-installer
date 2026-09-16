@@ -1,0 +1,7 @@
+enabled: false
+image: redis:7.4-alpine
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { memory: 256Mi }
+persistence:
+  size: 1Gi

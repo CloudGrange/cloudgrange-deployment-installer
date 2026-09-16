@@ -1,21 +1,32 @@
-# Multi-node/HA profile skeleton. Full implementation (Redis deployment, CloudNativePG,
-# multi-replica readiness) is AB#9190 — this file documents the intended overrides so the
-# umbrella chart's shape doesn't need to change again when that work lands.
+# AB#9190: multi-node/ha profile. Unlike the earlier skeleton version of this file, this
+# is now real, deployable configuration — HA Postgres via CloudNativePG (installed as
+# its own separate Helm release FIRST, same reasoning as cert-manager, AB#9179; see
+# charts/cloudgrange/README.md's install sequence) and single-instance Redis for
+# AB#9174's cross-pod relay dispatch bus.
+#
+# AB#9191 (MetalLB, still untouched) is the one piece this profile still assumes is
+# handled separately: the relay's LoadBalancer Service needs MetalLB configured on
+# bare-metal K3s for multiple nodes to give it a real routable address — without it the
+# relay Service stays Pending, same as single-node today without MetalLB.
 global:
   deployment:
     profile: multi-node
+
 api:
   replicaCount: 2
   redis:
     enabled: true
-    # AB#9190 stands up Redis itself (single-instance for multi-node, Sentinel for full ha)
-    # and points this at its Service DNS name. Until then this profile is not deployable —
-    # single-node remains the default and the only currently-supported path.
-    connectionString: "REDIS_SERVICE_DNS_NAME:6379"
+
 portal:
   replicaCount: 2
+
 relay:
   replicaCount: 1  # relay HA (multiple relays per site) is a separate, later design question
+
+redis:
+  enabled: true
+
 postgres:
   highAvailability:
-    enabled: true  # AB#9190: CloudNativePG operator replaces the single-Pod StatefulSet
+    enabled: true
+    instances: 3
