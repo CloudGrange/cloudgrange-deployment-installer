@@ -1,15 +1,50 @@
-# AKS overlay skeleton. Full implementation (Azure Disk/Files CSI storage classes, Key
-# Vault CSI driver for secrets, Azure LoadBalancer annotations) is AB#9187 — this file
-# documents the intended overrides so the umbrella chart's shape doesn't need to change
-# again when that work lands.
+# AB#9187: AKS overlay. Same chart, same templates — this values file swaps out the
+# on-prem defaults (local-path storage, cert-manager self-signed TLS, an
+# install-time-generated bootstrap Secret) for AKS-native equivalents.
+#
+# Prerequisites this file assumes are ALREADY in place on the target AKS cluster (this
+# chart does not, and should not, provision Azure infrastructure itself — creating/
+# deleting Azure resources is a confirm-first action per this repo's own operating
+# rules, and belongs in Terraform/Bicep for the customer's AKS environment, not a Helm
+# values file):
+#   - AKS cluster with the Azure Disk CSI driver (default-on) and the Secrets Store CSI
+#     Driver + Azure Key Vault provider add-on enabled
+#     (az aks enable-addons --addons azure-keyvault-secrets-provider)
+#   - An Azure Key Vault holding the 6 bootstrap secret values (same names as
+#     templates/secrets-bootstrap-job.yaml generates: postgres-password,
+#     keycloak-admin-user, keycloak-admin-password, keycloak-api-client-secret,
+#     grafana-admin-password, relay-enrollment-token, realm-admin-password)
+#   - A workload identity / managed identity with "Key Vault Secrets User" on that vault,
+#     federated to a Kubernetes ServiceAccount in this release's namespace
 global:
   cloud: true
+  # Nested under global (not top-level) so every subchart can see it via .Values.global.aks
+  # — Helm only auto-propagates the `global` key to subcharts, nothing else.
+  aks:
+    enabled: true
+    keyVaultName: ""             # required: the Azure Key Vault holding the bootstrap secrets
+    tenantId: ""                  # required: the Azure AD tenant ID
+    managedIdentityClientId: ""   # required: the workload identity's client ID
+
 postgres:
   persistence:
-    storageClass: managed-csi  # AB#9187: Azure Disk CSI storage class
+    storageClass: managed-csi  # Azure Disk CSI storage class
+
 relay:
   service:
     type: LoadBalancer  # AKS's native LB — no MetalLB needed here, unlike bare K3s
-# AB#9187 also replaces templates/secrets.yaml's --set-based placeholder with the Key
-# Vault CSI driver / External Secrets Operator, sourcing the master key from Azure Key
-# Vault instead of a plain Kubernetes Secret populated at install time.
+
+certManager:
+  # AKS clusters commonly already run cert-manager cluster-wide (shared across many
+  # apps); don't install a second copy by default. Set true to install it as part of
+  # this release anyway (e.g. a dedicated/single-tenant AKS cluster).
+  installOperator: false
+
+# AB#9178's bootstrap-secrets hook Job still runs regardless (harmless — Helm hooks
+# aren't conditionally skippable by a value the way normal templates are) and would
+# normally win the race to populate {{ .Release.Name }}-secrets first. On AKS,
+# templates/aks/secretproviderclass.yaml's `secretObjects` sync target is the SAME
+# Secret name, populated from Azure Key Vault instead — every subchart's existing
+# secretKeyRef references keep working completely unchanged either way. The API
+# Deployment mounts the SecretProviderClass volume (global.aks.enabled gate in
+# charts/api/templates/deployment.yaml) to trigger that sync.

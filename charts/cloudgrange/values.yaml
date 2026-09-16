@@ -16,6 +16,13 @@ global:
   # AKS overlay (values-azure.yaml) flips this — swaps local-path/Postgres-in-cluster for
   # Azure Disk/Files CSI + managed identity, per AB#9187.
   cloud: false
+  # AB#9187: only meaningful when cloud=true. See values-azure.yaml for what each field
+  # means and what it assumes is already provisioned on the target AKS cluster.
+  aks:
+    enabled: false
+    keyVaultName: ""
+    tenantId: ""
+    managedIdentityClientId: ""
 
 # AB#9178: the 6 bootstrap secrets (postgres-password, keycloak-admin-user/-password,
 # keycloak-api-client-secret, grafana-admin-password, relay-enrollment-token,
