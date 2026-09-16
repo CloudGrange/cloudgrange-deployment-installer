@@ -1,0 +1,37 @@
+{{- /* AB#9180: K3s ships Traefik as its default ingress controller — nothing to install,
+just route to it. Mirrors the Compose edge nginx's own routing exactly: everything goes
+to the portal (which internally reverse-proxies /api/, /hubs/, /health/, /signin-oidc to
+the API — CLOUDGRANGE_API_UPSTREAM in the portal Deployment, AB#9177), except the large
+release-bundle upload route, sent straight to the API so a multi-GB upload isn't buffered
+through the portal (same special case the edge nginx.conf carves out). No LAN-agent 8443
+route here — the relay's own LoadBalancer Service (AB#9177) already exposes that directly,
+Traefik was never in that path even in Compose (a separate nginx server block on 8443). */ -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}
+  annotations:
+    # Traefik's default backend timeout (90s) matches the edge nginx's proxy_read_timeout
+    # for the portal route; the large-upload path below needs much longer.
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [{{ .Values.global.hostname | quote }}]
+      secretName: {{ .Release.Name }}-tls
+  rules:
+    - host: {{ .Values.global.hostname | quote }}
+      http:
+        paths:
+          - path: /api/v1/platform/update/upload
+            pathType: Exact
+            backend:
+              service:
+                name: {{ .Release.Name }}-api
+                port: { number: 8080 }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-portal
+                port: { number: 8080 }
