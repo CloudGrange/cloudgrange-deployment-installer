@@ -3,9 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # install-relay.ps1 — Install the CloudGrange relay agent on a Windows Docker Desktop host.
+# Standalone path: installs ONLY the relay container against a remote core API, using an
+# enrollment token issued by the portal's Sites & Relays "Add a site" wizard (or by
+# POST /api/v1/relays/enroll-token directly). Does not touch the rest of the on-prem stack.
 #
 # Usage:
-#   .\install-relay.ps1 -ApiUrl <URL> -ApiKey <KEY> -SiteId <SITE-ID> [-Version <TAG>]
+#   .\install-relay.ps1 -ApiUrl <URL> -ApiKey <KEY> -SiteId <SITE-ID> [-Name <NAME>] [-Version <TAG>]
+#
+# AB#9196: org/repo corrected from the placeholder "cloudgrange-cloud/cloudgrange-installer"
+# (neither exists) to this repo's real remote, github.com/CloudGrange/cloudgrange-deployment-installer.
 
 [CmdletBinding()]
 param(
@@ -18,6 +24,8 @@ param(
     [Parameter(Mandatory)]
     [string]$SiteId,
 
+    [string]$Name = "",
+
     [string]$Version = ""
 )
 
@@ -25,8 +33,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ContainerName  = 'cloudgrange-relay'
+$VolumeName     = 'cloudgrange-relay-identity'
 $ImageBase      = 'ghcr.io/cloudgrange/cloudgrange-relay'
-$ReleasesUrl    = 'https://api.github.com/repos/cloudgrange-cloud/cloudgrange-relay/releases'
+# AB#9196: relay releases live in cloudgrange-runtime-relay (the relay's own repo), not a
+# nonexistent "cloudgrange-relay" repo, and the org is "CloudGrange" not "cloudgrange-cloud".
+$ReleasesUrl    = 'https://api.github.com/repos/CloudGrange/cloudgrange-runtime-relay/releases'
 $HealthTimeout  = 30
 
 # ----------------------------------------------------------------------------
@@ -89,7 +100,9 @@ if ($LASTEXITCODE -ne 0) {
 # Verify image digest against GitHub releases manifest (best-effort)
 # ----------------------------------------------------------------------------
 if ($Version -ne 'latest') {
-    $ManifestUrl = "https://github.com/cloudgrange-cloud/cloudgrange-relay/releases/download/$Version/cloudgrange-relay.sha256"
+    # AB#9196: this manifest asset is not currently published by cloudgrange-runtime-relay's
+    # release workflow, so this step stays best-effort until that changes.
+    $ManifestUrl = "https://github.com/CloudGrange/cloudgrange-runtime-relay/releases/download/$Version/cloudgrange-relay.sha256"
     Write-Host "Verifying image digest from $ManifestUrl ..."
     try {
         $Manifest = Invoke-WebRequest -Uri $ManifestUrl -UseBasicParsing -ErrorAction Stop
@@ -129,14 +142,30 @@ if ($LASTEXITCODE -eq 0) {
 # ----------------------------------------------------------------------------
 # Run the relay container
 # ----------------------------------------------------------------------------
+# AB#9196: env vars corrected to match what the relay binary actually reads
+# (cloudgrange-runtime-relay/src/CloudGrange.Relay/Program.cs). The previous
+# RELAY_API_URL/RELAY_API_KEY names are not read by the relay at all — RELAY_PAAS_URL is
+# required and throws on startup if unset, so every standalone install using the old names
+# would fail immediately. A named volume persists the relay's enrolled identity (private key +
+# relayId under RELAY_IDENTITY_DIR) across container recreates, so re-running this script (or a
+# restart) does not force a doomed re-enrollment with an already-consumed token.
+Write-Host "Ensuring identity volume '$VolumeName' exists ..."
+docker volume create $VolumeName | Out-Null
+
 Write-Host "Starting relay container ..."
-docker run -d `
-    --name $ContainerName `
-    --restart unless-stopped `
-    -e "RELAY_API_URL=$ApiUrl" `
-    -e "RELAY_API_KEY=$ApiKey" `
-    -e "RELAY_SITE_ID=$SiteId" `
-    $Image
+$dockerArgs = @(
+    'run', '-d',
+    '--name', $ContainerName,
+    '--restart', 'unless-stopped',
+    '-e', "RELAY_PAAS_URL=$ApiUrl",
+    '-e', "RELAY_ENROLLMENT_TOKEN=$ApiKey",
+    '-e', "RELAY_SITE_ID=$SiteId",
+    '-v', "${VolumeName}:/var/lib/cloudgrange-relay/identity"
+)
+if ($Name) { $dockerArgs += @('-e', "RELAY_DISPLAY_NAME=$Name") }
+$dockerArgs += $Image
+
+docker @dockerArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "docker run failed with exit code $LASTEXITCODE."
@@ -188,3 +217,4 @@ Write-Host "Useful commands:"
 Write-Host "  View logs:   docker logs -f $ContainerName"
 Write-Host "  Stop relay:  docker stop $ContainerName"
 Write-Host "  Uninstall:   .\uninstall-relay.ps1"
+Write-Host ""

@@ -29,4 +29,37 @@ The realm import creates no users. `compose/systemd/cloudgrange-realm-admin.serv
 
 Customer packages are the appliance VHDX, `Install-CloudGrange-Bundled.zip` and `Install-CloudGrange.ps1`. There is no signing yet, so current builds are unsigned test builds. `SHA256SUMS` checks integrity only, not authenticity.
 
+## Standalone relay installer (additional sites) — AB#9196
+
+The core install (VHDX or bundled ZIP) bundles one relay. To connect a second site — a branch
+office, another datacenter, an edge location — install just the relay on a Linux or Windows
+Docker host there and enroll it against the existing core, without reinstalling the rest of the
+stack.
+
+**Normal path:** in the portal, go to **Sites & Relays** (`/resources`), click **Add a site**,
+then open the new site's page. It generates a one-hour enrollment token and a ready-to-run
+install command — copy it and run it on the target host. The page polls and shows the relay as
+connected once it enrolls.
+
+**Manual path**, if you're not using the portal wizard: issue a token yourself
+(`POST /api/v1/relays/enroll-token`, `platform:write`) and run the installer directly.
+
+```bash
+# Linux
+curl -sSL https://raw.githubusercontent.com/CloudGrange/cloudgrange-deployment-installer/main/scripts/install-relay.sh \
+  | bash -s -- --api-url https://your-core-host --api-key <TOKEN> --site-id <SITE-ID>
+```
+
+```powershell
+# Windows (Docker Desktop)
+irm https://raw.githubusercontent.com/CloudGrange/cloudgrange-deployment-installer/main/scripts/install-relay.ps1 -OutFile install-relay.ps1
+.\install-relay.ps1 -ApiUrl https://your-core-host -ApiKey <TOKEN> -SiteId <SITE-ID>
+```
+
+Both scripts ([`scripts/install-relay.sh`](scripts/install-relay.sh), [`scripts/install-relay.ps1`](scripts/install-relay.ps1))
+run only the relay container (`ghcr.io/cloudgrange/cloudgrange-relay`), point it at the core API,
+and persist its enrolled identity in a `cloudgrange-relay-identity` Docker volume so a container
+restart doesn't force re-enrollment. Uninstall with the matching `uninstall-relay.sh` /
+`uninstall-relay.ps1`.
+
 [Historical document at source revision 473b253b01430153557e2e9823aad88a34ad508a](https://github.com/CloudGrange/cloudgrange-deployment-installer/blob/a8e5827e1b955f43d9997aa52f1a60d48f86b6fd/archive/2026-09-07/README.md) preserves earlier commands and rationale for that code revision. It is not current target architecture or release guidance.

@@ -8,7 +8,11 @@
 #   bash uninstall-relay.sh
 #
 # One-liner:
-#   curl -sSL https://raw.githubusercontent.com/cloudgrange-cloud/cloudgrange-installer/main/scripts/uninstall-relay.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/CloudGrange/cloudgrange-deployment-installer/main/scripts/uninstall-relay.sh | bash
+#
+# This does NOT remove the "cloudgrange-relay-identity" volume, so re-running install-relay.sh
+# later reuses the same enrolled identity instead of needing a fresh enrollment token. Remove it
+# explicitly with `docker volume rm cloudgrange-relay-identity` if you want a clean re-enroll.
 
 set -euo pipefail
 
