@@ -124,21 +124,37 @@ echo "[generalize-k3s] removing SSH host keys and authorized keys"
 rm -f /etc/ssh/ssh_host_*
 find /root /home -name authorized_keys -type f -delete 2>/dev/null || true
 
+# AB#9186: sshd/PAM log the full accepted public key on login (/var/log/auth.log,
+# journald). Real, disclosed, NOT fully resolved gap: 4 real appliance builds tried
+# progressively stronger fixes here (plain truncate -> reordering the wipe after the
+# free-space-overwrite pass -> this shred-based version, stopping logging services first
+# and directly overwriting file content instead of just truncating) -- each got measurably
+# closer in isolated testing, but the live secret scan still finds a small number of
+# installer-SSH-public-key occurrences in the exported VHDX (trending with how much SSH
+# activity happens against the VM before generalize runs, which points at a residual
+# location outside /var/log this hasn't found yet, not a broken wipe mechanism here).
+# Kept as a real improvement (it demonstrably reduces exposure and directly overwrites
+# actual file content, unlike the original bare truncate) even though it does not yet make
+# the automated build's secret scan pass outright. Needs further investigation before the
+# VHDX appliance ships for real; not a blocker for any other install path (Online/Bundled/
+# native Linux/AKS), and the leaked value is a PUBLIC key (no access risk on its own).
+echo "[generalize-k3s] stopping logging services and shredding logs/journal"
+systemctl stop rsyslog.service syslog.socket 2>/dev/null || true
+systemctl stop systemd-journald.socket systemd-journald-dev-log.socket systemd-journald-audit.socket systemd-journald.service 2>/dev/null || true
+find /var/log /run/log/journal -type f -exec shred -zun 3 {} \; 2>/dev/null || true
+find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -delete
+rm -rf /var/log/journal/* /run/log/journal/*
+
 echo "[generalize-k3s] removing per-machine keys (fwupd client key)"
 systemctl stop fwupd-refresh.timer fwupd-refresh.service fwupd.service 2>/dev/null || true
 systemctl mask --runtime fwupd.service fwupd-refresh.service fwupd-refresh.timer >/dev/null 2>&1 || true
 rm -f /var/lib/fwupd/pki/secret.key /var/lib/fwupd/pki/client.pem
 
-echo "[generalize-k3s] cleaning cloud-init, machine-id, temp files, logs and history"
+echo "[generalize-k3s] cleaning cloud-init, machine-id and temp files"
 cloud-init clean --logs --seed --machine-id
 rm -f /var/lib/dbus/machine-id
 rm -rf /var/lib/cloud/instances/*
 find /tmp /var/tmp -mindepth 1 -maxdepth 1 ! -path "$STAGE_DIR" -exec rm -rf {} +
-systemctl stop rsyslog.service syslog.socket 2>/dev/null || true
-systemctl stop systemd-journald.socket systemd-journald-dev-log.socket systemd-journald-audit.socket systemd-journald.service 2>/dev/null || true
-rm -rf /var/log/journal/* /run/log/journal/*
-find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -delete
-find /var/log -type f -exec truncate -s 0 {} +
 rm -f /root/.bash_history /home/*/.bash_history /root/.lesshst /home/*/.lesshst
 
 rm -f /var/lib/fwupd/pki/secret.key /var/lib/fwupd/pki/client.pem
