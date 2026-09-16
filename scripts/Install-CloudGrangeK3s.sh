@@ -164,15 +164,36 @@ do_chart_installed() {
     # failing — same tolerance scripts/Test-HelmChart.py already applies. Don't treat
     # that single known failure as blocking this checkpoint; do_ready below still
     # fails hard on any OTHER pod not becoming Ready.
+    #
+    # AB#9183 real bug, found via a real install: this blanket `|| true` also swallowed
+    # a genuine template-validation error (an invalid Ingress) that meant helm never
+    # created that resource AT ALL — chart-installed still got marked done, so the
+    # checkpoint state claimed success for a step that silently dropped a resource.
+    # `do_ready` below only checks Pod readiness, so it never caught the missing
+    # Ingress either. Fix: distinguish "helm actually created a release, some pods just
+    # aren't Ready yet" (tolerable — do_ready is the real safety net for that) from
+    # "the release doesn't exist at all" (a hard failure, fail loudly here instead of
+    # silently continuing to a do_ready check that can't explain what's actually wrong).
     helm upgrade --install cloudgrange "$CHARTS_DIR/cloudgrange" \
         -f "$CHARTS_DIR/cloudgrange/values-single-node.yaml" \
         --set "global.hostname=$HOSTNAME_VALUE" \
         --set "global.image.tag=$VERSION_VALUE" \
         --timeout 5m --wait || true
+    helm status cloudgrange >/dev/null 2>&1 || {
+        echo "helm upgrade --install failed completely (no release exists) — see the error above" >&2
+        exit 1
+    }
 }
 
 do_ready() {
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    # AB#9183: cheap, direct check that the Ingress actually exists — the resource that
+    # silently failed to apply in the real bug the do_chart_installed fix above addresses.
+    # Pod readiness alone doesn't catch a missing Ingress; explicitly check for it too.
+    k3s kubectl get ingress cloudgrange >/dev/null 2>&1 || {
+        echo "expected Ingress 'cloudgrange' does not exist" >&2
+        exit 1
+    }
     k3s kubectl get pods -o wide
     local unexpected
     unexpected="$(k3s kubectl get pods --no-headers | awk '
