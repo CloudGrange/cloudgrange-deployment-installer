@@ -4,6 +4,16 @@ metadata:
   name: {{ .Release.Name }}-prometheus
   labels: { app.kubernetes.io/name: cloudgrange-prometheus }
 spec:
+  # AB#9187-class bug, found via a real K3s install: this is a Deployment (not a
+  # StatefulSet) backed by an exclusive-access RWO PVC — Prometheus holds a file lock on
+  # its own TSDB directory. The default RollingUpdate strategy briefly runs the old and
+  # new pod together, and the new one fails to open its data store ("resource temporarily
+  # unavailable" — lock contention) because the old pod still holds the PVC. Recreate
+  # forces the old pod to fully terminate (and release the PVC/lock) before the new one
+  # starts, at the cost of a few seconds of downtime during upgrades — correct for a
+  # single-replica singleton with exclusive storage.
+  strategy:
+    type: Recreate
   replicas: 1
   selector: { matchLabels: { app.kubernetes.io/name: cloudgrange-prometheus } }
   template:
