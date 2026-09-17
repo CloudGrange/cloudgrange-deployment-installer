@@ -89,6 +89,21 @@ spec:
       # not inside any pod's own filesystem.
       tolerations:
         - operator: Exists
+      # AB#9187-class bug, found via a real k3d install: promtail's inotify-based file
+      # target manager fails outright ("too many open files") once the node's
+      # fs.inotify.max_user_instances is exhausted -- and Ubuntu/Debian's own out-of-the-box
+      # default for that sysctl is 128, easily exhausted by promtail + kubelet + containerd +
+      # other DaemonSets sharing the same node/user namespace. This is not a dev-environment
+      # quirk; a real customer's default-configured Linux node hits the identical crash.
+      # Standard fix used by production log-shipping DaemonSets (Loki's own promtail chart
+      # included): a privileged init container raises the node-wide limit before promtail
+      # starts. Idempotent -- sysctl -w is safe to re-run on every pod (re)start.
+      initContainers:
+        - name: raise-inotify-limits
+          image: busybox:1.36
+          command: ["sh", "-c", "sysctl -w fs.inotify.max_user_instances=8192"]
+          securityContext:
+            privileged: true
       containers:
         - name: promtail
           # AB#9187-class bug, found via a real AKS install: 3.7.x was never published — the
