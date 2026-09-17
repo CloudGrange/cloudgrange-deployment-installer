@@ -91,7 +91,10 @@ spec:
         - operator: Exists
       containers:
         - name: promtail
-          image: grafana/promtail:3.7.7
+          # AB#9187-class bug, found via a real AKS install: 3.7.x was never published — the
+          # highest real grafana/promtail tag is the 3.6.x line. Pinned to an exact, confirmed
+          # (curl'd against Docker Hub) existing tag rather than `latest`.
+          image: grafana/promtail:3.6.3
           args: ["-config.file=/etc/promtail/promtail.yaml"]
           volumeMounts:
             - { name: config, mountPath: /etc/promtail }
