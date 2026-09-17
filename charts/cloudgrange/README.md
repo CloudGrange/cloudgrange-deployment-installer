@@ -57,6 +57,14 @@ supplies a real range. Without it the relay's Service simply stays `Pending`, wh
 the existing documented single-node behavior — nothing breaks, the relay is still
 reachable from inside the cluster.
 
+Statically verified (`helm lint` + `helm template`, no live cluster — code-only pass): the
+`--set` overrides above render a real `IPAddressPool`/`L2Advertisement` with the supplied
+range, and `values-multi-node.yaml`'s own default (`metallb.enabled=false`) correctly
+renders neither resource. Not yet verified against a real cluster that MetalLB's
+controller/speaker actually assign the relay's `LoadBalancer` Service an address from
+that pool — that needs a real or ephemeral multi-node cluster, deferred per the current
+no-live-test gate.
+
 ## Backup / disaster recovery (AB#9192)
 
 **HA is not DR.** `values-multi-node.yaml` (AB#9190) protects against a single node or
