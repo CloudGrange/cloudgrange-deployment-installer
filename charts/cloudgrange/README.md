@@ -85,8 +85,19 @@ generic backup-target default — this is a real customer-network decision, same
      --set configuration.backupStorageLocation[0].bucket=<bucket-name> \
      --set configuration.backupStorageLocation[0].config.region=<region-or-any-string-for-non-AWS> \
      --set configuration.backupStorageLocation[0].config.s3Url=<https://s3-endpoint-for-non-AWS> \
+     --set-json 'initContainers=[{"name":"velero-plugin-for-aws","image":"velero/velero-plugin-for-aws:v1.11.0","volumeMounts":[{"mountPath":"/target","name":"plugins"}]}]' \
      --set deployNodeAgent=true \
      --wait
+   ```
+
+   The `provider: aws` BackupStorageLocation (used for both real AWS S3 and any
+   S3-compatible target — MinIO, an on-prem NAS S3 gateway, Azure Blob's S3-compatible API)
+   requires the `velero-plugin-for-aws` initContainer above. Without it the
+   BackupStorageLocation goes `Unavailable: unable to locate ObjectStore plugin named
+   velero.io/aws` and every backup fails `FailedValidation` before it starts — found by
+   actually running this exact command during the AB#9193 recovery-drill verification.
+
+   ```bash
    helm install cloudgrange charts/cloudgrange -f charts/cloudgrange/values-single-node.yaml \
      --set backup.enabled=true \
      --wait
