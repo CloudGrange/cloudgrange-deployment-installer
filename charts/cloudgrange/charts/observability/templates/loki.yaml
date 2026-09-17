@@ -9,6 +9,13 @@ spec:
   template:
     metadata: { labels: { app.kubernetes.io/name: cloudgrange-loki } }
     spec:
+      # AB#9187: same class of bug as the API's PVC fix — grafana/loki runs as uid 10001,
+      # and Azure Disk CSI volumes come up root-owned (unlike on-prem local-path-provisioner,
+      # which happened to already be writable). Found via a real AKS test: "mkdir /loki/rules:
+      # permission denied", CrashLoopBackOff. fsGroup makes kubelet chown the volume to this
+      # GID at mount time on any provisioner — harmless, a no-op where already correctly owned.
+      securityContext:
+        fsGroup: 10001
       containers:
         - name: loki
           image: {{ .Values.loki.image }}

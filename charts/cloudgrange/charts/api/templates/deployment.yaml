@@ -60,6 +60,34 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
+            # AB#2514 fix: Platform Health's version card always showed "unknown" for every
+            # component on K3s — these env vars were never set anywhere in the chart, and
+            # GET /api/v1/platform/version falls back to "unknown" when unset. global.image.tag
+            # is what's actually deployed for both api and portal (same tag, see the image:
+            # line above and portal/templates/deployment.yaml); Chart.AppVersion is the
+            # umbrella chart's own version, the closest thing this chart has to a "solution
+            # version" until AB#9184's release-manifest work stamps a real one in per-release.
+            - name: CLOUDGRANGE_VERSION
+              value: {{ .Values.global.image.tag | quote }}
+            - name: CLOUDGRANGE_PORTAL_VERSION
+              value: {{ .Values.global.image.tag | quote }}
+            - name: CLOUDGRANGE_SOLUTION_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+            # AB#9166 fix: the built-in relay never showed up connected/registered on K3s
+            # installs — its own retry-forever enrollment loop kept 401ing because nothing
+            # ever seeded core.relay_enrollment_tokens with a row matching its bootstrap
+            # token. The API-side fix (SetupEndpoints.cs BootstrapBuiltinRelayEnrollmentAsync)
+            # already existed and already runs on every setup completion — it was written
+            # for the Compose engine, where cloudgrange-firstboot.sh sets this env var on the
+            # API container; the K3s chart's API Deployment never set it at all, so the whole
+            # bootstrap silently no-op'd (`RELAY_ENROLLMENT_TOKEN not set; skipping`). This is
+            # the same bootstrap secret the relay pod already consumes (relay/templates/deployment.yaml).
+            - name: RELAY_ENROLLMENT_TOKEN
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: relay-enrollment-token } }
+            # AB#9162: the support-bundle export endpoint (GET /api/v1/support/export-logs)
+            # queries Loki directly, the same way Grafana's provisioned datasource does.
+            - name: LOKI_URL
+              value: "http://{{ .Release.Name }}-loki:3100"
             # POSTGRES_PASSWORD must be defined BEFORE ConnectionStrings__Default below —
             # Kubernetes' $(VAR) env interpolation only resolves references to a PRECEDING
             # var in the same list; defined later (as it originally was here), $(VAR) is
