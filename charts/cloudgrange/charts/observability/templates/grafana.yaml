@@ -9,6 +9,12 @@ spec:
   template:
     metadata: { labels: { app.kubernetes.io/name: cloudgrange-grafana } }
     spec:
+      # AB#9187: same class of bug as loki/prometheus/relay/api — grafana/grafana runs as
+      # uid/gid 472, and Azure Disk CSI volumes come up root-owned. Fixed proactively here
+      # (found the same pattern break loki/prometheus/relay on a real AKS test) rather than
+      # waiting for grafana to hit the identical crash once its own PVC gets exercised.
+      securityContext:
+        fsGroup: 472
       # AB#8129: first-start "database is locked" (SQLite) — Grafana starts only after
       # Prometheus and Loki are healthy (same fix as the Compose stack's depends_on chain).
       initContainers:

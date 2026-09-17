@@ -26,6 +26,13 @@ spec:
       # still genuinely non-root (trusts the image's own USER relay); pinning a numeric
       # UID in cloudgrange-runtime-relay's Dockerfile (matching portal's fix pattern) is a
       # small follow-up to get full Restricted Pod Security Standard compliance here too.
+      #
+      # AB#9187: same class of bug as loki/prometheus/api — the relay's Dockerfile runs as
+      # uid/gid 999, and Azure Disk CSI volumes (the identity PVC, which also holds the
+      # relay's local job-queue SQLite db) come up root-owned. Found via a real AKS test:
+      # the relay crashed constructing AgentJobQueue, CrashLoopBackOff.
+      securityContext:
+        fsGroup: 999
       containers:
         - name: relay
           image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
