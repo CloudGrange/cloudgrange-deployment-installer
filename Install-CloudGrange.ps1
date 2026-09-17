@@ -376,13 +376,16 @@ function Invoke-CloudGrangeInstall {
             # AB#9185: the K3s engine's API pod and its bootstrap secrets Secret (AB#9178)
             # replace the Compose engine's docker-compose-exec and .env file reads above.
             if ($setupPending) {
-                $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'sudo k3s kubectl exec deploy/cloudgrange-api -- cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
+                # CLOUDGRANGE_REQUIRE_SETUP_TOKEN is off by default, so this file normally does not
+                # exist — 2>/dev/null keeps that expected, handled-below miss from printing a raw
+                # "cat: ... No such file or directory" to the console on every ordinary install.
+                $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'sudo k3s kubectl exec deploy/cloudgrange-api -- cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt 2>/dev/null')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
                 if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
             }
             $realmAdminPassword = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", "sudo k3s kubectl get secret cloudgrange-secrets -o jsonpath='{.data.realm-admin-password}' | base64 -d")) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
         } else {
             if ($setupPending) {
-                $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
+                $setupToken = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", 'cd /opt/cloudgrange && sudo docker compose exec -T cloudgrange-api cat /etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt 2>/dev/null')) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
                 if ($setupToken -notmatch '^[0-9a-f]{32,}$') { $setupToken = '' }
             }
             $realmAdminPassword = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2")) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
@@ -403,7 +406,11 @@ function Invoke-CloudGrangeInstall {
     Write-Host "  CloudGrange installed successfully!" -ForegroundColor Green
     Write-Host "  Portal: $portalBase" -ForegroundColor Cyan
     Write-Host "  Note: The portal uses a self-signed certificate. Your browser will show a security warning." -ForegroundColor Yellow
-    Write-Host "        Replace /etc/nginx/certs/ in the nginx_certs volume with a CA-signed cert for production." -ForegroundColor Gray
+    if ($Engine -eq 'K3s') {
+        Write-Host "        Replace cert-manager's self-signed ClusterIssuer with a customer-provided CA or ACME issuer for production." -ForegroundColor Gray
+    } else {
+        Write-Host "        Replace /etc/nginx/certs/ in the nginx_certs volume with a CA-signed cert for production." -ForegroundColor Gray
+    }
     if ($setupPending) {
         Write-Host "  First-run setup: open $portalBase in a browser; the setup wizard starts on the first visit." -ForegroundColor Yellow
         Write-Host "  Complete the setup wizard to configure your platform name, timezone, and admin account." -ForegroundColor Gray
