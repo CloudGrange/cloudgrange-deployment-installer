@@ -4,6 +4,12 @@ metadata:
   name: {{ .Release.Name }}-grafana
   labels: { app.kubernetes.io/name: cloudgrange-grafana }
 spec:
+  # AB#9187-class bug, found via a real K3s install (same fix as prometheus.yaml/
+  # loki.yaml): this Deployment's exclusive-access RWO PVC needs Recreate, not the
+  # default RollingUpdate, so the old pod fully releases its storage lock before the new
+  # one starts.
+  strategy:
+    type: Recreate
   replicas: 1
   selector: { matchLabels: { app.kubernetes.io/name: cloudgrange-grafana } }
   template:
