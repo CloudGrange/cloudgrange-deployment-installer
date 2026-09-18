@@ -11,7 +11,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.secrets.size }}
-{{- if not .Values.updater.hostPath.enabled }}
+{{- if and (not .Values.updater.hostPath.enabled) .Values.updater.pvc.enabled }}
 ---
 # Only rendered where the updates directory is NOT a hostPath (AB#9189). On an appliance the
 # host's updater service needs a real host directory it can read; a PVC there would be a

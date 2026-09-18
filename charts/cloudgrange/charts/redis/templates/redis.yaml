@@ -22,9 +22,13 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }  # AB#9171: Pod Security "restricted"
       containers:
         - name: redis
           image: {{ .Values.image }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           args: ["--appendonly", "yes"]
           ports:
             - containerPort: 6379

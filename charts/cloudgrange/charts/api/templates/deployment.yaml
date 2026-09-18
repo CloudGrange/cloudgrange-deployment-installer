@@ -62,10 +62,23 @@ spec:
         # kubelet chown the volume to this GID at mount time on any provisioner; harmless
         # and a no-op where it was already correctly owned.
         fsGroup: 1000
+        # AB#9171: numeric user (the image's USER 1654) and RuntimeDefault seccomp for Pod Security
+        # "restricted"; the container drops every capability below.
+        runAsUser: 1654
+        seccompProfile: { type: RuntimeDefault }
+      # AB#9171 (C2, kind v1.34): the API exits when it cannot resolve or reach Postgres, so on a
+      # fresh install it crash-looped until Postgres was up. Wait for it instead.
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.waitForPostgres.image }}
+          command: ["sh", "-c", "until nc -z -w 2 {{ .Release.Name }}-postgres 5432; do echo waiting for {{ .Release.Name }}-postgres; sleep 2; done"]
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 32Mi } }
       containers:
         - name: api
           image: {{ include "cloudgrange.firstPartyImage" . | quote }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           ports:
             - containerPort: {{ .Values.port }}
           env:
@@ -155,7 +168,7 @@ spec:
           volumeMounts:
             - { name: api-secrets, mountPath: /etc/cloudgrange }
             - { name: platform-updates, mountPath: /var/lib/cloudgrange/updates }
-            {{- if .Values.global.aks.enabled }}
+            {{- if and .Values.global.aks.enabled .Values.global.aks.keyVaultSecrets }}
             # AB#9187: mounting the SecretProviderClass volume is what triggers the
             # Secrets Store CSI Driver to sync Key Vault values into the regular
             # {{ .Release.Name }}-secrets Secret (secretObjects, see
@@ -180,10 +193,14 @@ spec:
         # cannot read a PersistentVolume. See the updater block in this subchart's values.yaml.
         - name: platform-updates
           hostPath: { path: {{ .Values.updater.hostPath.path | quote }}, type: DirectoryOrCreate }
-        {{- else }}
+        {{- else if .Values.updater.pvc.enabled }}
         - { name: platform-updates, persistentVolumeClaim: { claimName: "{{ .Release.Name }}-api-updates" } }
+        {{- else }}
+        # AB#9171: no host updater and no PVC asked for — Platform updates run in-cluster (the
+        # platform-updater Job), so the uploads directory only needs to exist.
+        - { name: platform-updates, emptyDir: { sizeLimit: 1Gi } }
         {{- end }}
-        {{- if .Values.global.aks.enabled }}
+        {{- if and .Values.global.aks.enabled .Values.global.aks.keyVaultSecrets }}
         - name: azure-kv
           csi:
             driver: secrets-store.csi.k8s.io

@@ -1,0 +1,30 @@
+{{- /* AB#9171 (C2): `helm test <release>` — proves the platform answers end to end from inside the
+cluster: the API is ready (which needs Postgres and Keycloak), the portal serves, and the portal's
+reverse proxy reaches the API — the path the Ingress routes every browser request through. Runs
+under Pod Security "restricted". */ -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-platform-ready
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: helm-test }
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 65534) | nindent 4 }}
+  containers:
+    - name: check
+      image: {{ .Values.observability.busybox.image }}
+      securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 8 }}
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          check() { echo "checking $1"; wget -q -T 10 -O /dev/null "$1" || { echo "FAILED: $1"; exit 1; }; }
+          check http://{{ .Release.Name }}-api:8080/health/ready
+          check http://{{ .Release.Name }}-portal:8080/
+          check http://{{ .Release.Name }}-portal:8080/health/ready
+          echo "platform ready"
+      resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 32Mi } }

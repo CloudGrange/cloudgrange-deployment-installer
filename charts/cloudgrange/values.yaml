@@ -29,9 +29,11 @@ global:
   # the resource. annotations are controller-specific and are applied verbatim, so nothing
   # Traefik-only is ever imposed on a cluster running something else.
   ingress:
-    className: traefik
-    annotations:
-      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # AB#9171 (C2, kind v1.34): the DEFAULT is "" — no ingressClassName, so the cluster's default
+    # IngressClass claims the Ingress — and no controller-specific annotations. K3s's traefik class
+    # and its websecure annotation are set by values-single-node.yaml / values-multi-node.yaml.
+    className: ""
+    annotations: {}
     tls:
       # AB#9171: the TLS Secret the Ingress serves. Empty = "<release>-tls", the Secret the chart's
       # cert-manager Certificate writes (certManager.installOperator). Set it to use a Secret you
@@ -49,6 +51,7 @@ global:
     tenantId: ""
     managedIdentityClientId: ""
     tlsCertificateUri: ""
+    keyVaultSecrets: false
 
 # AB#9178: the 6 bootstrap secrets (postgres-password, keycloak-admin-user/-password,
 # keycloak-api-client-secret, grafana-admin-password, relay-enrollment-token,
@@ -60,7 +63,13 @@ certManager:
   # why). This flag only gates whether OUR OWN ClusterIssuer/Certificate templates render;
   # turn it off if cert-manager isn't installed at all (no TLS) or if a customer manages
   # issuers/certificates themselves.
-  installOperator: true
+  # AB#9171 (C2, kind v1.34): DEFAULT false. On a cluster without cert-manager, rendering a
+  # Certificate/ClusterIssuer failed the whole install ("no matches for kind Certificate"). The
+  # managed-foundation profiles install cert-manager first and turn this on. On BYO, turn it on when
+  # cert-manager is present (ideally with issuerRef), or bring your own TLS Secret
+  # (global.ingress.tls.secretName). Even when true, the chart renders the Certificate only if the
+  # cluster actually serves cert-manager.io/v1.
+  installOperator: false
   # AB#9171: use an issuer the customer already runs (ACME/Let's Encrypt, an internal CA) instead
   # of the chart's self-signed ClusterIssuer. Set name (and kind: ClusterIssuer or Issuer); the chart
   # then creates only the Certificate, against that issuer. Empty name = the self-signed default.

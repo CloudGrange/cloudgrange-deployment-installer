@@ -1,0 +1,41 @@
+CloudGrange {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+1. Wait for every pod to be Ready:
+     kubectl -n {{ .Release.Namespace }} get pods -w
+   Then check the platform end to end:
+     helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+2. Open the portal.
+{{- if .Values.global.ingress.className }}
+   Ingress class "{{ .Values.global.ingress.className }}", host {{ .Values.global.hostname }}:
+{{- else }}
+   The Ingress uses the cluster's DEFAULT IngressClass (global.ingress.className is empty), host {{ .Values.global.hostname }}:
+{{- end }}
+     https://{{ .Values.global.hostname }}/
+     kubectl -n {{ .Release.Namespace }} get ingress {{ .Release.Name }}
+   No ingress controller yet? Reach it directly:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-portal 8080:8080   ->  http://localhost:8080/
+{{- if not (or .Values.certManager.installOperator .Values.global.ingress.tls.secretName) }}
+   TLS: no certificate is configured (certManager.installOperator=false and no
+   global.ingress.tls.secretName). Create Secret "{{ .Release.Name }}-tls" or set one of those.
+{{- end }}
+
+3. First-run setup. The portal opens the setup wizard on first visit. No setup token is needed:
+   the one-use token is only issued when the API runs with CLOUDGRANGE_REQUIRE_SETUP_TOKEN=true, which
+   this chart does not set. Complete setup promptly — until then anyone who can reach the portal can.
+
+4. Identity realm administrator (Keycloak realm "cloudgrange"), created by the realm-admin hook:
+     user:     admin@cloudgrange.local
+     password: kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-secrets -o jsonpath='{.data.realm-admin-password}' | base64 -d
+   The generated bootstrap secrets (database, Keycloak admin, Grafana admin, relay enrollment) are
+   all in Secret {{ .Release.Name }}-secrets; they are generated once and kept across upgrades.
+
+5. Hyper-V agents reach the relay on port {{ .Values.relay.port | default 8443 }} (plain HTTP). The relay Service is
+   type {{ .Values.relay.service.type }}{{ if eq .Values.relay.service.type "ClusterIP" }} — expose it to the agents' network with a LoadBalancer, a NodePort
+   (relay.service.type) or your own Ingress/route{{ end }}.
+
+6. Updates: Platform -> Updates in the portal. Platform updates run in-cluster as a Job under
+   ServiceAccount {{ .Release.Name }}-platform-updater{{ if not .Values.platformUpdater.signing.publicKey }}.
+   NOTE: platformUpdater.signing.publicKey is empty, so every Platform update is REFUSED until the
+   release signing key is configured{{ end }}.
+   Supported Kubernetes: {{ .Chart.KubeVersion }}.

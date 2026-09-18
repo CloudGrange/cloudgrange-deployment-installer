@@ -10,6 +10,8 @@
 #   - AKS cluster with the Azure Disk CSI driver (default-on) and the Secrets Store CSI
 #     Driver + Azure Key Vault provider add-on enabled
 #     (az aks enable-addons --addons azure-keyvault-secrets-provider)
+#   - AB#9171: the bootstrap secrets are GENERATED in-cluster by the chart, exactly as on-prem (the
+#     platform provisions, not the user). Only if you set global.aks.keyVaultSecrets=true:
 #   - An Azure Key Vault holding the 6 bootstrap secret values (same names as
 #     templates/secrets-bootstrap-job.yaml generates: postgres-password,
 #     keycloak-admin-user, keycloak-admin-password, keycloak-api-client-secret,
@@ -34,6 +36,10 @@ global:
     # it into Secret keyvault-<release>, which the Ingress serves (ingress.tls.secretName below).
     # Empty = no certificate is synced and the Ingress has no valid TLS Secret.
     tlsCertificateUri: ""
+    # AB#9171: false (default) = the chart's secrets-bootstrap Job generates <release>-secrets, as
+    # on-prem. true = sync them from Key Vault through the Secrets Store CSI driver instead; you then
+    # create the bootstrap secret values in the vault first (see the prerequisites above).
+    keyVaultSecrets: false
   # AB#9171: K3s's Traefik class and its annotations were inherited here, so on AKS no controller
   # claimed the Ingress. The application routing add-on's managed NGINX class is the AKS default.
   ingress:

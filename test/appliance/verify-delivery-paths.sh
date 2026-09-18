@@ -11,6 +11,7 @@ check() {
   local host pvc
   host=$(printf '%s' "$out" | grep -c 'path: "/var/lib/cloudgrange/updates"')
   pvc=$(printf '%s' "$out" | grep -c 'claimName: "cg-api-updates"')
+  local empty; empty=$(printf '%s' "$out" | grep -c 'name: platform-updates, emptyDir')
   printf '%-34s hostPath=%s  updatesPVC=%s\n' "$label" "$host" "$pvc"
 }
 

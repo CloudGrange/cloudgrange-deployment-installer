@@ -8,6 +8,11 @@
 # Service on every node's IP; MetalLB (metallb.enabled + addressPool) gives it one dedicated,
 # floating address instead (AB#9171 corrected the earlier claim that it stays Pending).
 global:
+  # AB#9171: K3s's built-in Traefik (the BYO default is the cluster's default class).
+  ingress:
+    className: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
   deployment:
     profile: multi-node
 
@@ -39,3 +44,7 @@ observability:
     raiseInotifyLimits: true
 foundation:
   managed: true
+# AB#9171: K3s ships Traefik and CloudGrange's installers install cert-manager before the chart,
+# so the managed-foundation profiles turn on what the BYO defaults leave off.
+certManager:
+  installOperator: true

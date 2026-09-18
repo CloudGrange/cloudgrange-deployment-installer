@@ -3,7 +3,8 @@
 is self-signed, matching today's behavior exactly — customers upgrade to ACME/Let's
 Encrypt or their own CA by pointing Values.certManager.issuer at a different ClusterIssuer,
 without any chart changes. */ -}}
-{{- if .Values.certManager.installOperator }}
+{{- /* AB#9171: and only when the cluster serves cert-manager.io/v1 — otherwise the install fails outright. */ -}}
+{{- if and .Values.certManager.installOperator (.Capabilities.APIVersions.Has "cert-manager.io/v1") }}
 {{- $issuer := .Values.certManager.issuerRef | default dict }}
 {{- if not $issuer.name }}
 apiVersion: cert-manager.io/v1

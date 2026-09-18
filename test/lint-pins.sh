@@ -62,6 +62,26 @@ check_pin PLATFORM_UPDATER_BASE_IMAGE "$IMG_DIGEST"
 check_pin CHART_SECRETS_BOOTSTRAP_IMAGE "$IMG_DIGEST"
 check_pin CHART_BUSYBOX_IMAGE "$IMG_DIGEST"
 check_pin CHART_PROMTAIL_IMAGE "$IMG_DIGEST"
+# Every other KEY= line, including pins other changes add (FOUNDATION_*, UBUNTU_BASE_VHDX_*): never
+# "latest"; EMPTY only when explicitly marked as not yet published — the word "unpublished" in a
+# trailing comment on that line or in the comment line directly above it, e.g.
+#     # unpublished: set when the base VHDX is first published
+#     UBUNTU_BASE_VHDX_SHA256=
+prev=''
+while IFS= read -r line; do
+    if [[ "$line" =~ ^([A-Z][A-Z0-9_]*)=([^#]*)(#.*)?$ ]]; then
+        key=${BASH_REMATCH[1]}; val=$(sed -E 's/[[:space:]]+$//' <<< "${BASH_REMATCH[2]}"); trailing=${BASH_REMATCH[3]:-}
+        if [ -z "$val" ]; then
+            shopt -s nocasematch
+            [[ "$trailing" == *unpublished* || "$prev" == \#*unpublished* ]] \
+                || fail "$PINS: $key is empty and not marked unpublished (a pin must have a value)"
+            shopt -u nocasematch
+        elif [[ "$val" == *latest* ]]; then
+            fail "$PINS: $key is '$val' (latest is never a pin)"
+        fi
+    fi
+    prev=$line
+done < "$PINS"
 k3s_minor=$(pin K3S_VERSION | sed -E 's/^v([0-9]+\.[0-9]+)\..*/\1/')
 kubectl_minor=$(pin KUBECTL_VERSION | sed -E 's/^v([0-9]+\.[0-9]+)\..*/\1/')
 [ "$k3s_minor" = "$kubectl_minor" ] || fail "$PINS: KUBECTL_VERSION minor $kubectl_minor != K3S_VERSION minor $k3s_minor"
@@ -92,7 +112,7 @@ check_ref() { # <profile> <image ref>
 }
 ALL_ON=(--set observability.promtail.enabled=true --set observability.promtail.raiseInotifyLimits=true
         --set metallb.enabled=true --set 'metallb.addressPool[0]=192.0.2.10/32' --set backup.enabled=true
-        --set certManager.installOperator=true --set platformUpdater.enabled=true)
+        --set certManager.installOperator=true --set platformUpdater.enabled=true --api-versions cert-manager.io/v1)
 render_check() { # <profile label> <helm args...>
     local label=$1; shift
     if ! helm template cg "$CHART" -n cloudgrange "$@" > "$WORK/render.yaml" 2> "$WORK/render.err"; then
@@ -153,6 +173,7 @@ drift scripts/Install-CloudGrangeK3s.sh "$(sed -nE 's/^[[:space:]]*local helm_ve
 drift scripts/CloudGrange-Prereqs.ps1 "$(sed -nE "s/^\\\$script:CloudGrangeQemuVersion[[:space:]]*=[[:space:]]*'([^']*)'.*/\\1/p" scripts/CloudGrange-Prereqs.ps1)" QEMU_WINDOWS_BUILD
 drift "$CHART/values.yaml secretsBootstrap.image" "$(awk '/^secretsBootstrap:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/values.yaml")" CHART_SECRETS_BOOTSTRAP_IMAGE
 drift "$CHART/charts/observability/values.yaml busybox.image" "$(awk '/^busybox:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/charts/observability/values.yaml")" CHART_BUSYBOX_IMAGE
+drift "$CHART/charts/api/values.yaml waitForPostgres.image" "$(awk '/^waitForPostgres:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/charts/api/values.yaml")" CHART_BUSYBOX_IMAGE
 drift "$CHART/charts/observability/values.yaml promtail.image" "$(awk '/^promtail:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/charts/observability/values.yaml")" CHART_PROMTAIL_IMAGE
 
 # ---- 7. delivery-path wrappers -------------------------------------------------------------------

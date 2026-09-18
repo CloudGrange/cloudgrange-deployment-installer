@@ -47,3 +47,21 @@ release name is the fullname. */ -}}
 {{- end -}}
 {{- $ref -}}
 {{- end -}}
+
+{{- /* AB#9171 (C2 on kind v1.34, plan D1): every workload meets the Pod Security "restricted"
+profile by default, so the chart installs into a namespace labelled
+pod-security.kubernetes.io/enforce=restricted. Pod level: cloudgrange.podSecurity with the image's
+numeric UID; container level: cloudgrange.containerSecurity. The one exception is promtail
+(hostPath + an optional privileged init), which is off by default. */ -}}
+{{- define "cloudgrange.podSecurity" -}}
+runAsNonRoot: true
+runAsUser: {{ .uid }}
+runAsGroup: {{ if hasKey . "gid" }}{{ .gid }}{{ else }}{{ .uid }}{{ end }}
+fsGroup: {{ if hasKey . "fsGroup" }}{{ .fsGroup }}{{ else }}{{ .uid }}{{ end }}
+seccompProfile: { type: RuntimeDefault }
+{{- end -}}
+
+{{- define "cloudgrange.containerSecurity" -}}
+allowPrivilegeEscalation: false
+capabilities: { drop: ["ALL"] }
+{{- end -}}
