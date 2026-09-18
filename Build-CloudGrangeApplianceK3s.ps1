@@ -59,8 +59,12 @@ if (-not $AllowUngeneralized) {
     Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "rm -rf $stage && mkdir -p $stage/appliance")) -TimeoutSeconds 120
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPLK3S-ERR-003: cannot reach '$VmName' over SSH at $VmIp (exit $LASTEXITCODE)." }
 
+    # AB#9189: cloudgrange-updater-k3s.service belongs here — the generalize script installs the
+    # in-app updater, and these lists are explicit, so a file the generalize step needs but nobody
+    # staged fails the whole build at the install step with "cannot stat".
     foreach ($f in 'cloudgrange-generalize-k3s.sh', 'cloudgrange-firstboot-k3s.sh', 'cloudgrange-firstboot-k3s.service', 'cloudgrange-capture-secrets-k3s.sh',
-                   'cloudgrange-kvp.py', 'cloudgrange-operator-access.sh', 'cloudgrange-operator-access.service') {
+                   'cloudgrange-kvp.py', 'cloudgrange-operator-access.sh', 'cloudgrange-operator-access.service',
+                   'cloudgrange-updater-k3s.service') {
         Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @((Join-Path $PSScriptRoot "appliance\$f"), "cloudgrange@${VmIp}:$stage/appliance/$f")) -TimeoutSeconds 120
         if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPLK3S-ERR-003: upload of $f failed (exit $LASTEXITCODE)." }
     }
@@ -68,7 +72,7 @@ if (-not $AllowUngeneralized) {
     # persistently — re-upload them the same way Deploy-K3sHelm.ps1 did at install time
     # (that ephemeral copy was already deleted after install completed).
     Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "mkdir -p $stage/scripts")) -TimeoutSeconds 60
-    foreach ($f in @('Install-CloudGrangeK3s.sh', 'New-ArtifactManifest.sh')) {
+    foreach ($f in @('Install-CloudGrangeK3s.sh', 'New-ArtifactManifest.sh', 'cloudgrange-updater-k3s.py')) {
         Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @((Join-Path $PSScriptRoot "scripts\$f"), "cloudgrange@${VmIp}:$stage/scripts/$f")) -TimeoutSeconds 120
     }
     Get-ChildItem -Path (Join-Path $PSScriptRoot 'charts') -Recurse -File | ForEach-Object {

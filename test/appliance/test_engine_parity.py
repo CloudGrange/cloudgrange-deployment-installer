@@ -122,6 +122,30 @@ class UpdaterParityTests(unittest.TestCase):
         self.assertIn('STATUS_SCHEMA = "cg-updater-status-v1"', k3s)
 
 
+class ApplianceStagingTests(unittest.TestCase):
+    """AB#9189 — the appliance builder stages an EXPLICIT list of files onto the VM.
+
+    A file the generalize script installs but nobody staged fails the whole appliance build at
+    that step with "install: cannot stat ...". That happened for real: the updater was added to
+    the generalize script and its two files were not added to these lists, so the build died after
+    generalizing the VM (which is not repeatable — the VM's SSH keys are gone by then).
+    """
+
+    def setUp(self):
+        self.builder = read("Build-CloudGrangeApplianceK3s.ps1")
+        self.generalize = read("appliance", "cloudgrange-generalize-k3s.sh")
+
+    def test_every_staged_file_the_generalize_script_installs_is_actually_staged(self):
+        # Files the generalize script pulls out of the staging directory, by basename.
+        referenced = set(re.findall(r'\$STAGE_DIR/(?:\.\./)?(?:appliance/|scripts/)?([\w.-]+\.(?:sh|py|service))',
+                                    self.generalize))
+        missing = sorted(name for name in referenced if name not in self.builder)
+        self.assertEqual(missing, [],
+                         "the generalize script installs these from the staging directory but "
+                         "Build-CloudGrangeApplianceK3s.ps1 never uploads them, so the appliance "
+                         "build dies after the VM is already generalized:\n" + "\n".join(missing))
+
+
 class ChartWiringParityTests(unittest.TestCase):
     """Bugs in this class were all 'Compose set the env var, the chart never did'."""
 
