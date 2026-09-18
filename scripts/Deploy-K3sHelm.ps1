@@ -46,6 +46,8 @@ function Deploy-K3sHelm {
     $filesToUpload = @(
         (Join-Path $sourceRoot 'scripts\Install-CloudGrangeK3s.sh'),
         (Join-Path $sourceRoot 'scripts\New-ArtifactManifest.sh'),
+        # AB#9171: stamps -Version into the uploaded chart (Install-CloudGrangeK3s.sh stamp_chart_version).
+        (Join-Path $sourceRoot 'scripts\release\Set-ChartVersion.sh'),
         (Join-Path $sourceRoot 'scripts\cloudgrange-updater-k3s.py'),
         (Join-Path $sourceRoot 'appliance\cloudgrange-updater-k3s.service'),
         (Join-Path $sourceRoot 'cloudgrange-signing-key.pub')

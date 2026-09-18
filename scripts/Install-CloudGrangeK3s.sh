@@ -301,6 +301,28 @@ do_certmanager_installed() {
         --set crds.enabled=true --namespace cert-manager --create-namespace --wait --timeout 3m
 }
 
+# AB#9171 real bug, found installing 2609.0.0-preview.5 with the Windows script: --version only
+# set global.image.tag, which moves the api/portal/relay images and nothing else. The chart's
+# appVersion IS the platform version: it is what the API reports as installed
+# (CLOUDGRANGE_PLATFORM_VERSION / CLOUDGRANGE_SOLUTION_VERSION) and the Platform updater image's
+# default tag. So `-Version 2609.0.0-preview.5` came up claiming to be 2609.0.0 and pointing its
+# updater Job at an image tag that was never published. A release bundle is stamped when it is
+# built (New-ReleaseBundleK3s.sh); the Windows script uploads the repo's chart, which is not.
+# Stamp the chart this install uses with the requested version, the same way a release does.
+stamp_chart_version() {
+    [ -n "$VERSION_VALUE" ] || return 0
+    local chart="$CHARTS_DIR/cloudgrange" current
+    current=$(sed -n -E 's/^appVersion:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p' "$chart/Chart.yaml")
+    [ "$current" != "$VERSION_VALUE" ] || return 0
+    local stamper="$BUNDLE_ROOT/scripts/release/Set-ChartVersion.sh"
+    [ -f "$stamper" ] || {
+        echo "--version $VERSION_VALUE asked for, but the chart is $current and $stamper is missing to stamp it" >&2
+        exit 1
+    }
+    log "stamping platform version $VERSION_VALUE into the chart (was $current)"
+    bash "$stamper" "$chart" "$VERSION_VALUE"
+}
+
 do_chart_installed() {
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
     # There is NO tolerated "known failing pod" here any more. This previously carried a
@@ -319,6 +341,7 @@ do_chart_installed() {
     # aren't Ready yet" (tolerable — do_ready is the real safety net for that) from
     # "the release doesn't exist at all" (a hard failure, fail loudly here instead of
     # silently continuing to a do_ready check that can't explain what's actually wrong).
+    stamp_chart_version
     local tag_args=()
     [ -z "$VERSION_VALUE" ] || tag_args=(--set "global.image.tag=$VERSION_VALUE")
     helm upgrade --install cloudgrange "$CHARTS_DIR/cloudgrange" \
