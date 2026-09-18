@@ -10,6 +10,20 @@ persistence:
     size: 256Mi
   updates:
     size: 8Gi
+updater:
+  # AB#9189 — how the API hands an uploaded release bundle to the host's updater service.
+  #
+  # hostPath is the correct backing for this on an appliance/on-prem node, and a PVC is NOT:
+  # cloudgrange-updater-k3s.service runs on the HOST, outside the cluster, so it cannot read a
+  # PersistentVolume. Backed by a PVC the API's request files went somewhere the updater could
+  # never see them, and an update could never start. The directory is created with the right
+  # ownership by the appliance's generalize step (and by Install-CloudGrangeK3s.sh).
+  #
+  # Set hostPath.enabled=false for clusters where no host updater exists (AKS — see
+  # values-azure.yaml, which updates via `helm upgrade` directly rather than in-app).
+  hostPath:
+    enabled: true
+    path: /var/lib/cloudgrange/updates
 updateChannelUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json"
 redis:
   # AB#9190: the connection string is built in the template from the release name, not

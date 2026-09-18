@@ -1,0 +1,26 @@
+[Unit]
+# AB#9189 — the K3s engine's in-app updater. Compose has had cloudgrange-updater.service since
+# AB#8129; K3s shipped without any updater at all, which violated the standing rule that no
+# appliance ships without an in-app update path (a customer otherwise has to reinstall).
+Description=CloudGrange updater (K3s/Helm engine)
+After=k3s.service
+Wants=k3s.service
+
+[Service]
+Type=simple
+# Root by design: it runs helm, imports images into containerd and reads/writes root-only state.
+# The privilege boundary is the shared updates directory, not this unit — the non-root API pod can
+# only drop request files and uploads there, and everything read from it is treated as untrusted.
+User=root
+ExecStart=/usr/bin/python3 /usr/local/sbin/cloudgrange-updater-k3s.py
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+Environment=CLOUDGRANGE_UPDATES_SHARED=/var/lib/cloudgrange/updates
+Environment=CLOUDGRANGE_UPDATER_STATE=/var/lib/cloudgrange-updater
+Restart=always
+RestartSec=5
+UMask=0022
+
+# The updater must survive a failed upgrade in order to roll it back, so it is deliberately not
+# tied to the health of the release it manages.
+[Install]
+WantedBy=multi-user.target

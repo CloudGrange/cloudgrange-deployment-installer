@@ -77,6 +77,21 @@ systemctl enable cloudgrange-firstboot-k3s.service
 mkdir -p /etc/cloudgrange
 touch /etc/cloudgrange/firstboot-pending
 
+echo "[generalize-k3s] installing the in-app updater (AB#9189)"
+# Without this the K3s appliance has no in-app update path at all and a customer would have to
+# reinstall to take a new release -- the exact gap the Compose engine's cloudgrange-updater.service
+# has covered since AB#8129.
+install -m 0755 "$STAGE_DIR/../scripts/cloudgrange-updater-k3s.py" /usr/local/sbin/cloudgrange-updater-k3s.py
+install -m 0644 "$STAGE_DIR/cloudgrange-updater-k3s.service" /etc/systemd/system/cloudgrange-updater-k3s.service
+# requests/ and incoming/ are the only places the non-root API pod may write; status/ is root-owned
+# and read-only to it. 0733 gives the pod write+traverse without being able to list other tenants'
+# in-flight uploads, matching the Compose volume's permission model.
+install -d -m 0755 /var/lib/cloudgrange/updates
+install -d -m 0733 /var/lib/cloudgrange/updates/requests /var/lib/cloudgrange/updates/incoming
+install -d -m 0755 /var/lib/cloudgrange/updates/status
+systemctl daemon-reload
+systemctl enable cloudgrange-updater-k3s.service
+
 echo "[generalize-k3s] installing operator access (Hyper-V KVP + local console until setup completes)"
 install -d -m 0755 /usr/local/lib/cloudgrange
 install -m 0755 "$STAGE_DIR/cloudgrange-kvp.py" /usr/local/lib/cloudgrange/cloudgrange-kvp.py

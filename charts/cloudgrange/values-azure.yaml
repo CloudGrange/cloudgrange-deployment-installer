@@ -26,6 +26,14 @@ global:
     tenantId: ""                  # required: the Azure AD tenant ID
     managedIdentityClientId: ""   # required: the workload identity's client ID
 
+api:
+  updater:
+    hostPath:
+      # AB#9189: there is no host-level updater service on AKS — nothing would ever read a
+      # hostPath here, and AKS node filesystems are not a place to keep release bundles.
+      # AKS updates by running `helm upgrade` against the cluster directly.
+      enabled: false
+
 postgres:
   persistence:
     storageClass: managed-csi  # Azure Disk CSI storage class

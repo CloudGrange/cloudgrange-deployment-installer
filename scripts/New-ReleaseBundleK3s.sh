@@ -55,6 +55,11 @@ mkdir -p "$B/scripts" "$B/charts"
 log "installer + charts from $SOURCE"
 cp "$SOURCE/Install-CloudGrange-Linux.sh" "$B/Install-CloudGrange-Linux.sh"
 cp "$SOURCE/scripts/Install-CloudGrangeK3s.sh" "$SOURCE/scripts/New-ArtifactManifest.sh" "$B/scripts/"
+# AB#9189 — the in-app updater must ship IN the bundle: Install-CloudGrangeK3s.sh installs it from
+# here, and without it a K3s install has no update path short of a reinstall.
+cp "$SOURCE/scripts/cloudgrange-updater-k3s.py" "$B/scripts/"
+mkdir -p "$B/appliance"
+cp "$SOURCE/appliance/cloudgrange-updater-k3s.service" "$B/appliance/"
 cp -r "$SOURCE/charts/cloudgrange" "$B/charts/cloudgrange"
 mkdir -p "$B/charts/vendor"
 cp "$SOURCE/charts/vendor/"*.tgz "$B/charts/vendor/"

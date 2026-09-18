@@ -28,6 +28,7 @@ STATE_FILE="${CLOUDGRANGE_INSTALL_STATE:-/opt/cloudgrange/.install-state.json}"
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHARTS_DIR="$BUNDLE_ROOT/charts"
 AIRGAP_DIR="${CLOUDGRANGE_AIRGAP_DIR:-$BUNDLE_ROOT/airgap}"
+UPDATES_DIR="${CLOUDGRANGE_UPDATES_SHARED:-/var/lib/cloudgrange/updates}"
 HOSTNAME_VALUE="${CLOUDGRANGE_HOSTNAME:-cloudgrange.local}"
 VERSION_VALUE="${CLOUDGRANGE_VERSION:-latest}"
 
@@ -136,6 +137,27 @@ do_prereqs_checked() {
     if [ ! -f "$CHARTS_DIR/vendor/cert-manager-v1.21.2.tgz" ]; then
         echo "vendored cert-manager chart missing: $CHARTS_DIR/vendor/cert-manager-v1.21.2.tgz" >&2
         exit 1
+    fi
+    install_updater
+}
+
+# AB#9189 — the in-app updater. The API pod mounts $UPDATES_DIR as a hostPath and drops update
+# requests + uploaded bundles there; this root service picks them up. Without it, a K3s install
+# has no in-app update path at all and a new release means a reinstall.
+install_updater() {
+    local src="$BUNDLE_ROOT/scripts/cloudgrange-updater-k3s.py"
+    local unit_src="$BUNDLE_ROOT/appliance/cloudgrange-updater-k3s.service"
+    # requests/ and incoming/ are the only directories the non-root API pod may write to;
+    # status/ stays root-owned so the pod can read progress but never forge it.
+    install -d -m 0755 "$UPDATES_DIR"
+    install -d -m 0733 "$UPDATES_DIR/requests" "$UPDATES_DIR/incoming"
+    install -d -m 0755 "$UPDATES_DIR/status"
+    [ -f "$src" ] || { log "updater not present in this bundle; skipping (no in-app updates)"; return 0; }
+    install -m 0755 "$src" /usr/local/sbin/cloudgrange-updater-k3s.py
+    if [ -f "$unit_src" ]; then
+        install -m 0644 "$unit_src" /etc/systemd/system/cloudgrange-updater-k3s.service
+        systemctl daemon-reload
+        systemctl enable --now cloudgrange-updater-k3s.service
     fi
 }
 

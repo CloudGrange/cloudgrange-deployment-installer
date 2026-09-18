@@ -8,7 +8,11 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.secrets.size }}
+{{- if not .Values.updater.hostPath.enabled }}
 ---
+# Only rendered where the updates directory is NOT a hostPath (AB#9189). On an appliance the
+# host's updater service needs a real host directory it can read; a PVC there would be a
+# channel the updater can never see.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -19,3 +23,4 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.updates.size }}
+{{- end }}

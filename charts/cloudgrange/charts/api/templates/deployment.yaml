@@ -149,7 +149,14 @@ spec:
           resources: {{ toYaml .Values.resources | nindent 12 }}
       volumes:
         - { name: api-secrets, persistentVolumeClaim: { claimName: "{{ .Release.Name }}-api-secrets" } }
+        {{- if .Values.updater.hostPath.enabled }}
+        # AB#9189: must be a hostPath, not a PVC — the updater service runs on the host and
+        # cannot read a PersistentVolume. See the updater block in this subchart's values.yaml.
+        - name: platform-updates
+          hostPath: { path: {{ .Values.updater.hostPath.path | quote }}, type: DirectoryOrCreate }
+        {{- else }}
         - { name: platform-updates, persistentVolumeClaim: { claimName: "{{ .Release.Name }}-api-updates" } }
+        {{- end }}
         {{- if .Values.global.aks.enabled }}
         - name: azure-kv
           csi:
