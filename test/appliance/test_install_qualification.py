@@ -307,7 +307,10 @@ class GeneralizeSecretWipeOrderingTests(unittest.TestCase):
         # Permitted after the remount: the wipe itself, control flow, and things that cannot
         # write to the root filesystem (echo/sync/cd, and rmdir which is expected to fail on ro).
         allowed = ("sync", "echo ", "cd /", "rmdir ", "zerofree", "else", "fi", "then", "if ",
-                   "mount -o remount,ro")
+                   "mount -o remount,ro",
+                   # Waiting for the forced read-only remount to settle writes nothing itself.
+                   "sleep ",
+                   "grep -qE")
         offenders = [l for l in between if not l.startswith(allowed)]
         self.assertEqual(offenders, [],
                          "these run after the root filesystem is read-only and either cannot "

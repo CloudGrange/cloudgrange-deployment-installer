@@ -296,13 +296,29 @@ fi
 if command -v zerofree >/dev/null 2>&1 && [ -n "$root_dev" ]; then
     echo "[generalize-k3s] remounting / read-only (nothing may write after this point)"
     sync
-    if mount -o remount,ro / 2>/dev/null; then
+    # A plain `mount -o remount,ro /` returns EBUSY here: this script runs over SSH, so sshd, the
+    # shell and systemd all hold the root filesystem open for write. Stopping "everything except
+    # us" is not something a script running inside the session can do cleanly.
+    #
+    # sysrq-u is the mechanism built for exactly this: the kernel force-remounts every filesystem
+    # read-only regardless of who holds it open. The system is intentionally left unusable
+    # afterwards -- that is fine, the only remaining steps are zerofree (which reads and writes
+    # the block device directly) and powering off.
+    if ! mount -o remount,ro / 2>/dev/null; then
+        echo "[generalize-k3s] remount busy (expected over SSH); forcing read-only via sysrq"
+        # Make sure the binary is resident before the filesystem goes read-only under us.
+        zerofree --help >/dev/null 2>&1 || true
+        echo u > /proc/sysrq-trigger 2>/dev/null || true
+        sleep 3
+    fi
+
+    if grep -qE " / .* ro[, ]" /proc/mounts; then
         echo "[generalize-k3s] zeroing every free block on $root_dev"
         # Non-fatal: a failure here leaves the image no worse than the passes above, and the
         # build's own secret scan is the gate that decides whether it ships.
         zerofree -v "$root_dev" || echo "[generalize-k3s] WARNING: zerofree failed on $root_dev" >&2
     else
-        echo "[generalize-k3s] WARNING: could not remount / read-only; skipping zerofree" >&2
+        echo "[generalize-k3s] WARNING: / is still read-write; skipping zerofree" >&2
     fi
 else
     echo "[generalize-k3s] WARNING: zerofree unavailable; relying on the fill pass alone" >&2
@@ -318,7 +334,9 @@ cd /
 # The root filesystem is read-only from here (see the zerofree step), so this is expected to fail
 # and is harmless -- the staged directory's contents were already removed before the wipe.
 rmdir "$STAGE_PARENT" 2>/dev/null || true
-# systemd-run writes its transient unit to /run, which is tmpfs, so this still works on a
-# read-only root. Use `poweroff -f` so shutdown does not try to remount or fsck the disk we just
-# finished zeroing.
-systemd-run --on-active=5 /bin/systemctl poweroff --force >/dev/null
+# After sysrq-u the system is deliberately in a forced read-only state and systemd may not be able
+# to run a normal shutdown transaction, so try the clean path first and fall back to sysrq-o, which
+# powers the machine off directly from the kernel. Either way the disk is already zeroed and
+# read-only, so an abrupt power-off cannot damage or dirty it.
+( systemd-run --on-active=5 /bin/systemctl poweroff --force >/dev/null 2>&1 \
+    || ( sleep 5; echo o > /proc/sysrq-trigger ) ) &
