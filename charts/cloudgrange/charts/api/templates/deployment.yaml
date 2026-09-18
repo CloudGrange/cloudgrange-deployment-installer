@@ -38,7 +38,12 @@ spec:
         azure.workload.identity/use: "true"
         {{- end }}
     spec:
-      {{- if $.Values.global.aks.enabled }}
+      {{- if $.Values.moduleRuntime.enabled }}
+      # AB#9197: the API needs its own ServiceAccount to hold the module-runtime Role (creating a
+      # Deployment/Service per installed module). On AKS this SA also carries the workload-identity
+      # annotation, so it replaces the separate workload-identity SA rather than competing with it.
+      serviceAccountName: {{ $.Release.Name }}-api
+      {{- else if $.Values.global.aks.enabled }}
       serviceAccountName: {{ $.Release.Name }}-workload-identity
       {{- end }}
       securityContext:

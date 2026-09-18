@@ -10,6 +10,14 @@ persistence:
     size: 256Mi
   updates:
     size: 8Gi
+moduleRuntime:
+  # AB#9197 — lets the API create a Deployment + Service per installed module, which is what makes
+  # an installed module actually run and be routable. Turning this off leaves modules installable
+  # but inert (they record state and never start), which is the behaviour that shipped before.
+  # Grants the API's ServiceAccount namespace-scoped rights over deployments/services — see
+  # templates/module-runtime-rbac.yaml for why the scope is drawn where it is.
+  enabled: true
+
 updater:
   # AB#9189 — how the API hands an uploaded release bundle to the host's updater service.
   #

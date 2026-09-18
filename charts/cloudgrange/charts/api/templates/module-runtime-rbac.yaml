@@ -1,0 +1,53 @@
+{{- if .Values.moduleRuntime.enabled }}
+# AB#9197 — rights the API needs to actually RUN installed modules.
+#
+# Installing a module used to write a database row and stop, so no module ever ran. The API now
+# creates a Deployment and a Service per installed module, which needs permission it did not have.
+#
+# Deliberately narrow, because this is what lets the platform start third-party container images:
+#   - a Role, not a ClusterRole: this namespace only, never cluster-wide.
+#   - only deployments and services, and only the verbs needed to create, update and remove them.
+#   - no secrets, no configmaps, no pod/exec, no RBAC-editing verbs, so a compromised module
+#     workload cannot escalate through the API's own service account.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-api
+  labels: { app.kubernetes.io/part-of: cloudgrange }
+  {{- if .Values.global.aks.enabled }}
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.global.aks.managedIdentityClientId | quote }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-module-runtime
+  labels: { app.kubernetes.io/part-of: cloudgrange }
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read-only: the Health tab reports whether a module's pods are actually up. No write verbs —
+  # the platform never needs to mutate pods directly.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-module-runtime
+  labels: { app.kubernetes.io/part-of: cloudgrange }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-module-runtime
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-api
+    namespace: {{ .Release.Namespace }}
+{{- end }}
