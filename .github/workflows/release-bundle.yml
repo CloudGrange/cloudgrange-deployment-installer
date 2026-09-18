@@ -11,7 +11,7 @@ name: Release Bundle
 # carries the pinned K3s binary, K3s's airgap image tarball and every image the rendered chart
 # references, so it has the offline parity the Compose bundle used to be kept around for.
 #
-# Inputs are pinned in the repo under release/: the K3s version in release/k3s-version.txt
+# Inputs are pinned in the repo under release/: the K3s version in release/pins.conf (K3S_VERSION)
 # (checked against K3s's own published sha256sum-amd64.txt at build time), first-party images by
 # the --version tag, vendor images by the digests/tags the chart itself renders.
 # The bundle is NOT signed: SHA256SUMS is an integrity check only, not an authenticity check.

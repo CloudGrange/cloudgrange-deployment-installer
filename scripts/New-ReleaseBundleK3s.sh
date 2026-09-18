@@ -76,7 +76,8 @@ open(path, "w").write(text)
 PY
 
 if [ "$IMAGES" = registry ]; then
-    K3S_VERSION=$(tr -d '[:space:]' < "$PINS/k3s-version.txt")
+    K3S_VERSION=$(sed -n 's/^K3S_VERSION=//p' "$PINS/pins.conf" | tr -d '[:space:]')
+    [[ "$K3S_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || { echo "K3S_VERSION missing or malformed in release/pins.conf" >&2; exit 1; }
     log "air-gap payload: k3s $K3S_VERSION + every image the rendered chart references"
     A="$B/airgap"
     mkdir -p "$A"
