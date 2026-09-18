@@ -38,14 +38,11 @@ spec:
         azure.workload.identity/use: "true"
         {{- end }}
     spec:
-      {{- if $.Values.moduleRuntime.enabled }}
-      # AB#9197: the API needs its own ServiceAccount to hold the module-runtime Role (creating a
-      # Deployment/Service per installed module). On AKS this SA also carries the workload-identity
-      # annotation, so it replaces the separate workload-identity SA rather than competing with it.
+      # AB#9197/AB#9171: the API runs as its own ServiceAccount, always. It holds the module-runtime
+      # Role (creating a Deployment/Service per installed module) and the Platform-update Role
+      # (creating the updater Job). On AKS this SA also carries the workload-identity annotation,
+      # so it replaces the separate workload-identity SA rather than competing with it.
       serviceAccountName: {{ $.Release.Name }}-api
-      {{- else if $.Values.global.aks.enabled }}
-      serviceAccountName: {{ $.Release.Name }}-workload-identity
-      {{- end }}
       securityContext:
         runAsNonRoot: true
         # AB#9187 real bug, found via a live AKS test: without fsGroup, the api-secrets
@@ -121,6 +118,15 @@ spec:
               value: "/var/lib/cloudgrange/updates"
             - name: CLOUDGRANGE_UPDATE_CHANNEL_URL
               value: {{ .Values.updateChannelUrl | quote }}
+            {{- /* AB#9171 (plan 2026-09-18-foundation-platform-separation §4): the platform/update
+            environment, rendered by the umbrella chart (templates/platform-env-configmap.yaml)
+            because only it can see foundation.*, platformUpdater.* and its own kubeVersion.
+            optional: true keeps this subchart renderable on its own and lets the updater keys be
+            absent when platformUpdater.enabled=false. */}}
+            {{- range list "CLOUDGRANGE_RELEASE_NAME" "CLOUDGRANGE_NAMESPACE" "CLOUDGRANGE_SUPPORTED_KUBE_RANGE" "CLOUDGRANGE_FOUNDATION_MANAGED" "CLOUDGRANGE_PLATFORM_VERSION" "CLOUDGRANGE_PLATFORM_UPDATER_ENABLED" "CLOUDGRANGE_PLATFORM_UPDATER_IMAGE" "CLOUDGRANGE_PLATFORM_UPDATER_SA" "CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC" }}
+            - name: {{ . }}
+              valueFrom: { configMapKeyRef: { name: "{{ $.Release.Name }}-platform-env", key: {{ . }}, optional: true } }
+            {{- end }}
             {{- if .Values.redis.enabled }}
             {{- /* AB#9190: the release name is only known at template-render time, so
             the Redis host is built here, not hardcoded into a values file — earlier

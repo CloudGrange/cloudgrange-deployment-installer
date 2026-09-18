@@ -1,4 +1,3 @@
-{{- if .Values.moduleRuntime.enabled }}
 # AB#9197 — rights the API needs to actually RUN installed modules.
 #
 # Installing a module used to write a database row and stop, so no module ever ran. The API now
@@ -9,6 +8,9 @@
 #   - only deployments and services, and only the verbs needed to create, update and remove them.
 #   - no secrets, no configmaps, no pod/exec, no RBAC-editing verbs, so a compromised module
 #     workload cannot escalate through the API's own service account.
+# AB#9171: the ServiceAccount is created unconditionally now. Besides the module-runtime Role below it
+# holds the Platform-update Role (umbrella templates/platform-updater.yaml), which must bind to a real
+# ServiceAccount even when moduleRuntime is off; before, the pod fell back to `default` then.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -19,6 +21,7 @@ metadata:
     azure.workload.identity/client-id: {{ .Values.global.aks.managedIdentityClientId | quote }}
   {{- end }}
 ---
+{{- if .Values.moduleRuntime.enabled }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

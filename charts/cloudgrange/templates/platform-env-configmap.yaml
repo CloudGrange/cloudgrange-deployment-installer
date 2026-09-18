@@ -1,0 +1,32 @@
+{{- /*
+AB#9171 (plan 2026-09-18-foundation-platform-separation §4) — the platform/update environment the
+API needs, rendered HERE in the umbrella chart and read by the api Deployment through
+configMapKeyRef (charts/api/templates/deployment.yaml).
+
+Why a ConfigMap and not plain env values in the api subchart: two of these values are only
+visible to the umbrella chart. A subchart cannot read its parent's non-global values
+(foundation.*, platformUpdater.*), and inside a subchart template .Chart.KubeVersion is the
+SUBCHART's (empty), not this chart's kubeVersion. Rendering them here keeps one source for each:
+Chart.yaml kubeVersion and the §4 value names, unchanged.
+
+Env var names are the §4 contract and are consumed by the API (E2). Do not rename.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-platform-env
+  labels: { app.kubernetes.io/part-of: cloudgrange }
+data:
+  CLOUDGRANGE_RELEASE_NAME: {{ .Release.Name | quote }}
+  CLOUDGRANGE_NAMESPACE: {{ .Release.Namespace | quote }}
+  CLOUDGRANGE_SUPPORTED_KUBE_RANGE: {{ .Chart.KubeVersion | quote }}
+  CLOUDGRANGE_FOUNDATION_MANAGED: {{ ternary "true" "false" (eq (toString .Values.foundation.managed) "true") | quote }}
+  CLOUDGRANGE_PLATFORM_VERSION: {{ .Chart.AppVersion | quote }}
+  CLOUDGRANGE_PLATFORM_UPDATER_ENABLED: {{ ternary "true" "false" (eq (toString .Values.platformUpdater.enabled) "true") | quote }}
+  {{- if .Values.platformUpdater.enabled }}
+  CLOUDGRANGE_PLATFORM_UPDATER_IMAGE: {{ include "cloudgrange.platformUpdaterImage" . | quote }}
+  CLOUDGRANGE_PLATFORM_UPDATER_SA: {{ include "cloudgrange.platformUpdaterName" . | quote }}
+  # Additive to §4: the PVC the updater Job must mount at /backups so a later `rollback` can restore
+  # the database backup taken by `apply` (images/platform-updater/job.example.yaml).
+  CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC: {{ printf "%s-backups" (include "cloudgrange.platformUpdaterName" .) | quote }}
+  {{- end }}

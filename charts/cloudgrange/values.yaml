@@ -93,3 +93,44 @@ backup:
   enabled: false
   schedule: "0 2 * * *"
   ttl: "720h"
+
+# AB#9171 (plan 2026-09-18-foundation-platform-separation §3/§4) — who owns the Foundation (the host
+# OS, Kubernetes and host services under this chart).
+#   false (default): a customer foundation — BYO Kubernetes or AKS. CloudGrange never touches the
+#                    cluster or the host; the portal shows no Foundation update card.
+#   true:            a managed foundation — CloudGrange provisioned it (VHDX appliance, Windows or
+#                    Linux script, Azure VM). values-single-node.yaml sets this; the host updater
+#                    service (cloudgrange-updater-k3s.service) offers admin-initiated Foundation updates.
+# Passed to the API as CLOUDGRANGE_FOUNDATION_MANAGED (templates/platform-env-configmap.yaml).
+foundation:
+  managed: false
+
+# AB#9171 (plan §3/§4, E1) — the in-cluster Platform updater. A Platform update (this chart's
+# version, its images, the schema) runs as a Kubernetes Job the API creates on an admin's request,
+# so it works the same on every delivery path: K3s, BYO Kubernetes and AKS. The Job verifies the
+# signed release manifest, backs up the database, runs `helm upgrade --reuse-values` to the pinned
+# versions, runs the health gate, and on failure runs `helm rollback` and restores the database.
+# Image source: images/platform-updater/. The chart renders only its ServiceAccount, RBAC, backup
+# volume and status ConfigMap; the API creates the Job (images/platform-updater/job.example.yaml).
+platformUpdater:
+  enabled: true
+  image:
+    repository: ghcr.io/cloudgrange/cloudgrange-platform-updater
+    # Empty means this chart's appVersion — the release version. Never `latest`.
+    tag: ""
+    # Optional sha256:<64 hex>; set, the image is pinned by digest.
+    digest: ""
+  # pg_dump backups taken before each update and used to restore on failure or rollback. The Job
+  # mounts this PVC at /backups. Kept on `helm uninstall` (helm.sh/resource-policy: keep).
+  backup:
+    size: 10Gi
+    # Empty uses the cluster's default StorageClass.
+    storageClassName: ""
+  signing:
+    # PEM cosign public key the updater verifies the release manifest against. EMPTY MEANS EVERY
+    # PLATFORM UPDATE IS REFUSED (fail closed): the committed cloudgrange-signing-key.pub is still a
+    # placeholder, so there is no real key to default to yet. Rendered into ConfigMap
+    # <release>-platform-updater-signing, which the updater reads itself.
+    publicKey: ""
+  # How long the health gate waits for every Deployment/StatefulSet of the release to roll out.
+  healthTimeout: 10m

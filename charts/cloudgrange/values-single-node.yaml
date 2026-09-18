@@ -27,3 +27,8 @@ relay:
 postgres:
   highAvailability:
     enabled: false
+# AB#9171 (plan §3/§4): every installer that uses this profile provisioned the host and K3s itself,
+# so this is a managed foundation. The API exposes the Foundation update endpoints and the portal
+# shows the Foundation card only when this is true.
+foundation:
+  managed: true
