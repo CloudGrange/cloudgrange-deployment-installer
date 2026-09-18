@@ -9,9 +9,8 @@ param(
     [ValidateSet('Online', 'Bundled', 'Appliance')]
     [string]$Mode = 'Online',
     # AB#9185/9183: K3s/Helm is the deployment model for this product. Compose remains
-    # reachable with -Engine Compose until AB#9189 retires it, and is still the only
-    # engine that supports -Mode Bundled (the K3s bundle has no offline images yet), but
-    # it is no longer the default — leaving the default on Compose meant every install
+    # reachable with -Engine Compose for unmigrated installs (both engines support -Mode
+    # Bundled since AB#9171), but it is no longer the default — leaving the default on Compose meant every install
     # that did not pass -Engine silently deployed the stack the restructure replaced.
     # Install-CloudGrange-Linux.sh's own default was flipped for the same reason; these
     # two entry points must agree.
@@ -25,7 +24,9 @@ param(
     [string]$HttpProxy = '',
     [string]$ProxyUser = '',
     [SecureString]$ProxyPassword,
-    [string]$Version = 'latest',
+    # AB#9171 (C1): empty = the release the chart pins (K3s engine). It used to default to 'latest', so
+    # the wrapper, not the chart, chose the Platform build. Pass a YYMM.MINOR.PATCH to override.
+    [string]$Version = '',
     # AB#1852: path to the cloudgrange bundle directory (extracted zip) for offline installs.
     # When not specified and Mode=Bundled, the installer looks in $PSScriptRoot for bundle files.
     [string]$BundlePath = '',
@@ -50,17 +51,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# -Mode Bundled is a fully offline install, and the K3s bundle has no offline container
-# images yet (AB#9184's disclosed gap), so K3s cannot serve it. Since -Engine now defaults
-# to K3s, an offline caller who never passed -Engine would hit a hard error for a default
-# they did not choose. Fall back to Compose in exactly that case — the default was implicit
-# AND the mode demands offline — while an EXPLICIT `-Engine K3s -Mode Bundled` still fails
-# loudly below, because that combination genuinely cannot work and silently downgrading a
-# deliberate choice would be worse.
-if ($Mode -eq 'Bundled' -and -not $PSBoundParameters.ContainsKey('Engine')) {
-    Write-Warning "-Mode Bundled is offline-only and the K3s bundle does not ship offline images yet; using -Engine Compose. Pass -Engine K3s -Mode Online for the K3s/Helm deployment."
-    $Engine = 'Compose'
-}
+# AB#9171: -Mode Bundled runs the K3s engine like every other mode. Install-CloudGrange-K3s-Bundled.zip
+# carries K3s, its airgap images, every chart image and a pinned Helm (New-ReleaseBundleK3s.sh). This
+# script used to downgrade an offline install to Compose silently whenever -Engine was not passed,
+# because the K3s bundle had no offline images; that gap is closed, so the downgrade is gone and
+# Compose (legacy, unmigrated installs) is reachable only by asking for it explicitly.
 
 . "$PSScriptRoot\scripts\CloudGrange-Common.ps1"
 . "$PSScriptRoot\scripts\CloudGrange-Prereqs.ps1"
@@ -189,8 +184,9 @@ function Invoke-CloudGrangeInstall {
     $sshKeyDir   = ''
 
     if (-not $useWsl2) {
-        Write-Progress-Step "Bootstrapping installer prerequisites (qemu-img, ISO writer)"
-        Initialize-CloudGrangePrereqs -InstallPinnedQemu:$InstallPinnedQemu
+        # AB#9171 (C3): qemu-img is no longer required up front. The VM's base disk is the release's
+        # pinned, pre-converted Ubuntu VHDX; qemu-img (and -InstallPinnedQemu) is only needed on the
+        # fallback path when that is unavailable, and New-CloudGrangeVm.ps1 checks for it there.
         if ($NoDefaultGateway -and $Mode -ne 'Bundled') {
             Write-Error "CG-INST-ERR-012: -NoDefaultGateway requires -Mode Bundled (Online mode needs registry access)."
         }
@@ -229,7 +225,9 @@ function Invoke-CloudGrangeInstall {
         $bundledUbuntuPath = ''
         if ($Mode -eq 'Bundled') {
             $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
-            $bundledUbuntuPath = Join-Path $bundleRoot 'ubuntu-24.04-cloudimg.img'
+            # AB#9171 (C3): prefer the pre-converted base VHDX (no qemu-img); a cloud .img still works.
+            $bundledVhdx = Get-ChildItem -Path $bundleRoot -Filter 'ubuntu-noble-*-hyperv-gen2-30g.vhdx' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            $bundledUbuntuPath = if ($bundledVhdx) { $bundledVhdx.FullName } else { Join-Path $bundleRoot 'ubuntu-24.04-cloudimg.img' }
         }
         # AB#9185 fix: New-CloudGrangeVm.ps1 used to hardcode the VM name to
         # cloudgrange-docker regardless of -Engine, so a K3s install would provision (and on
@@ -257,6 +255,7 @@ function Invoke-CloudGrangeInstall {
             '-VmName', $effectiveVmName
         )
         if ($SkipHostPortForward) { $vmArgs += '-SkipHostPortForward' }
+        if ($InstallPinnedQemu)   { $vmArgs += '-InstallPinnedQemu' }
         if ($NoDefaultGateway)    { $vmArgs += '-NoDefaultGateway' }
         & powershell.exe @vmArgs
         if ($LASTEXITCODE -ne 0) {
@@ -282,12 +281,18 @@ function Invoke-CloudGrangeInstall {
     }
 
     if ($Engine -eq 'K3s') {
-        if ($Mode -eq 'Bundled') {
-            Write-Error "CG-INST-ERR-013: -Engine K3s does not yet support -Mode Bundled (no offline container images in the K3s bundle yet — AB#9184's known gap). Use -Mode Online, or -Engine Compose for a fully offline install."
-        }
         Write-Progress-Step "Deploying CloudGrange via K3s/Helm"
         . "$PSScriptRoot\scripts\Deploy-K3sHelm.ps1"
         $k3sArgs = @{ VmName = 'cloudgrange-k3s'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+        if ($Mode -eq 'Bundled') {
+            # AB#9171: the airgap/ directory of an extracted Install-CloudGrange-K3s-Bundled.zip.
+            $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
+            $airgap = Join-Path $bundleRoot 'airgap'
+            if (-not (Test-Path (Join-Path $airgap 'k3s.sha256'))) {
+                Write-Error "CG-INST-ERR-013: -Mode Bundled needs the airgap/ directory of an extracted Install-CloudGrange-K3s-Bundled.zip at $airgap (pass -BundlePath)."
+            }
+            $k3sArgs['AirgapPath'] = $airgap
+        }
         if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
             $k3sArgs['SshKeyPath'] = $sshKeyPath
         } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
@@ -316,7 +321,8 @@ function Invoke-CloudGrangeInstall {
 
         Write-Progress-Step "Deploying CloudGrange Docker Compose stack"
         . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
-        $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+        # Compose (legacy, unmigrated installs only) keeps its old default tag.
+        $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $(if ($Version) { $Version } else { 'latest' }); UseWsl2 = $useWsl2 }
         if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
             $composeArgs['SshKeyPath'] = $sshKeyPath
         } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {

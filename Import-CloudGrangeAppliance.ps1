@@ -29,9 +29,12 @@ param(
     # Do NOT use in production — unsigned appliances cannot be traced to a known-good build.
     [switch]$AllowUnsigned,
 
-    # AB#8129: Hyper-V switch for the appliance NIC. An existing switch is used as-is; a missing one
-    # is created as an Internal switch.
-    [string]$SwitchName = 'cloudgrange-internal',
+    # AB#8129/AB#9171: Hyper-V switch for the appliance NIC. An existing switch is used as-is. A missing
+    # one is created as an EXTERNAL switch on the host's default-route adapter (or -NetAdapterName), so
+    # the appliance's default DHCP works; an Internal switch has no DHCP. Isolated networks: create the
+    # switch yourself and pass -VmIp/-Gateway for a static plan.
+    [string]$SwitchName = 'cloudgrange-external',
+    [string]$NetAdapterName = '',
 
     # AB#8129: optional static IPv4 for networks without DHCP. When set, a NoCloud seed carrying ONLY the
     # network configuration is attached (no users, no keys). Leave empty for DHCP; the address is then
@@ -197,8 +200,23 @@ if ($sigFilePresent) {
 Write-Progress-Step "Selecting Hyper-V switch '$SwitchName'"
 $switchName = $SwitchName
 if (-not (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue)) {
-    New-VMSwitch -Name $switchName -SwitchType Internal | Out-Null
-    Write-Host "  Created virtual switch: $switchName" -ForegroundColor Gray
+    # AB#9171: an appliance defaults to DHCP, and an Internal switch has no DHCP server, so the old
+    # "create an Internal switch" default produced an appliance that never got an address. A missing
+    # switch is now an EXTERNAL switch on the host adapter that carries the default route: the
+    # appliance joins the host's LAN and gets its address from the LAN's DHCP. For an isolated or
+    # DHCP-less network, create the switch yourself and pass -SwitchName with -VmIp/-Gateway (static plan).
+    $adapterName = $NetAdapterName
+    if ([string]::IsNullOrEmpty($adapterName)) {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1
+        $adapter = if ($route) { Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue } else { $null }
+        if ($adapter -and $adapter.Name -notlike 'vEthernet*') { $adapterName = $adapter.Name }
+    }
+    if ([string]::IsNullOrEmpty($adapterName)) {
+        Write-Error "CG-APPL-ERR-010: switch '$switchName' does not exist and no physical adapter with a default route was found. Pass -NetAdapterName to create an External switch, or create a switch yourself and pass -SwitchName (with -VmIp/-Gateway if that network has no DHCP)."
+    }
+    Write-Host "  Creating External switch '$switchName' on adapter '$adapterName' (the host's network may drop for a few seconds)..." -ForegroundColor Yellow
+    New-VMSwitch -Name $switchName -NetAdapterName $adapterName -AllowManagementOS $true | Out-Null
+    Write-Host "  Created External switch: $switchName (appliance addressing: $(if ($VmIp) { "static $VmIp" } else { 'DHCP from the host LAN' }))" -ForegroundColor Gray
 } else {
     Write-Host "  Using existing virtual switch: $switchName (unchanged)" -ForegroundColor Gray
 }
@@ -358,13 +376,16 @@ Write-Host "  Operator access is documented in docs/appliance-operator-access.md
 Write-Host ""
 
 if (-not $SkipHostPortForward) {
-    # Publish the portal on host port 443 for other machines on the host's network.
-    $fwRuleName = 'CloudGrange-Portal-443'
-    if (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
-        netsh interface portproxy add v4tov4 listenport=443 connectaddress=$address connectport=443 | Out-Null
-        Write-Host "  Firewall rule and port proxy configured for port 443" -ForegroundColor Gray
+    # Publish the portal (443) and, AB#9171, the site relay agents connect to (8443) on the host, for
+    # machines that reach the appliance through the host rather than on its own address.
+    foreach ($forward in @(@{ Port = 443; Rule = 'CloudGrange-Portal-443' }, @{ Port = 8443; Rule = 'CloudGrange-Relay-8443' })) {
+        if (-not (Get-NetFirewallRule -DisplayName $forward.Rule -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -DisplayName $forward.Rule -Direction Inbound -Protocol TCP -LocalPort $forward.Port -Action Allow | Out-Null
+        }
+        netsh interface portproxy delete v4tov4 listenport=$($forward.Port) | Out-Null
+        netsh interface portproxy add v4tov4 listenport=$($forward.Port) connectaddress=$address connectport=$($forward.Port) | Out-Null
     }
+    Write-Host "  Firewall rules and port proxy configured for ports 443 and 8443" -ForegroundColor Gray
 }
 
 if ($PassThru) { [pscustomobject]$result }
