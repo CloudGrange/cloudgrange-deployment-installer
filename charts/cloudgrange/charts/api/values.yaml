@@ -70,6 +70,15 @@ updateChannel:
   baseUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev"
   # Full URL override, e.g. an internal mirror for an air-gapped site. Wins over name/baseUrl.
   url: ""
+# AB#9171: the module catalog index (cg-module-catalog-v1). Default: <updateChannel.baseUrl>/modules/catalog.json,
+# published by scripts/release/Publish-ModuleCatalog.sh. It needs no credentials.
+moduleCatalog:
+  # Full URL override, e.g. an internal mirror for an air-gapped site.
+  url: ""
+  # Optional bearer token for a private mirror, read from an existing Secret. Leave name empty for none.
+  tokenSecret:
+    name: ""
+    key: token
 redis:
   # AB#9190: the connection string is built in the template from the release name, not
   # read from a value — see deployment.yaml. This flag alone gates whether it's set.

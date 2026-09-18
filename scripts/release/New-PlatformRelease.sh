@@ -55,6 +55,13 @@ trap 'rm -rf "$WORK"' EXIT
 log() { echo "[platform-release] $*"; }
 run() { if [ "$PUSH" = 1 ]; then "$@"; else echo "DRY-RUN: $*"; fi; }
 
+# AB#9171: one version number per release, across every image AND the OCI chart. Refuse before
+# anything is pushed rather than overwriting or splitting a number between two builds.
+if [ "$PUSH" = 1 ]; then
+    bash "$REPO_ROOT/scripts/release/Test-ReleaseVersionFree.sh" --check "$VERSION" \
+        || { echo "pick a free version: $(bash "$REPO_ROOT/scripts/release/Test-ReleaseVersionFree.sh" --next "${VERSION%.*}")" >&2; exit 1; }
+fi
+
 # component name in the manifest -> image repository
 declare -A IMAGES=(
     [cloudgrange-api]=cloudgrange-api
