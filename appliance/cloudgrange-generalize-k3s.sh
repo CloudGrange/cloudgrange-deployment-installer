@@ -136,7 +136,17 @@ NETPLAN
 chmod 600 /etc/netplan/01-cloudgrange-dhcp.yaml
 
 echo "[generalize-k3s] removing SSH host keys and authorized keys"
+# AB#9186 ROOT CAUSE: these were plain deletes while the log wipe below uses `shred`. A plain
+# delete releases the blocks with the key material still in them, so whether it survives into the
+# exported image depends entirely on the free-space overwrite later in this script happening to
+# cover those blocks. Forensics on a real export proved it does not: every remaining occurrence sat
+# in FREE blocks of the root partition (debugfs icheck found no owning inode), none in any live
+# file, none on /boot or the ESP, and the image has no swap. Overwriting the content in place
+# before unlinking removes the residue at source and stops it depending on the free-space pass at
+# all -- exactly what the log wipe already does.
+find /etc/ssh -maxdepth 1 -name 'ssh_host_*' -type f -exec shred -zun 3 {} \; 2>/dev/null || true
 rm -f /etc/ssh/ssh_host_*
+find /root /home -name authorized_keys -type f -exec shred -zun 3 {} \; 2>/dev/null || true
 find /root /home -name authorized_keys -type f -delete 2>/dev/null || true
 
 # AB#9186: sshd/PAM record the accepted public key on login (/var/log/auth.log, journald).

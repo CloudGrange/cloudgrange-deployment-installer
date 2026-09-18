@@ -14,6 +14,7 @@
 #   python3 -m unittest discover -s test/appliance -p 'test_install_qualification.py'
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -284,6 +285,22 @@ class GeneralizeSecretWipeOrderingTests(unittest.TestCase):
         offenders = [l for l in between if not l.startswith(allowed)]
         self.assertEqual(offenders, [],
                          "these run after the free-space wipe and may write to disk:\n" + "\n".join(offenders))
+
+    def test_ssh_key_material_is_shredded_not_just_deleted(self):
+        """AB#9186 — a plain delete leaves the key material in freed blocks.
+
+        Proven on a real export: every surviving occurrence sat in FREE blocks of the root
+        partition (debugfs icheck found no owning inode), none in any live file, none on /boot
+        or the ESP, no swap on the image. These files were unlinked without overwriting while
+        the log wipe a few lines below used shred, so whether the residue survived depended on
+        the free-space pass happening to cover those blocks -- which it did not.
+        """
+        for pattern in ("ssh_host_", "authorized_keys"):
+            self.assertIsNotNone(
+                re.search(rf"find[^\n]*{pattern}[^\n]*shred", self.text),
+                f"{pattern} is removed without shredding its content first; the key material is "
+                f"left in freed blocks and only disappears if the free-space overwrite happens "
+                f"to cover them")
 
     def test_firstboot_restores_persistent_logging(self):
         with open(os.path.join(REPO, "appliance", "cloudgrange-firstboot-k3s.sh"), encoding="utf-8") as f:
