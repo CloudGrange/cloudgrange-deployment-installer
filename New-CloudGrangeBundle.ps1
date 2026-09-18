@@ -10,7 +10,7 @@
 # Bundles are built reproducibly by scripts/New-ReleaseBundleK3s.sh, run on demand from one main commit
 # by .github/workflows/release-bundle.yml (docs/releases/reproducible-build.md). The build:
 #   - stamps the first-party image tag into the chart's values,
-#   - packages the pinned K3s binary + K3s airgap images (release/k3s-version.txt, checked against
+#   - packages the pinned K3s binary + K3s airgap images (release/pins.conf K3S_VERSION, checked against
 #     K3s's own published sha256sum-amd64.txt),
 #   - packages every image the rendered chart actually references, for offline install.
 #

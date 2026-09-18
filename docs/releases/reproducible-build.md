@@ -20,7 +20,7 @@ Every input is fixed by the source tree:
 | Installer scripts, charts, docs | The commit, exported with `git archive` (never a working copy) |
 | First-party images (api, portal, relay) | The `--version` tag, stamped into the bundled chart values as `global.image.tag` |
 | Vendor images (postgres, keycloak, grafana, loki, promtail, prometheus, otel-collector, cert-manager, …) | The tags the chart itself renders. The image list is derived from `helm template`, never hand-maintained, so it cannot drift from the chart |
-| K3s binary and K3s airgap images | `release/k3s-version.txt`, verified at build time against K3s's own published `sha256sum-amd64.txt` |
+| K3s binary and K3s airgap images | `K3S_VERSION` in `release/pins.conf`, the single pins file, verified at build time against K3s's own published `sha256sum-amd64.txt` |
 | Timestamps | `release/SOURCE_DATE_EPOCH` (a fixed release epoch, not the build or commit time) |
 
 A first-party version tag is expected to be immutable once published. If a tag is re-pushed, the digest changes and so does the bundle hash. `release-record.json` records the resolved image references, so the difference is visible.
