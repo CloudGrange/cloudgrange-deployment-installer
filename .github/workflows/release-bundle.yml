@@ -1,12 +1,19 @@
 name: Release Bundle
-# Rebuilds the air-gap bundle Install-CloudGrange-Bundled.zip from ONE commit on main, reproducibly (AB#1586,
-# AB#1587, AB#8129). On demand only, on the self-hosted HCS Linux runner. No tag push trigger, no GitHub release:
-# the zip, its SHA-256 and release-record.json are uploaded as a workflow artifact and the SHA-256 is written to
-# the run summary. Rebuilding the same commit and version gives the same SHA-256 (docs/releases/reproducible-build.md).
+# Rebuilds the air-gap bundle Install-CloudGrange-K3s-Bundled.zip from ONE commit on main,
+# reproducibly (AB#1586, AB#1587, AB#8129, AB#9184, AB#9189). On demand only, on the self-hosted
+# HCS Linux runner. No tag push trigger, no GitHub release: the zip, its SHA-256 and
+# release-record-k3s.json are uploaded as a workflow artifact and the SHA-256 is written to the
+# run summary. Rebuilding the same commit and version gives the same SHA-256
+# (docs/releases/reproducible-build.md).
 #
-# Every input is pinned in the repo under release/: first-party images are stamped repo:<version>@sha256 from the
-# registry, vendor images are digest-pinned in compose, the Ubuntu cloud image and the .deb set are checked against
-# release/ubuntu-noble-cloudimg-amd64.sha256 and release/docker-debs/SHA256SUMS.
+# AB#9189: the Compose bundle (Install-CloudGrange-Bundled.zip, scripts/New-ReleaseBundle.sh) is
+# RETIRED and no longer built here. K3s/Helm is the only shipping engine, and the K3s bundle now
+# carries the pinned K3s binary, K3s's airgap image tarball and every image the rendered chart
+# references, so it has the offline parity the Compose bundle used to be kept around for.
+#
+# Inputs are pinned in the repo under release/: the K3s version in release/k3s-version.txt
+# (checked against K3s's own published sha256sum-amd64.txt at build time), first-party images by
+# the --version tag, vendor images by the digests/tags the chart itself renders.
 # The bundle is NOT signed: SHA256SUMS is an integrity check only, not an authenticity check.
 on:
   workflow_dispatch:
@@ -35,7 +42,7 @@ jobs:
         run: |
           [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "commit_sha must be a full 40-character SHA"; exit 1; }
           [[ "$CLOUDGRANGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "invalid version"; exit 1; }
-          for t in docker zip python3 pwsh curl sha256sum; do command -v "$t" >/dev/null || { echo "runner is missing $t"; exit 1; }; done
+          for t in docker zip python3 pwsh curl sha256sum helm tar; do command -v "$t" >/dev/null || { echo "runner is missing $t"; exit 1; }; done
           python3 -c 'import yaml' || { echo "runner is missing python3-yaml"; exit 1; }
 
       - uses: actions/checkout@v4
@@ -56,6 +63,9 @@ jobs:
         run: |
           test -z "${CLOUDGRANGE_TEST_ALLOW_SKIP:-}"
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_install_scripts.py'
+          # Kept after the Compose BUNDLE's retirement: this gate covers the compose/ engine
+          # content (container hardening, image pins, nginx config), which still ships. It is
+          # not a bundle-build test, so retiring the bundle is no reason to drop it.
           python3 -m unittest discover -v -s test/appliance -p 'test_compose_gates.py'
           python3 scripts/Test-SshTransportOptions.py .
           python3 -m unittest discover -v -s test/appliance -p 'test_ssh_transport.py'
@@ -69,50 +79,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch pinned inputs (verified against release/ by the build script)
+      - name: Build the K3s bundle (deterministic, offline-capable)
         run: |
-          IN="$RUNNER_TEMP/inputs" && rm -rf "$IN" && mkdir -p "$IN/debs"
-          base=https://cloud-images.ubuntu.com/noble/20260911
-          curl -fsSL "$base/noble-server-cloudimg-amd64.img" -o "$IN/noble-server-cloudimg-amd64.img"
-          # Exact versions from release/docker-debs/versions.txt; the apt repo key fingerprint is checked before use.
-          docker run --rm -v "$IN/debs:/out" -v "$RUNNER_TEMP/src/release/docker-debs:/pins:ro" \
-            ubuntu@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 bash -euo pipefail -c '
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update -qq && apt-get install -y -qq ca-certificates curl gnupg >/dev/null
-            install -m 0755 -d /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-            gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | grep -q "^fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:"
-            echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
-            apt-get update -qq
-            apt-get install -y -qq --download-only --no-install-recommends $(cat /pins/versions.txt) >/dev/null
-            cp /var/cache/apt/archives/*.deb /out/
-          '
-
-      - name: Build the bundle (deterministic)
-        run: |
-          bash "$RUNNER_TEMP/src/scripts/New-ReleaseBundle.sh" --source "$RUNNER_TEMP/src" --version "$CLOUDGRANGE_VERSION" \
-            --images registry --ubuntu-image "$RUNNER_TEMP/inputs/noble-server-cloudimg-amd64.img" \
-            --debs-dir "$RUNNER_TEMP/inputs/debs" --out "$RUNNER_TEMP/out" --source-commit "$COMMIT_SHA"
-
-      - name: Verify bundle integrity
-        run: pwsh -NoProfile -File "$RUNNER_TEMP/src/verify-bundle.ps1" -BundlePath "$RUNNER_TEMP/out/Install-CloudGrange-Bundled.zip"
+          bash "$RUNNER_TEMP/src/scripts/New-ReleaseBundleK3s.sh" --source "$RUNNER_TEMP/src" \
+            --version "$CLOUDGRANGE_VERSION" --images registry --out "$RUNNER_TEMP/out"
 
       - name: Record SHA-256
         run: |
           {
-            echo "### Install-CloudGrange-Bundled.zip"
+            echo "### Install-CloudGrange-K3s-Bundled.zip"
             echo "- commit: \`$COMMIT_SHA\`"
             echo "- version: \`$CLOUDGRANGE_VERSION\`"
-            echo "- sha256: \`$(cut -d' ' -f1 "$RUNNER_TEMP/out/Install-CloudGrange-Bundled.zip.sha256")\`"
+            echo "- sha256: \`$(cut -d' ' -f1 "$RUNNER_TEMP/out/Install-CloudGrange-K3s-Bundled.zip.sha256")\`"
           } >> "$GITHUB_STEP_SUMMARY"
-          cat "$RUNNER_TEMP/out/release-record.json"
+          cat "$RUNNER_TEMP/out/release-record-k3s.json"
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-bundle-${{ inputs.version }}
+          name: release-bundle-k3s-${{ inputs.version }}
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}/out/Install-CloudGrange-Bundled.zip
-            ${{ runner.temp }}/out/Install-CloudGrange-Bundled.zip.sha256
-            ${{ runner.temp }}/out/release-record.json
+            ${{ runner.temp }}/out/Install-CloudGrange-K3s-Bundled.zip
+            ${{ runner.temp }}/out/Install-CloudGrange-K3s-Bundled.zip.sha256
+            ${{ runner.temp }}/out/release-record-k3s.json

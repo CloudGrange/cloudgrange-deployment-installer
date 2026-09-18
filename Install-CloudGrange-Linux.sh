@@ -13,13 +13,15 @@
 # instead of Docker Compose — the canonical target per the platform restructure plan
 # (cloudgrange-internal/pmo/plans/2026-09-15-platform-restructure-helm-k8s.md), running
 # in parallel with Compose for this release cycle per that plan's own rollout order.
-# --engine compose (the default, unchanged) is not going away this release — do not
-# remove it until AB#9189 explicitly retires it after K3s/Helm has proven out.
+# AB#9189: k3s is the default engine and the Compose BUNDLE is retired — releases no
+# longer build Install-CloudGrange-Bundled.zip. --engine compose still works against a
+# checkout or an older bundle, for existing Compose installs that have not migrated; it
+# is simply no longer a shipped artifact.
 #
 # Usage (run as root, from the extracted install bundle — this script expects a
-# sibling ./compose directory for --engine compose, or a sibling ./charts and
-# ./scripts/Install-CloudGrangeK3s.sh for --engine k3s, exactly like the bundle
-# New-ReleaseBundle.sh produces):
+# sibling ./charts and ./scripts/Install-CloudGrangeK3s.sh for --engine k3s, exactly like
+# the bundle New-ReleaseBundleK3s.sh produces, or a sibling ./compose for the legacy
+# --engine compose path):
 #   sudo ./Install-CloudGrange-Linux.sh --hostname cloudgrange.example.com [--version 2609.0.0]
 #   sudo ./Install-CloudGrange-Linux.sh --hostname cloudgrange.example.com --engine k3s
 #
@@ -38,9 +40,9 @@ HOSTNAME_ARG=""
 VERSION="latest"
 COMPOSE_DIR="/opt/cloudgrange"
 # K3s/Helm is THE deployment model for this product — that was the whole point of the
-# platform restructure. Compose remains reachable with --engine compose until AB#9189
-# retires it, but it is no longer what a customer gets by default: leaving the default on
-# compose meant every real install silently ran the stack the restructure replaced.
+# platform restructure. AB#9189 retired the Compose bundle; --engine compose remains
+# reachable for existing installs that have not migrated, but it is not built or shipped
+# as a release artifact any more.
 ENGINE="k3s"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

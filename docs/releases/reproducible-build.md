@@ -4,8 +4,8 @@ A release has two customer artifacts built from one commit on `main`:
 
 | Artifact | Built by | Reproducible |
 |---|---|---|
-| `Install-CloudGrange-Bundled.zip` | `scripts/New-ReleaseBundle.sh`, run by the on-demand [Release Bundle](../../.github/workflows/release-bundle.yml) workflow on the `[self-hosted, linux, x64, hcs]` runner | Yes. The same commit and version rebuild to the same SHA-256 |
-| `cloudgrange-appliance.vhdx` | `Install-CloudGrange.ps1 -Mode Bundled` plus `Build-CloudGrangeAppliance.ps1` on a Hyper-V host, as a documented host step (the on-demand [Release Appliance](../../.github/workflows/release-appliance.yml) workflow or by hand) | No. Its SHA-256 is recorded, not reproduced |
+| `Install-CloudGrange-K3s-Bundled.zip` | `scripts/New-ReleaseBundleK3s.sh`, run by the on-demand [Release Bundle](../../.github/workflows/release-bundle.yml) workflow on the `[self-hosted, linux, x64, hcs]` runner | Yes. The same commit and version rebuild to the same SHA-256 |
+| `cloudgrange-appliance-k3s.vhdx` | `Install-CloudGrange.ps1 -Engine K3s` plus `Build-CloudGrangeApplianceK3s.ps1` on a Hyper-V host, as a documented host step | No. Its SHA-256 is recorded, not reproduced |
 
 Neither workflow runs on a tag push or a schedule, and neither creates a tag or a GitHub release. Both upload workflow artifacts and write the SHA-256 to the run summary. Builds are unsigned.
 
@@ -17,18 +17,17 @@ Every input is fixed by the source tree:
 
 | Input | Pinned by |
 |---|---|
-| Installer scripts, compose files, docs | The commit, exported with `git archive` (never a working copy) |
-| First-party images (api, portal, relay) | The version tag, resolved to a digest when the bundle is built and stamped into the bundle compose as `repo:<version>@sha256:<digest>` by `scripts/Set-FirstPartyImagePins.sh` |
-| Vendor images | `@sha256` digests in `compose/docker-compose.yml` and `compose/helper-images.txt`. `scripts/Test-ComposeImagePins.sh` fails the build on any image without a digest |
-| Ubuntu cloud image | `release/ubuntu-noble-cloudimg-amd64.sha256` (serial 20260911) |
-| Offline Docker CE and Hyper-V KVP packages | `release/docker-debs/SHA256SUMS` (the exact file set) and `release/docker-debs/versions.txt` |
+| Installer scripts, charts, docs | The commit, exported with `git archive` (never a working copy) |
+| First-party images (api, portal, relay) | The `--version` tag, stamped into the bundled chart values as `global.image.tag` |
+| Vendor images (postgres, keycloak, grafana, loki, promtail, prometheus, otel-collector, cert-manager, …) | The tags the chart itself renders. The image list is derived from `helm template`, never hand-maintained, so it cannot drift from the chart |
+| K3s binary and K3s airgap images | `release/k3s-version.txt`, verified at build time against K3s's own published `sha256sum-amd64.txt` |
 | Timestamps | `release/SOURCE_DATE_EPOCH` (a fixed release epoch, not the build or commit time) |
 
 A first-party version tag is expected to be immutable once published. If a tag is re-pushed, the digest changes and so does the bundle hash. `release-record.json` records the resolved image references, so the difference is visible.
 
 ### What makes the zip deterministic
 
-- `docker save` writes content-addressed blobs with fixed (epoch) timestamps and root ownership, but it lists the images in `manifest.json` and `index.json` in a random order that changes between runs. That alone made two otherwise identical builds differ. The build sorts both files and repacks `cloudgrange-images.tar` with GNU tar: sorted names, owner 0/0, fixed modes, and `SOURCE_DATE_EPOCH` mtimes.
+- `docker save` writes content-addressed blobs with fixed (epoch) timestamps and root ownership, but it lists the images in `manifest.json` and `index.json` in a random order that changes between runs. That alone made two otherwise identical builds differ. The build sorts the entry *list* inside both files (sorting keys alone is not enough — the list order is what varies) and repacks `airgap/cloudgrange-images-amd64.tar` with GNU tar: sorted names, owner 0/0, fixed modes, and `SOURCE_DATE_EPOCH` mtimes.
 - Every file and directory in the bundle gets mode `u=rwX,go=rX` and mtime `SOURCE_DATE_EPOCH`, so the umask, checkout time and filesystem don't matter.
 - `SHA256SUMS` and `images.txt` are sorted in the C locale.
 - The zip is written with `TZ=UTC`, in sorted order, and with `zip -X -D`: no extra attributes (uid/gid, extended timestamps) and no directory entries.
@@ -40,17 +39,22 @@ On the runner, dispatch Release Bundle with `commit_sha` (a full SHA on `main`) 
 
 ```bash
 git archive --format=tar <commit> | tar -x -C /tmp/src
-bash /tmp/src/scripts/New-ReleaseBundle.sh --source /tmp/src --version <version> --images registry \
-  --ubuntu-image noble-server-cloudimg-amd64.img --debs-dir debs/ --out /tmp/out --source-commit <commit>
-sha256sum /tmp/out/Install-CloudGrange-Bundled.zip   # compare with the recorded SHA-256
+bash /tmp/src/scripts/New-ReleaseBundleK3s.sh --source /tmp/src --version <version> \
+  --images registry --out /tmp/out
+sha256sum /tmp/out/Install-CloudGrange-K3s-Bundled.zip   # compare with the recorded SHA-256
 ```
 
-`--images local` builds from images already in the local image store (for example a locally built test version) and fails if an image isn't present with the pinned digest.
+`--images none` builds a smaller, network-install-only bundle with no offline image payload. `release-record-k3s.json` records which mode was used (`offlineCapable`).
+
+### Offline install
+
+With `--images registry` the bundle carries an `airgap/` directory: the pinned `k3s` binary, `k3s-airgap-images-amd64.tar`, K3s's install script, and `cloudgrange-images-amd64.tar` holding every image the rendered chart references. `scripts/Install-CloudGrangeK3s.sh` verifies each against its `.sha256`, installs K3s with `INSTALL_K3S_SKIP_DOWNLOAD=true`, and imports the service images into containerd, so a host with no internet access completes the install. The chart uses `imagePullPolicy: IfNotPresent` and no `:latest` vendor tags, so pods use the imported images instead of trying to pull.
 
 ### Known limits
 
 - The zip hash depends on the zip implementation (Info-ZIP `zip` 3.0 on Ubuntu). Another zip tool or version can compress differently. The build records the hash from the pinned runner image. It doesn't claim the same bytes from any tool.
-- The Ubuntu cloud image and packages are downloaded when the bundle is built, then checked against the pins. If Canonical or Docker withdraws a pinned file, the build fails. It never substitutes a newer file.
+- Images and the K3s assets are downloaded when the bundle is built, then checked against the pins. If an upstream withdraws a pinned file, the build fails. It never substitutes a newer file.
+- Vendor images are pinned by tag, not digest, because the chart references them by tag. A re-pushed vendor tag changes the bundle hash; `images.txt` inside the bundle records exactly what was packaged.
 
 ## Appliance VHDX
 

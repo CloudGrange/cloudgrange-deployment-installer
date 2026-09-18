@@ -25,9 +25,20 @@
 set -euo pipefail
 
 STATE_FILE="${CLOUDGRANGE_INSTALL_STATE:-/opt/cloudgrange/.install-state.json}"
-CHARTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/charts"
+BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CHARTS_DIR="$BUNDLE_ROOT/charts"
+AIRGAP_DIR="${CLOUDGRANGE_AIRGAP_DIR:-$BUNDLE_ROOT/airgap}"
 HOSTNAME_VALUE="${CLOUDGRANGE_HOSTNAME:-cloudgrange.local}"
 VERSION_VALUE="${CLOUDGRANGE_VERSION:-latest}"
+
+# AB#9184/AB#9189 — K3s is PINNED, never "whatever get.k3s.io serves today". This script
+# previously ran a bare `curl -sfL https://get.k3s.io | sh -`, which installs whatever the
+# current stable channel points at: two installs of the same CloudGrange release could get
+# different Kubernetes versions, and an air-gapped install was impossible by construction.
+# That directly contradicts this repo's own immutable-version rule — the same rule that
+# retired New-CloudGrangeBundle.ps1 (see its CG-BUNDLE-ERR-001 notice). This pin is the
+# version verified end to end on a real Hyper-V VM install (AB#9185).
+K3S_VERSION="${CLOUDGRANGE_K3S_VERSION:-v1.36.4+k3s1}"
 
 # AB#9183: --hostname/--version give this script the same CLI contract as
 # Install-CloudGrange-Linux.sh, which delegates to this script under --engine k3s.
@@ -128,13 +139,40 @@ do_prereqs_checked() {
     fi
 }
 
+# AB#9184 — import the bundle's CloudGrange/vendor service images into containerd.
+# Runs in BOTH the fresh-install and the k3s-already-present paths: an air-gapped host
+# with a pre-existing k3s still has no way to pull ghcr.io/cloudgrange images, so this
+# cannot live behind the fresh-install branch. Idempotent — re-importing an image that
+# is already present is a no-op, so a resumed install repeats it harmlessly.
+import_bundled_service_images() {
+    local tar="$AIRGAP_DIR/cloudgrange-images-amd64.tar"
+    [ -f "$tar" ] || return 0
+    log "importing bundled service images into containerd"
+    (cd "$AIRGAP_DIR" && sha256sum -c cloudgrange-images-amd64.tar.sha256)
+    k3s ctr images import "$tar"
+}
+
 do_k3s_installed() {
     if command -v k3s >/dev/null 2>&1; then
         log "k3s already present on this host"
+        import_bundled_service_images
         return 0
     fi
-    curl -sfL https://get.k3s.io | sh -
-    # get.k3s.io's own install script starts+enables the systemd unit; wait for the
+    # Air-gapped path: when the bundle carries the K3s binary + its airgap image tarball,
+    # stage them where K3s's own installer looks for them, so no network access is needed.
+    # K3s imports /var/lib/rancher/k3s/agent/images/*.tar into containerd on first start.
+    if [ -f "$AIRGAP_DIR/k3s" ] && [ -f "$AIRGAP_DIR/k3s-airgap-images-amd64.tar" ]; then
+        log "air-gapped k3s install from bundle ($K3S_VERSION)"
+        (cd "$AIRGAP_DIR" && sha256sum -c k3s.sha256 && sha256sum -c k3s-airgap-images-amd64.tar.sha256)
+        install -m 0755 "$AIRGAP_DIR/k3s" /usr/local/bin/k3s
+        install -d -m 0755 /var/lib/rancher/k3s/agent/images
+        install -m 0644 "$AIRGAP_DIR/k3s-airgap-images-amd64.tar" /var/lib/rancher/k3s/agent/images/
+        INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_VERSION="$K3S_VERSION" sh "$AIRGAP_DIR/k3s-install.sh"
+    else
+        log "online k3s install, pinned to $K3S_VERSION"
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -
+    fi
+    # K3s's own install script starts+enables the systemd unit; wait for the
     # node to actually report Ready rather than trusting "service started" alone.
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
     local deadline=$(($(date +%s) + 60))
@@ -142,6 +180,7 @@ do_k3s_installed() {
         [ "$(date +%s)" -lt "$deadline" ] || { echo "k3s node never reached Ready" >&2; exit 1; }
         sleep 2
     done
+    import_bundled_service_images
 }
 
 do_certmanager_installed() {
