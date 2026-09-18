@@ -43,6 +43,15 @@ spec:
       # (creating the updater Job). On AKS this SA also carries the workload-identity annotation,
       # so it replaces the separate workload-identity SA rather than competing with it.
       serviceAccountName: {{ $.Release.Name }}-api
+      {{- if and (gt (int .Values.replicaCount) 1) (eq .Values.persistence.accessMode "ReadWriteOnce") }}
+      # AB#9171: ReadWriteOnce volumes attach to one node, so every replica must run there (see
+      # persistence.accessMode in values.yaml). Set ReadWriteMany storage for node-level HA.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { app.kubernetes.io/name: cloudgrange-api } }
+              topologyKey: kubernetes.io/hostname
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         # AB#9187 real bug, found via a live AKS test: without fsGroup, the api-secrets
@@ -117,7 +126,14 @@ spec:
             - name: CLOUDGRANGE_UPDATES_DIR
               value: "/var/lib/cloudgrange/updates"
             - name: CLOUDGRANGE_UPDATE_CHANNEL_URL
-              value: {{ .Values.updateChannelUrl | quote }}
+              {{- $ch := .Values.updateChannel }}
+              {{- $name := $ch.name }}
+              {{- if not $name }}
+              {{- $v := include "cloudgrange.imageTag" . }}
+              {{- $name = ternary "preview" (ternary "rc" "stable" (contains "-rc." $v)) (contains "-preview." $v) }}
+              {{- end }}
+              {{- if not (has $name (list "preview" "rc" "stable")) }}{{ fail (printf "api.updateChannel.name must be preview, rc or stable, got %q" $name) }}{{ end }}
+              value: {{ $ch.url | default (printf "%s/channels/%s.json" (trimSuffix "/" $ch.baseUrl) $name) | quote }}
             {{- /* AB#9171 (plan 2026-09-18-foundation-platform-separation §4): the platform/update
             environment, rendered by the umbrella chart (templates/platform-env-configmap.yaml)
             because only it can see foundation.*, platformUpdater.* and its own kubeVersion.

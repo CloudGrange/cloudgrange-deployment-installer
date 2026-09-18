@@ -4,6 +4,8 @@ is self-signed, matching today's behavior exactly — customers upgrade to ACME/
 Encrypt or their own CA by pointing Values.certManager.issuer at a different ClusterIssuer,
 without any chart changes. */ -}}
 {{- if .Values.certManager.installOperator }}
+{{- $issuer := .Values.certManager.issuerRef | default dict }}
+{{- if not $issuer.name }}
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -11,6 +13,7 @@ metadata:
 spec:
   selfSigned: {}
 ---
+{{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -18,8 +21,14 @@ metadata:
 spec:
   secretName: {{ .Release.Name }}-tls
   issuerRef:
+    {{- if $issuer.name }}
+    # AB#9171: the customer's own issuer (certManager.issuerRef).
+    name: {{ $issuer.name | quote }}
+    kind: {{ $issuer.kind | default "ClusterIssuer" | quote }}
+    {{- else }}
     name: {{ .Release.Name }}-selfsigned
     kind: ClusterIssuer
+    {{- end }}
   dnsNames:
     - {{ .Values.global.hostname | quote }}
   duration: 2160h    # 90d

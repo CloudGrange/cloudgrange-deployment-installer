@@ -25,7 +25,7 @@ spec:
       # Prometheus and Loki are healthy (same fix as the Compose stack's depends_on chain).
       initContainers:
         - name: wait-for-datasources
-          image: busybox:1.36
+          image: {{ .Values.busybox.image }}
           command:
             - sh
             - -c

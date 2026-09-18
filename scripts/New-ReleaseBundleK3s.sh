@@ -96,7 +96,12 @@ if [ "$IMAGES" = registry ]; then
     # rather than trusting the download, then emit per-file .sha256 the installer verifies.
     (cd "$A" && grep -E ' (k3s|k3s-airgap-images-amd64\.tar)$' "$WORK/k3s-sha256sum.txt" | sed 's| .*/| |' | sha256sum -c -)
     (cd "$A" && sha256sum k3s > k3s.sha256 && sha256sum k3s-airgap-images-amd64.tar > k3s-airgap-images-amd64.tar.sha256)
-    curl -sfL https://get.k3s.io -o "$A/k3s-install.sh"
+    # AB#9171: the installer script at the pinned K3s tag, checksum-verified — get.k3s.io serves
+    # whatever install.sh is current, which made the bundle's installer script unpinned.
+    K3S_INSTALL_SH_SHA256=$(sed -n 's/^K3S_INSTALL_SH_SHA256=//p' "$PINS/pins.conf" | tr -d '[:space:]')
+    curl -sfL "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_VERSION//+/%2B}/install.sh" -o "$A/k3s-install.sh"
+    echo "$K3S_INSTALL_SH_SHA256  $A/k3s-install.sh" | sha256sum -c - >/dev/null \
+        || { echo "k3s install.sh does not match K3S_INSTALL_SH_SHA256 in release/pins.conf" >&2; exit 1; }
 
     # Derive the image list from the rendered chart -- never a hand-maintained list, which
     # would silently drift the moment a subchart changes an image. cert-manager is rendered
@@ -109,10 +114,21 @@ if [ "$IMAGES" = registry ]; then
         | sed -E 's/^\s+image:\s*"?//' | sort -u > "$WORK/images.txt"
     [ -s "$WORK/images.txt" ] || { echo "no images found in rendered chart" >&2; exit 1; }
     log "$(wc -l < "$WORK/images.txt") images to bundle"
+    # AB#9171: images pinned as repo:tag@sha256:… are pulled by that exact digest, then saved under
+    # their plain repo:tag name. `docker save` of a tag@digest reference writes the image with NO
+    # name, which an air-gapped containerd import cannot match to anything; saved by name, the
+    # imported image keeps the same content digest, so the pod's digest reference still resolves.
+    : > "$WORK/save.txt"
     while read -r img; do
         docker image inspect "$img" >/dev/null 2>&1 || docker pull -q "$img" >/dev/null
+        if [[ "$img" == *@sha256:* && "${img%@*}" == *:* ]]; then
+            docker tag "$img" "${img%@*}"
+            echo "${img%@*}" >> "$WORK/save.txt"
+        else
+            echo "$img" >> "$WORK/save.txt"
+        fi
     done < "$WORK/images.txt"
-    xargs -a "$WORK/images.txt" docker save -o "$WORK/images-raw.tar"
+    xargs -a "$WORK/save.txt" docker save -o "$WORK/images-raw.tar"
     # docker save lists images in map (random) order and stamps live mtimes; repack sorted
     # with fixed owners/modes/mtimes so the same inputs give a byte-identical bundle.
     mkdir -p "$WORK/img" && tar -xf "$WORK/images-raw.tar" -C "$WORK/img"

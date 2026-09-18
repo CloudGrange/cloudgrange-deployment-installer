@@ -8,6 +8,8 @@ from it: the support-bundle export, and eventually the audit/activity views) act
 data instead of being empty by construction. Hand-written to match this subchart's existing
 loki.yaml/prometheus.yaml/grafana.yaml pattern (plain Deployment/DaemonSet manifests, not a
 vendored chart) rather than adding a new third-party chart dependency for one small agent. */ -}}
+{{- /* AB#9171: off by default (BYO Kubernetes); see promtail.enabled in values.yaml. */ -}}
+{{- if .Values.promtail.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -98,18 +100,20 @@ spec:
       # Standard fix used by production log-shipping DaemonSets (Loki's own promtail chart
       # included): a privileged init container raises the node-wide limit before promtail
       # starts. Idempotent -- sysctl -w is safe to re-run on every pod (re)start.
+      {{- if .Values.promtail.raiseInotifyLimits }}
       initContainers:
         - name: raise-inotify-limits
-          image: busybox:1.36
+          image: {{ .Values.busybox.image }}
           command: ["sh", "-c", "sysctl -w fs.inotify.max_user_instances=8192"]
           securityContext:
             privileged: true
+      {{- end }}
       containers:
         - name: promtail
           # AB#9187-class bug, found via a real AKS install: 3.7.x was never published — the
           # highest real grafana/promtail tag is the 3.6.x line. Pinned to an exact, confirmed
           # (curl'd against Docker Hub) existing tag rather than `latest`.
-          image: grafana/promtail:3.6.3
+          image: {{ .Values.promtail.image }}
           args: ["-config.file=/etc/promtail/promtail.yaml"]
           volumeMounts:
             - { name: config, mountPath: /etc/promtail }
@@ -128,3 +132,4 @@ spec:
           hostPath: { path: /var/lib/docker/containers }
         - name: positions
           emptyDir: {}
+{{- end }}

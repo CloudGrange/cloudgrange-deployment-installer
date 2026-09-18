@@ -4,10 +4,9 @@
 # charts/cloudgrange/README.md's install sequence) and single-instance Redis for
 # AB#9174's cross-pod relay dispatch bus.
 #
-# AB#9191 (MetalLB, still untouched) is the one piece this profile still assumes is
-# handled separately: the relay's LoadBalancer Service needs MetalLB configured on
-# bare-metal K3s for multiple nodes to give it a real routable address — without it the
-# relay Service stays Pending, same as single-node today without MetalLB.
+# AB#9191: MetalLB is optional here. K3s's built-in ServiceLB answers the relay's LoadBalancer
+# Service on every node's IP; MetalLB (metallb.enabled + addressPool) gives it one dedicated,
+# floating address instead (AB#9171 corrected the earlier claim that it stays Pending).
 global:
   deployment:
     profile: multi-node
@@ -22,6 +21,8 @@ portal:
 
 relay:
   replicaCount: 1  # relay HA (multiple relays per site) is a separate, later design question
+  service:
+    type: LoadBalancer  # K3s ServiceLB answers on every node IP; AB#9171 made ClusterIP the BYO default
 
 redis:
   enabled: true
@@ -30,3 +31,11 @@ postgres:
   highAvailability:
     enabled: true
     instances: 3
+
+# AB#9171: managed foundation — same promtail settings as values-single-node.yaml.
+observability:
+  promtail:
+    enabled: true
+    raiseInotifyLimits: true
+foundation:
+  managed: true

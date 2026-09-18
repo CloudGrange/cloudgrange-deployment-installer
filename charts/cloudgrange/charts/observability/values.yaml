@@ -12,3 +12,22 @@ grafana:
 resources:
   requests: { cpu: 50m, memory: 128Mi }
   limits: { memory: 512Mi }
+# AB#9171 (plan A6/B5): every image in a shipped chart is pinned, and the ones that used to be
+# hardcoded in templates now live here, pinned by digest (release/pins.conf mirrors them and
+# test/lint-pins.sh fails on drift). The tag is kept for readability; the digest is what's pulled.
+busybox:
+  image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+promtail:
+  # AB#9171: Promtail is the one component that needs cluster-wide RBAC (a ClusterRole to read pod
+  # metadata), hostPath mounts of the node's log directories, and — for raiseInotifyLimits — a
+  # privileged init container that changes a node sysctl. None of that is acceptable by default on
+  # a cluster CloudGrange does not own, and it fails the Pod Security "restricted" (and "baseline")
+  # profile. So the DEFAULT IS OFF (bring-your-own Kubernetes). The managed-foundation profiles
+  # (values-single-node.yaml, values-multi-node.yaml) turn it on; values-azure.yaml turns it on
+  # without the privileged sysctl step. With it off, container logs are not shipped to Loki and
+  # the support-bundle log export is empty — use the cluster's own logging instead.
+  enabled: false
+  image: grafana/promtail:3.6.3@sha256:130b6dd63277d99ce87560c0266c0c30d07bc15ba0a8a590d42215465d4f5363
+  # Privileged init container: sysctl fs.inotify.max_user_instances=8192 on the node. Needed on
+  # stock Ubuntu nodes (default 128), which promtail exhausts. Only on nodes we own.
+  raiseInotifyLimits: false

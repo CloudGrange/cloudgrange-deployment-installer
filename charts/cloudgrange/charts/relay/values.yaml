@@ -14,9 +14,18 @@ persistence:
     size: 128Mi
 displayName: site-relay
 clusterId: default
-# AB#9173/gap #4: MetalLB (bare-metal) or the cloud LB (AKS) assigns this a real routable
-# address so agents on the customer LAN/AD subnet can reach it — see AB#9191 (MetalLB) and
-# values-azure.yaml. Single-node on-prem installs without MetalLB set up yet can leave this
-# Pending; the relay is still reachable from inside the cluster (portal/API talk to it there).
+# How Hyper-V agents on the customer LAN reach the relay (plain HTTP on this port today; the agent
+# protocol has no TLS yet, see charts/cloudgrange/README.md). The portal and API reach it in-cluster
+# either way.
+#   ClusterIP (the DEFAULT, for bring-your-own Kubernetes): nothing is exposed outside the cluster
+#     and nothing sits Pending on a cluster with no load-balancer implementation. Expose it the way
+#     that cluster exposes TCP services — type LoadBalancer where the cluster has one, or NodePort.
+#     An HTTP Ingress also works: the LAN agent API is plain HTTP under /lan/v1/.
+#   LoadBalancer: the managed-foundation profiles (values-single-node.yaml,
+#     values-multi-node.yaml) and AKS (values-azure.yaml). On K3s the built-in ServiceLB (klipper-lb)
+#     answers it with the node IP(s) straight away; MetalLB (AB#9191) is only needed for a
+#     dedicated, floating relay address. AKS provisions an Azure load balancer.
+#   NodePort: set nodePort to pin the port (30000-32767); empty lets Kubernetes choose.
 service:
-  type: LoadBalancer
+  type: ClusterIP
+  nodePort: ""

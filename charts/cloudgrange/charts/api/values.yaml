@@ -10,6 +10,16 @@ resources:
   requests: { cpu: 100m, memory: 256Mi }
   limits: { memory: 768Mi }
 persistence:
+  # AB#9171: access mode of the api-secrets (Data Protection keys) and api-updates volumes.
+  # ReadWriteOnce attaches the volume to ONE node. With replicaCount > 1 (values-multi-node.yaml)
+  # the replicas are therefore scheduled onto the same node (required pod affinity in
+  # templates/deployment.yaml) — otherwise the second replica fails with a Multi-Attach error on
+  # another node. That keeps process-level redundancy but not node-level HA. For node-level HA set
+  # ReadWriteMany with a StorageClass that supports it (NFS, Azure Files, Longhorn RWX); the affinity
+  # is then dropped.
+  accessMode: ReadWriteOnce
+  # Empty = the cluster's default StorageClass.
+  storageClass: ""
   secrets:
     size: 256Mi
   updates:
@@ -43,7 +53,18 @@ updater:
   hostPath:
     enabled: false
     path: /var/lib/cloudgrange/updates
-updateChannelUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json"
+# AB#9171: which release channel this install checks for Platform updates. It used to be a
+# hardcoded URL to the PREVIEW channel, so every install — including a stable one — was offered
+# preview builds.
+updateChannel:
+  # preview | rc | stable. Empty = follow the installed version: …-preview.N -> preview,
+  # …-rc.N -> rc, anything else -> stable (release-versioning.md).
+  name: ""
+  # The public download host that serves channels/<name>.json (scripts/release/Publish-Release.sh,
+  # R2_PUBLIC_BASE).
+  baseUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev"
+  # Full URL override, e.g. an internal mirror for an air-gapped site. Wins over name/baseUrl.
+  url: ""
 redis:
   # AB#9190: the connection string is built in the template from the release name, not
   # read from a value — see deployment.yaml. This flag alone gates whether it's set.

@@ -24,6 +24,8 @@ portal:
   replicaCount: 1
 relay:
   replicaCount: 1
+  service:
+    type: LoadBalancer  # K3s ServiceLB answers with the node IP; AB#9171 made ClusterIP the BYO default
 postgres:
   highAvailability:
     enabled: false
@@ -32,3 +34,10 @@ postgres:
 # shows the Foundation card only when this is true.
 foundation:
   managed: true
+# AB#9171: the managed-foundation profiles own their nodes, so they run promtail (container logs to
+# Loki) including the privileged step that raises the node's inotify limit, and expose the relay
+# with K3s's ServiceLB. The chart defaults (bring-your-own Kubernetes) leave all three off.
+observability:
+  promtail:
+    enabled: true
+    raiseInotifyLimits: true
