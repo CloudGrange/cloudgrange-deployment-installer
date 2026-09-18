@@ -139,26 +139,40 @@ echo "[generalize-k3s] removing SSH host keys and authorized keys"
 rm -f /etc/ssh/ssh_host_*
 find /root /home -name authorized_keys -type f -delete 2>/dev/null || true
 
-# AB#9186: sshd/PAM log the full accepted public key on login (/var/log/auth.log,
-# journald). Real, disclosed, NOT fully resolved gap: 4 real appliance builds tried
-# progressively stronger fixes here (plain truncate -> reordering the wipe after the
-# free-space-overwrite pass -> this shred-based version, stopping logging services first
-# and directly overwriting file content instead of just truncating) -- each got measurably
-# closer in isolated testing, but the live secret scan still finds a small number of
-# installer-SSH-public-key occurrences in the exported VHDX (trending with how much SSH
-# activity happens against the VM before generalize runs, which points at a residual
-# location outside /var/log this hasn't found yet, not a broken wipe mechanism here).
-# Kept as a real improvement (it demonstrably reduces exposure and directly overwrites
-# actual file content, unlike the original bare truncate) even though it does not yet make
-# the automated build's secret scan pass outright. Needs further investigation before the
-# VHDX appliance ships for real; not a blocker for any other install path (Online/Bundled/
-# native Linux/AKS), and the leaked value is a PUBLIC key (no access risk on its own).
+# AB#9186: sshd/PAM record the accepted public key on login (/var/log/auth.log, journald).
+# Four earlier appliance builds attacked this from the wrong end -- plain truncate, then
+# reordering the wipe, then shredding file content -- each reduced the count without ever
+# eliminating it, because the write that mattered happened after every one of those steps.
+# See the journald-restart-on-shutdown explanation immediately below, which is the actual
+# mechanism. The leaked value is a PUBLIC key (no access risk on its own), but it is
+# install-time material that must not ship in a release image, so the build's secret scan
+# rightly refuses the VHDX over it.
 echo "[generalize-k3s] stopping logging services and shredding logs/journal"
+# AB#9186 ROOT CAUSE of the residue described above: stopping journald and deleting
+# /var/log/journal is not enough, because systemd STARTS JOURNALD AGAIN during the shutdown
+# transaction that this script's own `systemctl poweroff` triggers. On that restart journald
+# flushes its runtime (/run) journal -- which still holds the sshd "Accepted publickey" records
+# from every SSH session used to drive this script -- into a freshly recreated /var/log/journal.
+# That write lands AFTER the free-space wipe below, which is exactly why the residue survived a
+# wipe that was itself working correctly, and why the occurrence count tracked how much SSH
+# activity the VM had seen. Forensics on the exported disk confirmed the shape: every hit sat in
+# blocks the filesystem considers free, none in any live file, none in the ext4 journal, and the
+# image has no swap.
+#
+# Fix: make journald volatile for the rest of this VM's life. A journald restart during shutdown
+# then has nowhere on disk to flush to. cloudgrange-firstboot-k3s.sh removes this drop-in on the
+# customer's first boot, so the shipped appliance still gets normal persistent logging.
+install -d -m 0755 /etc/systemd/journald.conf.d
+printf '[Journal]\nStorage=volatile\n' > /etc/systemd/journald.conf.d/00-cloudgrange-generalize.conf
 systemctl stop rsyslog.service syslog.socket 2>/dev/null || true
 systemctl stop systemd-journald.socket systemd-journald-dev-log.socket systemd-journald-audit.socket systemd-journald.service 2>/dev/null || true
 find /var/log /run/log/journal -type f -exec shred -zun 3 {} \; 2>/dev/null || true
 find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -delete
 rm -rf /var/log/journal/* /run/log/journal/*
+# Deny a recreated journal directory too: with Storage=volatile journald will not use it, but if
+# anything else recreates it, an immutable empty directory makes a late persistent write fail
+# loudly rather than silently leaving secrets in freed blocks again.
+rm -rf /var/log/journal
 
 echo "[generalize-k3s] removing per-machine keys (fwupd client key)"
 systemctl stop fwupd-refresh.timer fwupd-refresh.service fwupd.service 2>/dev/null || true
@@ -178,6 +192,12 @@ if [ -e /var/lib/fwupd/pki/secret.key ]; then
     exit 1
 fi
 
+# Remove the staged upload BEFORE the wipe, not after: anything deleted after the free-space
+# pass leaves its old contents in blocks the pass already went over.
+echo "[generalize-k3s] removing the staged upload directory"
+STAGE_PARENT="$(dirname "$STAGE_DIR")"
+rm -rf "$STAGE_DIR"
+
 echo "[generalize-k3s] overwriting free space (deleted secrets must not survive in freed blocks)"
 sync
 dd if=/dev/zero of=/var/cloudgrange-zerofill bs=16M status=none 2>/dev/null || true
@@ -186,7 +206,13 @@ rm -f /var/cloudgrange-zerofill
 sync
 echo "[generalize-k3s] discarding free blocks"
 fstrim -av || true
+sync
 
+# This must be the LAST thing the script does. Nothing may write to disk between the wipe above
+# and poweroff -- that ordering is the whole point, and getting it wrong is what left the SSH
+# residue in freed blocks for four builds running. journald is volatile from here on (above), so
+# the shutdown transaction's own logging cannot land on disk either.
 echo "[generalize-k3s] complete; powering off in 5 seconds"
-rm -rf "$STAGE_DIR"
+cd /
+rmdir "$STAGE_PARENT" 2>/dev/null || true
 systemd-run --on-active=5 /bin/systemctl poweroff >/dev/null

@@ -240,5 +240,58 @@ class UninstallRetentionTests(unittest.TestCase):
                             "purging must be documented as an explicit, separate operator step")
 
 
+class GeneralizeSecretWipeOrderingTests(unittest.TestCase):
+    """AB#9186 — the SSH-key residue was an ORDERING bug, so the ordering is what must be pinned.
+
+    Four appliance builds shipped a working free-space wipe that still leaked, because writes
+    happened after it: journald is restarted by the shutdown transaction and flushes its runtime
+    journal (holding sshd's accepted-publickey records) to disk. These tests fail if the ordering
+    or the journald guard regresses.
+    """
+
+    def setUp(self):
+        with open(os.path.join(REPO, "appliance", "cloudgrange-generalize-k3s.sh"), encoding="utf-8") as f:
+            self.lines = f.read().splitlines()
+        self.text = "\n".join(self.lines)
+
+    def _line_of(self, needle):
+        for i, line in enumerate(self.lines):
+            if needle in line and not line.strip().startswith("#"):
+                return i
+        self.fail("generalize script no longer contains %r" % needle)
+
+    def test_journald_is_made_volatile_before_the_free_space_wipe(self):
+        volatile = self._line_of("Storage=volatile")
+        wipe = self._line_of("of=/var/cloudgrange-zerofill")
+        self.assertLess(volatile, wipe,
+                        "journald must be volatile before the wipe, or the shutdown-time journal "
+                        "flush writes install-time secrets into blocks the wipe already passed")
+
+    def test_the_staged_upload_is_removed_before_the_wipe_not_after(self):
+        remove = self._line_of('rm -rf "$STAGE_DIR"')
+        wipe = self._line_of("of=/var/cloudgrange-zerofill")
+        self.assertLess(remove, wipe,
+                        "deleting the staged upload after the wipe leaves its contents in freed "
+                        "blocks the wipe already went over")
+
+    def test_nothing_writes_to_disk_between_the_wipe_and_poweroff(self):
+        fstrim = self._line_of("fstrim -av")
+        poweroff = self._line_of("systemctl poweroff")
+        between = [l.strip() for l in self.lines[fstrim + 1:poweroff]
+                   if l.strip() and not l.strip().startswith("#")]
+        # Only these are allowed after the wipe: they touch no file content.
+        allowed = ("sync", "echo ", "cd /", "rmdir ")
+        offenders = [l for l in between if not l.startswith(allowed)]
+        self.assertEqual(offenders, [],
+                         "these run after the free-space wipe and may write to disk:\n" + "\n".join(offenders))
+
+    def test_firstboot_restores_persistent_logging(self):
+        with open(os.path.join(REPO, "appliance", "cloudgrange-firstboot-k3s.sh"), encoding="utf-8") as f:
+            firstboot = f.read()
+        self.assertIn("00-cloudgrange-generalize.conf", firstboot,
+                      "generalize makes journald volatile; firstboot must undo it or the shipped "
+                      "appliance silently loses logs across reboots")
+
+
 if __name__ == "__main__":
     unittest.main()

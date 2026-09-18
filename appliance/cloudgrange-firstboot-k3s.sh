@@ -28,6 +28,16 @@ else
 fi
 echo "[firstboot-k3s] hostname: $NEW_HOSTNAME"
 
+echo "[firstboot-k3s] restoring persistent logging"
+# AB#9186: cloudgrange-generalize-k3s.sh forces journald to Storage=volatile so that the
+# journald restart inside the shutdown transaction cannot flush install-time SSH records back
+# onto disk after the free-space wipe. That is a build-time measure only -- the customer's
+# appliance should keep its logs across reboots, so drop the override on first boot.
+rm -f /etc/systemd/journald.conf.d/00-cloudgrange-generalize.conf
+rmdir /etc/systemd/journald.conf.d 2>/dev/null || true
+install -d -m 2755 -g systemd-journal /var/log/journal 2>/dev/null || install -d -m 0755 /var/log/journal
+systemctl restart systemd-journald.service 2>/dev/null || true
+
 echo "[firstboot-k3s] SSH host keys and machine-id"
 ssh-keygen -A
 if [ ! -s /etc/machine-id ] || grep -q uninitialized /etc/machine-id; then
