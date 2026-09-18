@@ -22,11 +22,11 @@ spec:
       # AB#9187: same class of bug as loki/api — prom/prometheus runs as uid/gid 65534
       # (nobody), and Azure Disk CSI volumes come up root-owned. Found via a real AKS test:
       # "open /prometheus/queries.active: permission denied", CrashLoopBackOff.
-      securityContext:
-        fsGroup: 65534
+      securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 65534) | nindent 8 }}
       containers:
         - name: prometheus
           image: {{ .Values.prometheus.image }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus

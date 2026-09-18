@@ -1,17 +1,80 @@
 replicaCount: 1
 image:
   repository: cloudgrange-api
+  # AB#9171: optional sha256:<64 hex>. When set, the image renders as repo:tag@digest (pinned by
+  # digest). The release tooling and the in-cluster Platform updater set it. The tag comes from
+  # global.image.tag, or from this chart's appVersion when that is empty. Never latest.
+  digest: ""
 port: 8080
 resources:
   requests: { cpu: 100m, memory: 256Mi }
   limits: { memory: 768Mi }
 persistence:
+  # AB#9171: access mode of the api-secrets (Data Protection keys) and api-updates volumes.
+  # ReadWriteOnce attaches the volume to ONE node. With replicaCount > 1 (values-multi-node.yaml)
+  # the replicas are therefore scheduled onto the same node (required pod affinity in
+  # templates/deployment.yaml) — otherwise the second replica fails with a Multi-Attach error on
+  # another node. That keeps process-level redundancy but not node-level HA. For node-level HA set
+  # ReadWriteMany with a StorageClass that supports it (NFS, Azure Files, Longhorn RWX); the affinity
+  # is then dropped.
+  accessMode: ReadWriteOnce
+  # Empty = the cluster's default StorageClass.
+  storageClass: ""
   secrets:
     size: 256Mi
   updates:
     size: 8Gi
-updateChannelUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json"
+moduleRuntime:
+  # AB#9197 — lets the API create a Deployment + Service per installed module, which is what makes
+  # an installed module actually run and be routable. Turning this off leaves modules installable
+  # but inert (they record state and never start), which is the behaviour that shipped before.
+  # Grants the API's ServiceAccount namespace-scoped rights over deployments/services — see
+  # templates/module-runtime-rbac.yaml for why the scope is drawn where it is.
+  enabled: true
+
+updater:
+  # AB#9189 — how the API hands an uploaded release bundle to the host's updater service.
+  #
+  # hostPath is the correct backing for this on an appliance/on-prem node, and a PVC is NOT:
+  # cloudgrange-updater-k3s.service runs on the HOST, outside the cluster, so it cannot read a
+  # PersistentVolume. Backed by a PVC the API's request files went somewhere the updater could
+  # never see them, and an update could never start. The directory is created with the right
+  # ownership by the appliance's generalize step (and by Install-CloudGrangeK3s.sh).
+  #
+  # DEFAULT IS false, because the default case is "somebody ran this chart on a Kubernetes cluster
+  # they already had". Only CloudGrange's own installers put cloudgrange-updater-k3s.service on the
+  # node — the VHDX appliance, the Windows VM script and the Linux script — and those all install
+  # with values-single-node.yaml, which turns this on explicitly.
+  #
+  # Defaulting it on would hand a bring-your-own-Kubernetes install a hostPath mount with no
+  # service behind it: in-app updates that silently do nothing. On a cluster with a restrictive
+  # PodSecurity policy the hostPath can stop the API pod scheduling at all. Those installs update
+  # with `helm upgrade`, exactly like AKS.
+  hostPath:
+    enabled: false
+    path: /var/lib/cloudgrange/updates
+  # AB#9171 (C2, kind v1.34): an 8Gi PVC was created on every BYO install where nothing reads it —
+  # the host updater (the only reader) exists only on managed foundations, which use hostPath, and
+  # it could never read a PVC anyway. Platform updates now run in-cluster. Default: an emptyDir.
+  pvc:
+    enabled: false
+# AB#9171: which release channel this install checks for Platform updates. It used to be a
+# hardcoded URL to the PREVIEW channel, so every install — including a stable one — was offered
+# preview builds.
+updateChannel:
+  # preview | rc | stable. Empty = follow the installed version: …-preview.N -> preview,
+  # …-rc.N -> rc, anything else -> stable (release-versioning.md).
+  name: ""
+  # The public download host that serves channels/<name>.json (scripts/release/Publish-Release.sh,
+  # R2_PUBLIC_BASE).
+  baseUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev"
+  # Full URL override, e.g. an internal mirror for an air-gapped site. Wins over name/baseUrl.
+  url: ""
 redis:
   # AB#9190: the connection string is built in the template from the release name, not
   # read from a value — see deployment.yaml. This flag alone gates whether it's set.
   enabled: false
+# AB#9171: init container that waits for Postgres before the API starts. Same pinned busybox as
+# the observability chart (release/pins.conf CHART_BUSYBOX_IMAGE; test/lint-pins.sh checks both).
+waitForPostgres:
+  image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662

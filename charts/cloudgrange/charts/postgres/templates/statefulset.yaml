@@ -34,11 +34,20 @@ spec:
       # the pod's own one-time readiness signal is stuck, and recreating the pod without
       # the ephemeral restore-wait injection mounts the (already-restored) volume normally
       # and comes up Ready within seconds. Documented in README.md's DR runbook.
+      # AB#9171: run as the image's own postgres user (uid/gid 70 in the alpine image) instead of
+      # starting as root and dropping privileges — what Pod Security "restricted" requires. The data
+      # directory is already owned by 70 on existing installs (the entrypoint chowned it); fsGroup 70
+      # lets a fresh volume's root accept the PGDATA subdirectory.
       securityContext:
-        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: postgres
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           ports:
             - containerPort: 5432
           env:

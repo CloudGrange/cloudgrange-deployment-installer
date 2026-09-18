@@ -20,11 +20,11 @@ spec:
       # which happened to already be writable). Found via a real AKS test: "mkdir /loki/rules:
       # permission denied", CrashLoopBackOff. fsGroup makes kubelet chown the volume to this
       # GID at mount time on any provisioner — harmless, a no-op where already correctly owned.
-      securityContext:
-        fsGroup: 10001
+      securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 10001) | nindent 8 }}
       containers:
         - name: loki
           image: {{ .Values.loki.image }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           args: ["-config.file=/etc/loki/local-config.yaml"]
           volumeMounts:
             - { name: config, mountPath: /etc/loki }

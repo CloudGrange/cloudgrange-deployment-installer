@@ -1,0 +1,30 @@
+[Unit]
+# AB#9171 (E3) — the FOUNDATION updater of a managed K3s foundation (VHDX appliance, Windows script,
+# Linux script). It applies OS package updates, the pinned K3s version and CloudGrange host files,
+# and ONLY when an administrator asks from Platform -> Updates -> Foundation. It never applies the
+# Platform (that runs in the cluster) and never acts on its own: there is deliberately no .timer for
+# this unit, and unattended-upgrades is disabled by the installers.
+Description=CloudGrange Foundation updater (managed K3s foundation; admin-initiated only)
+After=k3s.service
+Wants=k3s.service
+
+[Service]
+Type=simple
+# Root by design: it runs apt and the K3s installer and reads/writes root-only state. The privilege
+# boundary is the shared updates directory, not this unit — the non-root API pod can only drop
+# request files and uploads there, and everything read from it is treated as untrusted.
+User=root
+ExecStart=/usr/bin/python3 /usr/local/sbin/cloudgrange-updater-k3s.py
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+Environment=CLOUDGRANGE_UPDATES_SHARED=/var/lib/cloudgrange/updates
+Environment=CLOUDGRANGE_UPDATER_STATE=/var/lib/cloudgrange-updater
+Environment=CLOUDGRANGE_FOUNDATION_PUBKEY=/etc/cloudgrange/foundation-signing-key.pub
+Environment=CLOUDGRANGE_FOUNDATION_VERSION_FILE=/etc/cloudgrange/foundation-version
+Restart=always
+RestartSec=5
+UMask=0022
+
+# The updater must survive a failed K3s upgrade in order to roll it back, so it is deliberately not
+# tied to the health of the cluster it manages (Wants=, not Requires=).
+[Install]
+WantedBy=multi-user.target

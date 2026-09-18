@@ -1,0 +1,62 @@
+# AB#9171 (plan 2026-09-18-foundation-platform-separation §4) — REFERENCE Job for the API (E2).
+# Not applied by the chart. It shows the Job the API should create for
+#   POST /api/v1/platform/updates/platform/apply {version}   -> args: apply --version ... --manifest-url ...
+#   POST /api/v1/platform/updates/platform/rollback          -> args: rollback
+# Every <…> value comes from the API's environment (templates/platform-env-configmap.yaml):
+#   image              CLOUDGRANGE_PLATFORM_UPDATER_IMAGE
+#   serviceAccountName CLOUDGRANGE_PLATFORM_UPDATER_SA
+#   namespace          CLOUDGRANGE_NAMESPACE
+#   backups claimName  CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC   (additive to §4; without this mount
+#                      an apply still restores on failure, but a later `rollback` has no backup)
+#   CLOUDGRANGE_HEALTH_TIMEOUT  CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT (additive)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: cloudgrange-platform-update-
+  namespace: <CLOUDGRANGE_NAMESPACE>
+  labels:
+    app.kubernetes.io/part-of: cloudgrange
+    app.kubernetes.io/component: platform-updater
+spec:
+  # Never retry: a retry would re-run an update that already rolled itself back.
+  backoffLimit: 0
+  # Longer than the worst case (backup + upgrade + health gate + rollback).
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: cloudgrange
+        app.kubernetes.io/component: platform-updater
+    spec:
+      restartPolicy: Never
+      serviceAccountName: <CLOUDGRANGE_PLATFORM_UPDATER_SA>
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: platform-updater
+          image: <CLOUDGRANGE_PLATFORM_UPDATER_IMAGE>
+          imagePullPolicy: IfNotPresent
+          args: ["apply", "--version", "<version>", "--manifest-url", "<channel manifest URL for version>"]
+          env:
+            - { name: CLOUDGRANGE_RELEASE_NAME, value: "<CLOUDGRANGE_RELEASE_NAME>" }
+            - { name: CLOUDGRANGE_NAMESPACE, value: "<CLOUDGRANGE_NAMESPACE>" }
+            - { name: CLOUDGRANGE_HEALTH_TIMEOUT, value: "<CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT>" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - { name: backups, mountPath: /backups }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: backups
+          persistentVolumeClaim: { claimName: <CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC> }
+        - name: tmp
+          emptyDir: {}

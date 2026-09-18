@@ -11,7 +11,12 @@ global:
   hostname: cloudgrange.local
   image:
     registry: ghcr.io/cloudgrange
-    tag: latest
+    # AB#9171 (plan B2): the first-party image tag (api, portal, relay). EMPTY means "this chart's
+    # appVersion", which the release tooling stamps to the platform version (YYMM.MINOR.PATCH, see
+    # templates/_helpers.tpl). Never `latest`: a moving tag made two installs of the same release
+    # run different code, turned `helm upgrade` into a no-op under IfNotPresent, and caused
+    # ImagePullBackOff three times. test/lint-pins.sh fails the build if `latest` comes back.
+    tag: ""
     pullPolicy: IfNotPresent
   # This chart installs on ANY conformant Kubernetes, not just the bundled K3s. The
   # ingress controller differs per distribution, so never hardcode it:
@@ -24,9 +29,17 @@ global:
   # the resource. annotations are controller-specific and are applied verbatim, so nothing
   # Traefik-only is ever imposed on a cluster running something else.
   ingress:
-    className: traefik
-    annotations:
-      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # AB#9171 (C2, kind v1.34): the DEFAULT is "" — no ingressClassName, so the cluster's default
+    # IngressClass claims the Ingress — and no controller-specific annotations. K3s's traefik class
+    # and its websecure annotation are set by values-single-node.yaml / values-multi-node.yaml.
+    className: ""
+    annotations: {}
+    tls:
+      # AB#9171: the TLS Secret the Ingress serves. Empty = "<release>-tls", the Secret the chart's
+      # cert-manager Certificate writes (certManager.installOperator). Set it to use a Secret you
+      # manage yourself (bring-your-own TLS) or one another controller creates; the value is
+      # templated, so "keyvault-{{ .Release.Name }}" works (values-azure.yaml).
+      secretName: ""
   # AKS overlay (values-azure.yaml) flips this — swaps local-path/Postgres-in-cluster for
   # Azure Disk/Files CSI + managed identity, per AB#9187.
   cloud: false
@@ -37,6 +50,8 @@ global:
     keyVaultName: ""
     tenantId: ""
     managedIdentityClientId: ""
+    tlsCertificateUri: ""
+    keyVaultSecrets: false
 
 # AB#9178: the 6 bootstrap secrets (postgres-password, keycloak-admin-user/-password,
 # keycloak-api-client-secret, grafana-admin-password, relay-enrollment-token,
@@ -48,14 +63,29 @@ certManager:
   # why). This flag only gates whether OUR OWN ClusterIssuer/Certificate templates render;
   # turn it off if cert-manager isn't installed at all (no TLS) or if a customer manages
   # issuers/certificates themselves.
-  installOperator: true
+  # AB#9171 (C2, kind v1.34): DEFAULT false. On a cluster without cert-manager, rendering a
+  # Certificate/ClusterIssuer failed the whole install ("no matches for kind Certificate"). The
+  # managed-foundation profiles install cert-manager first and turn this on. On BYO, turn it on when
+  # cert-manager is present (ideally with issuerRef), or bring your own TLS Secret
+  # (global.ingress.tls.secretName). Even when true, the chart renders the Certificate only if the
+  # cluster actually serves cert-manager.io/v1.
+  installOperator: false
+  # AB#9171: use an issuer the customer already runs (ACME/Let's Encrypt, an internal CA) instead
+  # of the chart's self-signed ClusterIssuer. Set name (and kind: ClusterIssuer or Issuer); the chart
+  # then creates only the Certificate, against that issuer. Empty name = the self-signed default.
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
 
 secretsBootstrap:
   # Bitnami's free-tier images no longer publish version-pinned tags (digest-only as of
   # late 2025). rancher/kubectl was the next try but ships kubectl only — no /bin/sh, so
   # the bootstrap script's shell script can't even start ("no such file or directory").
   # alpine/k8s bundles kubectl on top of a real Alpine shell + coreutils (head/base64/tr).
-  image: docker.io/alpine/k8s:1.31.1
+  #
+  # AB#9171: bumped from 1.31.1 — kubectl 1.31 against the 1.33–1.37 clusters this chart supports is
+  # outside kubectl's ±1 minor skew — and pinned by digest (mirrored in release/pins.conf).
+  image: docker.io/alpine/k8s:1.36.4@sha256:358ddfc2d6ff3f00dd461dbd79aaa6d6738709f225b8da0945bb63bd4dbc304e
 
 # AB#9191: MetalLB itself is a SEPARATE Helm release (charts/vendor/metallb-0.16.1.tgz),
 # installed before this chart, same reasoning as cert-manager/CloudNativePG (README.md) —
@@ -65,8 +95,9 @@ secretsBootstrap:
 # (single-node or multi-node); AKS has its own native LoadBalancer, so values-azure.yaml
 # leaves this off. addressPool is a customer-specific LAN range with no safe generic
 # default — leaving it empty and metallb.enabled=false is correct until the customer's
-# network team supplies a real free range; the relay's LoadBalancer Service simply stays
-# Pending until then (documented in charts/relay/values.yaml).
+# network team supplies a real free range. AB#9171: the relay does NOT sit Pending without it on
+# K3s — K3s's built-in ServiceLB answers the relay's LoadBalancer Service with the node IP. MetalLB
+# only adds a dedicated, floating address (see charts/relay/values.yaml).
 metallb:
   enabled: false
   addressPool: []
@@ -88,3 +119,44 @@ backup:
   enabled: false
   schedule: "0 2 * * *"
   ttl: "720h"
+
+# AB#9171 (plan 2026-09-18-foundation-platform-separation §3/§4) — who owns the Foundation (the host
+# OS, Kubernetes and host services under this chart).
+#   false (default): a customer foundation — BYO Kubernetes or AKS. CloudGrange never touches the
+#                    cluster or the host; the portal shows no Foundation update card.
+#   true:            a managed foundation — CloudGrange provisioned it (VHDX appliance, Windows or
+#                    Linux script, Azure VM). values-single-node.yaml sets this; the host updater
+#                    service (cloudgrange-updater-k3s.service) offers admin-initiated Foundation updates.
+# Passed to the API as CLOUDGRANGE_FOUNDATION_MANAGED (templates/platform-env-configmap.yaml).
+foundation:
+  managed: false
+
+# AB#9171 (plan §3/§4, E1) — the in-cluster Platform updater. A Platform update (this chart's
+# version, its images, the schema) runs as a Kubernetes Job the API creates on an admin's request,
+# so it works the same on every delivery path: K3s, BYO Kubernetes and AKS. The Job verifies the
+# signed release manifest, backs up the database, runs `helm upgrade --reuse-values` to the pinned
+# versions, runs the health gate, and on failure runs `helm rollback` and restores the database.
+# Image source: images/platform-updater/. The chart renders only its ServiceAccount, RBAC, backup
+# volume and status ConfigMap; the API creates the Job (images/platform-updater/job.example.yaml).
+platformUpdater:
+  enabled: true
+  image:
+    repository: ghcr.io/cloudgrange/cloudgrange-platform-updater
+    # Empty means this chart's appVersion — the release version. Never `latest`.
+    tag: ""
+    # Optional sha256:<64 hex>; set, the image is pinned by digest.
+    digest: ""
+  # pg_dump backups taken before each update and used to restore on failure or rollback. The Job
+  # mounts this PVC at /backups. Kept on `helm uninstall` (helm.sh/resource-policy: keep).
+  backup:
+    size: 10Gi
+    # Empty uses the cluster's default StorageClass.
+    storageClassName: ""
+  signing:
+    # PEM cosign public key the updater verifies the release manifest against. EMPTY MEANS EVERY
+    # PLATFORM UPDATE IS REFUSED (fail closed): the committed cloudgrange-signing-key.pub is still a
+    # placeholder, so there is no real key to default to yet. Rendered into ConfigMap
+    # <release>-platform-updater-signing, which the updater reads itself.
+    publicKey: ""
+  # How long the health gate waits for every Deployment/StatefulSet of the release to roll out.
+  healthTimeout: 10m

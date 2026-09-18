@@ -18,25 +18,30 @@ spec:
       # reaches customer Hyper-V hosts via plain outbound HTTPS:5986 egress, independent of
       # this Deployment's network mode.
       #
-      # No pod-level runAsNonRoot here (unlike api/portal): the relay's Dockerfile sets
-      # `USER relay`, a symbolic (non-numeric) username — proven via a real k3d install
-      # that Kubernetes refuses to start ANY pod with runAsNonRoot: true unless the image's
-      # user is numeric, since it can't statically verify a symbolic user is non-root
-      # without pulling /etc/passwd ("cannot verify user is non-root"). The container is
-      # still genuinely non-root (trusts the image's own USER relay); pinning a numeric
-      # UID in cloudgrange-runtime-relay's Dockerfile (matching portal's fix pattern) is a
-      # small follow-up to get full Restricted Pod Security Standard compliance here too.
-      #
       # AB#9187: same class of bug as loki/prometheus/api — the relay's Dockerfile runs as
       # uid/gid 999, and Azure Disk CSI volumes (the identity PVC, which also holds the
       # relay's local job-queue SQLite db) come up root-owned. Found via a real AKS test:
       # the relay crashed constructing AgentJobQueue, CrashLoopBackOff.
+      #
+      # AB#9171: runAsNonRoot needs a NUMERIC user — Kubernetes cannot verify the image's symbolic
+      # `USER relay` without its /etc/passwd ("cannot verify user is non-root"). The image's relay
+      # user is uid/gid 999 (`docker run --entrypoint id ghcr.io/cloudgrange/cloudgrange-relay`
+      # prints uid=999(relay) gid=999(relay)), so pinning 999 here changes nothing at runtime and
+      # lets the pod meet the Pod Security "restricted" profile together with the container
+      # securityContext below.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
         fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: relay
-          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          image: {{ include "cloudgrange.firstPartyImage" . | quote }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           ports:
             - containerPort: {{ .Values.port }}
           env:

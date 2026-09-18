@@ -1,0 +1,129 @@
+#!/bin/bash
+# Copyright 2026 CloudGrange Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# AB#9171 (plan 2026-09-18-foundation-platform-separation B1/B2, E1) — cut the Platform release
+# artifacts the in-cluster Platform updater consumes:
+#   1. tag the first-party images (api, portal, relay, platform-updater) with the platform version
+#      YYMM.MINOR.PATCH and resolve each one's registry digest;
+#   2. stamp the version into a copy of the chart (Set-ChartVersion.sh) and `helm package` it;
+#   3. write the release manifest (cg-release-manifest-v1, release-versioning.md) that pins the
+#      chart by SHA-256 and every first-party image by digest;
+#   4. sign the manifest with cosign when a key is given (manifest.json.sig).
+#
+# DRY RUN BY DEFAULT: without --push nothing is tagged or pushed; the commands are printed and the
+# manifest is written with "dryRun": true, which the Platform updater refuses to apply.
+#
+# Usage:
+#   New-PlatformRelease.sh --version 2609.0.0-preview.3 --out DIR --chart-base-url URL
+#       [--source-tag TAG]    tag the images were built/pushed under (default: the version itself)
+#       [--registry REG]      default ghcr.io/cloudgrange
+#       [--channel C]         preview|rc|stable (default preview)
+#       [--upgrade-from R]    SemVer range of installed versions this release can update (default ">=2609.0.0-0")
+#       [--cosign-key PATH]   sign manifest.json -> manifest.json.sig (cosign sign-blob --key)
+#       [--push]              really tag and push; needs `docker login ghcr.io` with write access
+# --chart-base-url is where the chart .tgz will be published, e.g. $R2_PUBLIC_BASE/releases/<version>
+set -euo pipefail
+
+VERSION='' OUT='' CHART_BASE_URL='' SOURCE_TAG='' REGISTRY='ghcr.io/cloudgrange' CHANNEL='preview'
+UPGRADE_FROM='>=2609.0.0-0' COSIGN_KEY='' PUSH=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) VERSION=$2; shift 2 ;;
+        --out) OUT=$2; shift 2 ;;
+        --chart-base-url) CHART_BASE_URL=$2; shift 2 ;;
+        --source-tag) SOURCE_TAG=$2; shift 2 ;;
+        --registry) REGISTRY=$2; shift 2 ;;
+        --channel) CHANNEL=$2; shift 2 ;;
+        --upgrade-from) UPGRADE_FROM=$2; shift 2 ;;
+        --cosign-key) COSIGN_KEY=$2; shift 2 ;;
+        --push) PUSH=1; shift ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+[[ "$VERSION" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-(preview|rc)\.[0-9]+)?$ ]] \
+    || { echo "--version must be YYMM.MINOR.PATCH[-preview.N|-rc.N]" >&2; exit 2; }
+[ -n "$OUT" ] && [ -n "$CHART_BASE_URL" ] || { echo "--out and --chart-base-url are required" >&2; exit 2; }
+case "$CHANNEL" in preview|rc|stable) ;; *) echo "--channel must be preview, rc or stable" >&2; exit 2 ;; esac
+SOURCE_TAG=${SOURCE_TAG:-$VERSION}
+[ "$SOURCE_TAG" != latest ] || { echo "--source-tag latest is refused: tag from an immutable build tag" >&2; exit 2; }
+REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+log() { echo "[platform-release] $*"; }
+run() { if [ "$PUSH" = 1 ]; then "$@"; else echo "DRY-RUN: $*"; fi; }
+
+# component name in the manifest -> image repository
+declare -A IMAGES=(
+    [cloudgrange-api]=cloudgrange-api
+    [cloudgrange-portal]=cloudgrange-portal
+    [cloudgrange-relay]=cloudgrange-relay
+    [cloudgrange-platform-updater]=cloudgrange-platform-updater
+)
+: > "$WORK/components.tsv"
+for comp in $(printf '%s\n' "${!IMAGES[@]}" | sort); do
+    repo="$REGISTRY/${IMAGES[$comp]}"
+    src="$repo:$SOURCE_TAG" dst="$repo:$VERSION"
+    if [ "$SOURCE_TAG" != "$VERSION" ]; then
+        run docker pull -q "$src"
+        run docker tag "$src" "$dst"
+    fi
+    run docker push -q "$dst"
+    digest=''
+    if [ "$PUSH" = 1 ]; then
+        digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$dst" | grep -m1 "^$repo@sha256:" | cut -d@ -f2)
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no registry digest for $dst after push" >&2; exit 1; }
+    else
+        digest="sha256:$(printf '0%.0s' $(seq 64))"
+    fi
+    printf '%s\t%s\t%s\n' "$comp" "$dst@$digest" "$digest" >> "$WORK/components.tsv"
+    log "$comp -> $dst@$digest"
+done
+
+log "chart: stamp $VERSION and package"
+cp -r "$REPO_ROOT/charts/cloudgrange" "$WORK/cloudgrange"
+rm -f "$WORK/cloudgrange/Chart.lock"
+bash "$REPO_ROOT/scripts/release/Set-ChartVersion.sh" "$WORK/cloudgrange" "$VERSION" >/dev/null
+helm package "$WORK/cloudgrange" -d "$OUT" >/dev/null
+CHART_TGZ="$OUT/cloudgrange-$VERSION.tgz"
+[ -f "$CHART_TGZ" ] || { echo "helm package did not produce $CHART_TGZ" >&2; exit 1; }
+chart_sha=$(sha256sum "$CHART_TGZ" | cut -d' ' -f1)
+kube_range=$(sed -n 's/^kubeVersion:[[:space:]]*//p' "$WORK/cloudgrange/Chart.yaml" | tr -d '"')
+[ -n "$kube_range" ] || { echo "chart has no kubeVersion" >&2; exit 1; }
+
+python3 - "$OUT/manifest.json" "$VERSION" "$CHANNEL" "$UPGRADE_FROM" "$kube_range" \
+    "${CHART_BASE_URL%/}/cloudgrange-$VERSION.tgz" "$chart_sha" "$PUSH" "$WORK/components.tsv" <<'PY'
+import json, sys, time
+out, version, channel, upgrade_from, kube_range, chart_url, chart_sha, push, tsv = sys.argv[1:10]
+components = {}
+for line in open(tsv):
+    name, image, digest = line.rstrip("\n").split("\t")
+    components[name] = {"version": version, "image": image, "digest": digest}
+manifest = {
+    "schema": "cg-release-manifest-v1",
+    "platform": version,
+    "channel": channel,
+    "released": time.strftime("%Y-%m-%d", time.gmtime()),
+    "upgradeFrom": upgrade_from,
+    "kubeVersion": kube_range,
+    "chart": {"url": chart_url, "sha256": chart_sha},
+    "components": components,
+}
+if push != "1":
+    manifest["dryRun"] = True
+json.dump(manifest, open(out, "w"), indent=2, sort_keys=True)
+open(out, "a").write("\n")
+PY
+
+if [ -n "$COSIGN_KEY" ]; then
+    log "signing manifest.json with $COSIGN_KEY"
+    # Legacy detached signature (manifest.json.sig), key-pair only, no transparency log: the same
+    # form the appliance uses, and verifiable offline. cosign v3 needs the explicit opt-outs.
+    cosign sign-blob --yes --key "$COSIGN_KEY" --new-bundle-format=false --use-signing-config=false \
+        --tlog-upload=false --output-signature "$OUT/manifest.json.sig" "$OUT/manifest.json" >/dev/null
+else
+    log "WARNING: no --cosign-key; manifest.json is UNSIGNED and the Platform updater will refuse it"
+fi
+log "wrote $OUT/manifest.json and $CHART_TGZ (sha256 $chart_sha)$([ "$PUSH" = 1 ] || echo ' — DRY RUN, nothing pushed')"

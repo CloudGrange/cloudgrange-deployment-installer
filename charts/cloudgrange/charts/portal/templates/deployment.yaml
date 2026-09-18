@@ -23,10 +23,12 @@ spec:
         runAsNonRoot: true
         runAsUser: 101
         fsGroup: 101
+        seccompProfile: { type: RuntimeDefault }  # AB#9171: Pod Security "restricted"
       containers:
         - name: portal
-          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          image: {{ include "cloudgrange.firstPartyImage" . | quote }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           ports:
             - containerPort: {{ .Values.port }}
           env:

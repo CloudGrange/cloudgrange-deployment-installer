@@ -57,11 +57,19 @@ param commonTags object
 @description('Auto-injected tags (ManagedBy, DeployedAt). Applied to every resource.')
 param autoTags object
 
-// AB#2380 — default changed from 'latest' to 'main'. 'latest' is an unstable tag that
-// floats unpredictably; 'main' always resolves to the most recent main-branch image.
-// CI must always pass an explicit SHA or semver tag for stage/prod deploys.
+// AB#9188 — default is 'latest' because it is the only tag that actually exists.
+//
+// This defaulted to 'main' on the reasoning that 'latest' floats unpredictably and 'main' always
+// resolves to the most recent main-branch image. The reasoning is sound; the tag is not — nothing
+// has ever published 'main' to ghcr.io/cloudgrange/*. Verified against the registry:
+// cloudgrange-api:main and :v1.0.0 both return 404, :latest returns 200. So every ACA deployment
+// that took the default failed to pull, which is why ACA has been quietly broken.
+//
+// The guidance still stands and is the reason this is only a default: CI should pass an explicit
+// SHA or semver tag for stage/prod. Until versioned tags are actually published, a default that
+// resolves beats a default that is merely well-intentioned.
 @description('Default container image tag. Used for API and portal unless overridden.')
-param imageTag string = 'main'
+param imageTag string = 'latest'
 
 @description('Optional override for the API image tag. Empty = use imageTag.')
 param apiImageTag string = ''

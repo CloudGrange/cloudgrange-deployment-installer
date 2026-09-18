@@ -7,11 +7,15 @@
 # ghcr.io/cloudgrange/*:latest, ...) into an offline bundle. That breaks the rule that every package
 # version is exact and immutable, so it now refuses to run.
 #
-# Bundles are built reproducibly by scripts/New-ReleaseBundle.sh, run on demand from one main commit by
-# .github/workflows/release-bundle.yml (docs/releases/reproducible-build.md). The build:
-#   - stamps first-party images as <repo>:<version>@sha256:<digest> (scripts/Set-FirstPartyImagePins.sh),
-#   - fails unless EVERY image is digest-pinned (scripts/Test-ComposeImagePins.sh),
-#   - adds the Docker CE packages and Ubuntu cloud image, verified against the pins in release/.
+# Bundles are built reproducibly by scripts/New-ReleaseBundleK3s.sh, run on demand from one main commit
+# by .github/workflows/release-bundle.yml (docs/releases/reproducible-build.md). The build:
+#   - stamps the first-party image tag into the chart's values,
+#   - packages the pinned K3s binary + K3s airgap images (release/pins.conf K3S_VERSION, checked against
+#     K3s's own published sha256sum-amd64.txt),
+#   - packages every image the rendered chart actually references, for offline install.
+#
+# AB#9189: the Compose bundle and scripts/New-ReleaseBundle.sh are retired — K3s/Helm is the only
+# shipping engine and the K3s bundle now has full offline parity.
 
 [CmdletBinding()]
 param(
@@ -21,4 +25,4 @@ param(
 )
 
 Write-Error ("CG-BUNDLE-ERR-001: New-CloudGrangeBundle.ps1 is retired because it produced bundles with unpinned images. " +
-    "Build bundles with scripts/New-ReleaseBundle.sh or the on-demand .github/workflows/release-bundle.yml (see docs/releases/reproducible-build.md).") -ErrorAction Stop
+    "Build bundles with scripts/New-ReleaseBundleK3s.sh or the on-demand .github/workflows/release-bundle.yml (see docs/releases/reproducible-build.md).") -ErrorAction Stop

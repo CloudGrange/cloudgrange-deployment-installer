@@ -182,6 +182,11 @@ class OperatorAccessTests(unittest.TestCase):
         except FileNotFoundError:
             return False
 
+    def stored_realm_password(self):
+        """Where the engine keeps the temporary realm admin password (Compose: .env)."""
+        with open(self.j("compose", ".env")) as f:
+            return [l.split("=", 1)[1].strip() for l in f if l.startswith("CLOUDGRANGE_REALM_ADMIN_PASSWORD=")][0]
+
     def make_token_old(self, seconds=100000):
         old = time.time() - seconds
         os.utime(self.j("token"), (old, old))
@@ -283,9 +288,9 @@ class OperatorAccessTests(unittest.TestCase):
     def test_rotates_the_temporary_password_after_the_setup_window_and_logs_kcadm_out(self):
         self.start(CLOUDGRANGE_SETUP_WINDOW_SECONDS="2", CLOUDGRANGE_MAX_ROTATIONS="5")
         self.wait_for(lambda: os.path.exists(self.j("reset-password.json")), what="password reset")
-        with open(self.j("compose", ".env")) as f:
-            env_pw = [l.split("=", 1)[1].strip() for l in f if l.startswith("CLOUDGRANGE_REALM_ADMIN_PASSWORD=")][0]
-        self.assertNotEqual(env_pw, self.password)
+        # The store happens right after the reset; wait for it rather than race it.
+        self.wait_for(lambda: self.stored_realm_password() != self.password, what="rotated password stored")
+        env_pw = self.stored_realm_password()
         self.wait_for(lambda: read_pool(self.pool).get("CloudGrange.RealmAdminPassword") == env_pw.encode(), what="rotated password in KVP")
         self.wait_for(lambda: "keycloak rm -f /tmp/kcadm-cloudgrange.config" in self.calls(), what="kcadm session removed")
         calls = self.calls()
@@ -301,8 +306,7 @@ class OperatorAccessTests(unittest.TestCase):
         # The banner is rewritten right after the KVP items; wait for it instead of racing it.
         self.wait_for(lambda: os.path.exists(self.issue) and not self.banner_contains(self.password), what="banner without the temporary password")
         self.assertFalse(os.path.exists(self.j("reset-password.json")), "rotation reset an operator-chosen password")
-        with open(self.j("compose", ".env")) as f:
-            self.assertIn("CLOUDGRANGE_REALM_ADMIN_PASSWORD=%s" % self.password, f.read())
+        self.assertEqual(self.stored_realm_password(), self.password)
         self.assert_cleared(self.finish())
 
     def test_rotation_with_the_user_missing_withdraws_the_password_without_a_reset(self):
@@ -326,6 +330,99 @@ class OperatorAccessTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("stale", r.stdout)
         self.assert_withdrawn("setup-stale")
+
+
+# AB#9171 — the K3s appliance runs the same script with CLOUDGRANGE_ENGINE=k3s. This stub translates the
+# `k3s kubectl` calls it makes into the Compose stub above, so every Compose test also runs against the K3s
+# adapter unchanged; secrets live in fake Secret keys instead of .env.
+K3S_STUB = textwrap.dedent(r"""
+    #!/bin/bash
+    F="$FAKE_ROOT"; D="$(dirname "$0")/docker"
+    echo "k3s $*" >> "$F/k3s.calls"
+    [ "$1" = kubectl ] || { echo "unexpected k3s call: $*" >&2; exit 99; }
+    shift
+    [ "$1" = -n ] && [ "$2" = default ] && shift 2
+    case "$1" in
+      exec)
+        shift; [ "$1" = -i ] && shift
+        target=$1; shift; [ "$1" = -- ] && shift
+        case "$target" in
+          deploy/cloudgrange-api) exec "$D" compose exec -T cloudgrange-api "$@" ;;
+          deploy/cloudgrange-keycloak)
+            if [ "$1" = /bin/bash ] && [ "$2" = -c ]; then
+              IFS= read -r pw; printf '%s' "$pw" > "$F/kc_password_seen"; shift 4
+              exec "$D" compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@"
+            fi
+            exec "$D" compose exec -T keycloak "$@" ;;
+        esac ;;
+      rollout)
+        [ "$2" = restart ] && exec "$D" compose restart cloudgrange-api
+        exit 0 ;;
+      get)
+        key=$(printf '%s' "$*" | sed -n 's/.*{\.data\.\([^}]*\)}.*/\1/p')
+        [ -f "$F/secrets/$key" ] && base64 -w0 < "$F/secrets/$key"
+        exit 0 ;;
+      patch)
+        file=$(printf '%s' "$*" | sed -n 's/.*--patch-file \([^ ]*\).*/\1/p')
+        python3 -c 'import base64, json, sys
+    d = json.load(open(sys.argv[1]))["data"]
+    for k, v in d.items():
+        open(sys.argv[2] + "/" + k, "w").write(base64.b64decode(v).decode())' "$file" "$F/secrets"
+        exit 0 ;;
+    esac
+    echo "unexpected k3s call: $*" >&2
+    exit 99
+""").lstrip()
+
+
+class OperatorAccessK3sTests(OperatorAccessTests):
+    """Every OperatorAccessTests case again, through the K3s adapter (CLOUDGRANGE_ENGINE=k3s)."""
+
+    def setUp(self):
+        super().setUp()
+        with open(self.j("compose", ".env")) as f:
+            env = dict(l.strip().split("=", 1) for l in f if "=" in l)
+        os.remove(self.j("compose", ".env"))  # the K3s engine must not depend on a Compose .env
+        os.makedirs(self.j("secrets"))
+        for key, value in (("keycloak-admin-user", env["KEYCLOAK_ADMIN_USER"]),
+                           ("keycloak-admin-password", env["KEYCLOAK_ADMIN_PASSWORD"]),
+                           ("realm-admin-password", env["CLOUDGRANGE_REALM_ADMIN_PASSWORD"])):
+            with open(self.j("secrets", key), "w") as f:
+                f.write(value)
+        self.keycloak_admin_password = env["KEYCLOAK_ADMIN_PASSWORD"]
+        with open(self.j("state", "appliance-address"), "w") as f:
+            f.write("10.0.0.5\n")
+        with open(self.j("bin", "k3s"), "w") as f:
+            f.write(K3S_STUB)
+        os.chmod(self.j("bin", "k3s"), 0o755)
+        self.env["CLOUDGRANGE_ENGINE"] = "k3s"
+
+    def stored_realm_password(self):
+        with open(self.j("secrets", "realm-admin-password")) as f:
+            return f.read()
+
+    def test_k3s_rotation_keeps_the_secret_in_step_and_never_puts_passwords_on_a_command_line(self):
+        self.start(CLOUDGRANGE_SETUP_WINDOW_SECONDS="2", CLOUDGRANGE_MAX_ROTATIONS="5")
+        self.wait_for(lambda: os.path.exists(self.j("reset-password.json")), what="password reset")
+        self.wait_for(lambda: self.stored_realm_password() != self.password, what="Secret updated")
+        with open(self.j("kc_password_seen")) as f:
+            self.assertEqual(f.read(), self.keycloak_admin_password, "kcadm did not get the master password over stdin")
+        with open(self.j("k3s.calls")) as f:
+            argv = f.read()
+        for secret in (self.keycloak_admin_password, self.password, self.stored_realm_password()):
+            self.assertNotIn(secret, argv, "a password reached a command line")
+        self.assert_cleared(self.finish())
+
+    def test_the_k3s_unit_selects_the_k3s_engine_and_does_not_require_the_compose_stack(self):
+        with open(os.path.join(REPO, "appliance", "cloudgrange-operator-access-k3s.service")) as f:
+            unit = f.read()
+        self.assertIn("Environment=CLOUDGRANGE_ENGINE=k3s", unit)
+        directives = "\n".join(l for l in unit.splitlines() if not l.lstrip().startswith("#"))
+        self.assertNotIn("cloudgrange.service", directives.replace("cloudgrange-firstboot-k3s.service", ""))
+        with open(os.path.join(REPO, "appliance", "cloudgrange-generalize-k3s.sh")) as f:
+            generalize = f.read()
+        self.assertIn("cloudgrange-operator-access-k3s.service", generalize)
+        self.assertNotIn("$STAGE_DIR/cloudgrange-operator-access.service", generalize)
 
 
 if __name__ == "__main__":

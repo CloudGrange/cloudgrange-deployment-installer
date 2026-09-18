@@ -28,6 +28,16 @@ else
 fi
 echo "[firstboot-k3s] hostname: $NEW_HOSTNAME"
 
+echo "[firstboot-k3s] restoring persistent logging"
+# AB#9186: cloudgrange-generalize-k3s.sh forces journald to Storage=volatile so that the
+# journald restart inside the shutdown transaction cannot flush install-time SSH records back
+# onto disk after the free-space wipe. That is a build-time measure only -- the customer's
+# appliance should keep its logs across reboots, so drop the override on first boot.
+rm -f /etc/systemd/journald.conf.d/00-cloudgrange-generalize.conf
+rmdir /etc/systemd/journald.conf.d 2>/dev/null || true
+install -d -m 2755 -g systemd-journal /var/log/journal 2>/dev/null || install -d -m 0755 /var/log/journal
+systemctl restart systemd-journald.service 2>/dev/null || true
+
 echo "[firstboot-k3s] SSH host keys and machine-id"
 ssh-keygen -A
 if [ ! -s /etc/machine-id ] || grep -q uninitialized /etc/machine-id; then
@@ -64,8 +74,18 @@ if [ -z "$IP" ]; then
 fi
 echo "[firstboot-k3s] address: $IP"
 
+# AB#9171: the address the operator-access service (cloudgrange-operator-access-k3s.service)
+# publishes over KVP and on the console as the setup URL.
+echo "$IP" > /etc/cloudgrange/appliance-address
+
 echo "[firstboot-k3s] running the K3s/Helm installer (fresh state -> fresh secrets via AB#9178)"
-VERSION=$(cat /etc/cloudgrange/appliance-version 2>/dev/null || echo latest)
+# The pinned release baked into this image (cloudgrange-generalize-k3s.sh refuses to build without one).
+# Its images are already in K3s's agent/images directory, so this needs no registry.
+VERSION=$(cat /etc/cloudgrange/appliance-version 2>/dev/null || true)
+if [ -z "$VERSION" ] || [ "$VERSION" = latest ]; then
+    echo "[firstboot-k3s] ERROR: /etc/cloudgrange/appliance-version does not name a pinned release; leaving the marker"
+    exit 1
+fi
 rm -f /opt/cloudgrange/.install-state.json
 bash "$INSTALLER_DIR/scripts/Install-CloudGrangeK3s.sh" --hostname "$IP" --version "$VERSION"
 

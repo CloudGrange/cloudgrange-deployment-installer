@@ -1,0 +1,6 @@
+# AB#9171 — known unpinned spots in the delivery-path wrappers that test/lint-pins.sh tolerates.
+# Format: <file>|<exact substring of the offending line>|<reason / owner>
+# Each entry must still match, or the gate fails: fix the wrapper, then delete its line here.
+# Empty on purpose: the thin-wrapper change (plan 2026-09-18-foundation-platform-separation C1)
+# removed every `latest` default, the get.k3s.io script and the Ubuntu noble/current download.
+# Adding an entry here is a regression that needs a reason and an owner.

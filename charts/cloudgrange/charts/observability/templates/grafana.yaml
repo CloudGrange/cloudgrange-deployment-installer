@@ -19,13 +19,13 @@ spec:
       # uid/gid 472, and Azure Disk CSI volumes come up root-owned. Fixed proactively here
       # (found the same pattern break loki/prometheus/relay on a real AKS test) rather than
       # waiting for grafana to hit the identical crash once its own PVC gets exercised.
-      securityContext:
-        fsGroup: 472
+      securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 472 "gid" 0 "fsGroup" 472) | nindent 8 }}
       # AB#8129: first-start "database is locked" (SQLite) — Grafana starts only after
       # Prometheus and Loki are healthy (same fix as the Compose stack's depends_on chain).
       initContainers:
         - name: wait-for-datasources
-          image: busybox:1.36
+          image: {{ .Values.busybox.image }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           command:
             - sh
             - -c
@@ -35,6 +35,7 @@ spec:
       containers:
         - name: grafana
           image: {{ .Values.grafana.image }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           ports:
             - { containerPort: 3000 }
           env:

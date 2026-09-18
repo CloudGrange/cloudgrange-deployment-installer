@@ -28,7 +28,8 @@ param(
     # Compose VM of that name. Found via real Hyper-V testing before it ever shipped.
     [string]$VmName           = 'cloudgrange-docker',
     [switch]$SkipHostPortForward,
-    [switch]$NoDefaultGateway
+    [switch]$NoDefaultGateway,
+    [switch]$InstallPinnedQemu
 )
 
 function New-CloudGrangeVm {
@@ -54,7 +55,9 @@ function New-CloudGrangeVm {
         [switch]$SkipHostPortForward,
         # AB#8129: air-gapped VM. No default route or public DNS in cloud-init network-config;
         # the VM reaches only its own /24 (the host). Used for Bundled installs with no egress.
-        [switch]$NoDefaultGateway
+        [switch]$NoDefaultGateway,
+        # AB#9171 (C3): only consulted on the qemu-img fallback path (no pre-converted base VHDX).
+        [switch]$InstallPinnedQemu
     )
 
     $ErrorActionPreference = 'Stop'
@@ -153,64 +156,19 @@ function New-CloudGrangeVm {
     $vhdxDir = Split-Path $VhdxPath -Parent
     New-Item -ItemType Directory -Path $vhdxDir -Force | Out-Null
 
-    # Obtain Ubuntu 24.04 cloud image
-    $cloudImagePath = Join-Path $vhdxDir 'ubuntu-24.04-cloudimg.img'
-    if ($Mode -eq 'Online') {
-        if (-not (Test-Path $cloudImagePath)) {
-            Write-Host "  Downloading Ubuntu 24.04 cloud image..."
-            $imgUrl = 'https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img'
-            Invoke-WebRequest -Uri $imgUrl -OutFile $cloudImagePath -UseBasicParsing
-        }
-        # Verify SHA-256 against Canonical's checksum file
-        $checksumUrl = 'https://cloud-images.ubuntu.com/noble/current/SHA256SUMS'
-        $checksums = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content
-        $expectedHash = ($checksums -split "`n" | Where-Object { $_ -match 'noble-server-cloudimg-amd64.img' }) -split '\s+' | Select-Object -First 1
-        $actualHash = (Get-FileHash -Path $cloudImagePath -Algorithm SHA256).Hash
-        if ($expectedHash -and $expectedHash -ine $actualHash) {
-            Write-Error "Ubuntu cloud image checksum mismatch. Re-download aborted."
-        }
-    } elseif ($Mode -eq 'Bundled') {
-        $cloudImagePath = $BundledImagePath
-        if (-not (Test-Path $cloudImagePath)) {
-            Write-Error "Bundled image not found at: $cloudImagePath"
-        }
-    }
-
-    # Convert .img to VHDX using qemu-img (required for Hyper-V Gen2).
-    # The installer auto-installs QEMU in Install-CloudGrangePrereqs; this is a
-    # belt-and-braces check in case the function is called directly.
-    $qemuImgCmd = Get-Command qemu-img -ErrorAction SilentlyContinue
-    $qemuImg = if ($qemuImgCmd) { $qemuImgCmd.Source } else { $null }
-    if (-not $qemuImg) {
-        . "$PSScriptRoot\CloudGrange-Prereqs.ps1"
-        Initialize-CloudGrangePrereqs
-        $qemuImgCmd = Get-Command qemu-img -ErrorAction SilentlyContinue
-        $qemuImg = if ($qemuImgCmd) { $qemuImgCmd.Source } else { $null }
-        if (-not $qemuImg) {
-            Write-Error "qemu-img is still missing after bootstrap. Aborting."
-        }
-    }
-    # Resize the source qcow2 image to 30 GB BEFORE converting to VHDX.
-    # qemu-img resize supports qcow2/raw but not VHDX subformat=dynamic.
-    # Resize-VHD and diskpart both fail post-conversion in SYSTEM context.
-    # The resulting VHDX will have a 30 GB virtual disk; cloud-init growpart
-    # expands the root partition to fill it on first boot.
-    # The source .img is safe to resize in place — it is re-downloaded when
-    # the Canonical SHA256SUM check fails, so the mutated size is transient.
-    Write-Host "  Expanding source image to 30 GB before conversion..."
-    & $qemuImg resize $cloudImagePath 30G
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "qemu-img resize of source image failed (exit $LASTEXITCODE)."
-    }
-
-    Write-Host "  Converting cloud image to VHDX..."
-    & $qemuImg convert -f qcow2 -O vhdx -o subformat=dynamic $cloudImagePath $VhdxPath
-
-    # Clear the NTFS Sparse attribute on the freshly-converted VHDX. Hyper-V
-    # Gen2 refuses to power on a sparse VHDX with 0xC03A001A; qemu-img can
-    # leave the file marked sparse on NTFS even when subformat=dynamic.
+    # AB#9171 (C3): the base disk. Preferred: the release's pinned, pre-converted Ubuntu base VHDX, so
+    # the Windows host needs no qemu-img at all. Fallback only when the release pins none or it cannot
+    # be downloaded: the pinned cloud image (by serial -- this used to download the rolling "current" image, i.e.
+    # whatever Canonical published that day) converted with qemu-img. Both are verified against
+    # release/pins.conf; a mismatch stops the install instead of falling back. See CloudGrange-Prereqs.ps1.
     . "$PSScriptRoot\CloudGrange-Prereqs.ps1"
-    Clear-CloudGrangeSparseAttribute -Path $VhdxPath
+    $baseDiskArgs = @{
+        VhdxPath          = $VhdxPath
+        PinsPath          = (Join-Path (Split-Path $PSScriptRoot -Parent) 'release\pins.conf')
+        InstallPinnedQemu = $InstallPinnedQemu
+    }
+    if ($Mode -eq 'Bundled') { $baseDiskArgs['BundledImagePath'] = $BundledImagePath }
+    New-CloudGrangeBaseDisk @baseDiskArgs
 
     # Build cloud-init NoCloud seed ISO (user-data + meta-data)
     $ciDir = Join-Path $env:TEMP 'cloudgrange-cloud-init'
@@ -297,12 +255,28 @@ users:
     lock_passwd: false
     passwd: '*'$sshKeyLine
 $chpasswdBlock
+# AB#9171: a managed foundation. Nothing updates the OS on its own (owner decision 2026-09-18):
+# cloud-init must not upgrade packages at first boot, and Ubuntu's unattended-upgrades and the
+# apt-daily timers are switched off before anything else runs. OS updates are applied by an
+# administrator from Platform -> Updates -> Foundation. Install-CloudGrangeK3s.sh repeats this.
+package_update: false
+package_upgrade: false
+package_reboot_if_required: false
 write_files:
   - path: /usr/local/bin/cloudgrange-net-setup.sh
     permissions: '0755'
     content: |
 $netSetupScriptIndented
+  - path: /etc/apt/apt.conf.d/99cloudgrange-no-automatic-updates
+    permissions: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "0";
+      APT::Periodic::Download-Upgradeable-Packages "0";
+      APT::Periodic::AutocleanInterval "0";
+      APT::Periodic::Unattended-Upgrade "0";
 runcmd:
+  - [ systemctl, disable, --now, unattended-upgrades.service, apt-daily.timer, apt-daily-upgrade.timer ]
+  - [ systemctl, mask, unattended-upgrades.service, apt-daily.timer, apt-daily-upgrade.timer ]
   - /usr/local/bin/cloudgrange-net-setup.sh
 "@
 
@@ -389,14 +363,21 @@ ethernets:
         Add-VMDvdDrive -VM $vm -Path $seedIso
     }
 
-    # Windows Firewall — forward port 443 from management NIC to VM
-    $fwRuleName = 'CloudGrange-Portal-443'
+    # Windows Firewall + netsh portproxy from the management NIC to the VM, for the portal (443) and,
+    # AB#9171, the site relay (8443). The relay is the on-prem stack's agent endpoint (a LoadBalancer
+    # Service, which K3s's servicelb publishes on the VM's own IP); forwarding only 443 left agents
+    # outside the host unable to reach it through the NAT.
     if ($SkipHostPortForward) {
-        Write-Host "  Skipping host 443 firewall rule and portproxy (-SkipHostPortForward)"
-    } elseif (-not (Get-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
-        # Port forwarding via netsh portproxy (management NIC → VM IP)
-        netsh interface portproxy add v4tov4 listenport=443 connectaddress=$VmIp connectport=443 | Out-Null
+        Write-Host "  Skipping host 443/8443 firewall rules and portproxy (-SkipHostPortForward)"
+    } else {
+        foreach ($forward in @(@{ Port = 443; Rule = 'CloudGrange-Portal-443' }, @{ Port = 8443; Rule = 'CloudGrange-Relay-8443' })) {
+            if (-not (Get-NetFirewallRule -DisplayName $forward.Rule -ErrorAction SilentlyContinue)) {
+                New-NetFirewallRule -DisplayName $forward.Rule -Direction Inbound -Protocol TCP -LocalPort $forward.Port -Action Allow | Out-Null
+            }
+            # Re-point the forward every time: a reinstall may use a different -VmIp.
+            netsh interface portproxy delete v4tov4 listenport=$($forward.Port) | Out-Null
+            netsh interface portproxy add v4tov4 listenport=$($forward.Port) connectaddress=$VmIp connectport=$($forward.Port) | Out-Null
+        }
     }
 
     Write-Host "  Starting VM..."
@@ -429,5 +410,6 @@ if ($MyInvocation.InvocationName -ne '.') {
     . "$PSScriptRoot\CloudGrange-Common.ps1"
     New-CloudGrangeVm -VmIp $VmIp -VhdxPath $VhdxPath -Mode $Mode `
         -SshPublicKey $effectiveSshKey -BundledImagePath $BundledImagePath `
-        -SwitchName $SwitchName -VmName $VmName -SkipHostPortForward:$SkipHostPortForward -NoDefaultGateway:$NoDefaultGateway
+        -SwitchName $SwitchName -VmName $VmName -SkipHostPortForward:$SkipHostPortForward -NoDefaultGateway:$NoDefaultGateway `
+        -InstallPinnedQemu:$InstallPinnedQemu
 }

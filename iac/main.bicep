@@ -65,11 +65,21 @@ param deploymentTime string = utcNow('yyyy-MM-ddTHH:mm:ssZ')
 // Application parameters (Phase IV)
 // =============================================================================
 
-// AB#1669 — imageTag default changed from 'latest' to 'v1.0.0'.
-// Never use 'latest' in stage or prod. CI must always pass an explicit SHA or semver tag.
-// GHCR tags: v1.0.0, 1.0.0-preview1, 1.0.0-preview2, SHA digests. 'main' tag does NOT exist.
+// AB#9188 — default is 'latest' because it is the only tag that actually exists.
+//
+// This defaulted to 'v1.0.0', and the note here claimed GHCR carried v1.0.0/1.0.0-preview1/
+// 1.0.0-preview2. It does not, and may never have: checked against the registry,
+// cloudgrange-api:v1.0.0 returns 404 and :latest returns 200. resources.bicep meanwhile
+// defaulted to 'main' — which this same comment correctly said does not exist. Two entry points,
+// two different non-existent defaults, each contradicting the other's documentation, so an ACA
+// deployment failed to pull whichever way it was started.
+//
+// "Never use latest in stage or prod" still holds, which is why this is only a default and both
+// apiImageTag/portalImageTag overrides remain: CI should pass an explicit SHA or semver tag. That
+// becomes enforceable once versioned tags are actually published (a known, separate gap — nothing
+// but 'latest' is published to ghcr.io/cloudgrange/* today).
 @description('Default container image tag. Used for both API and portal unless overridden.')
-param imageTag string = 'v1.0.0'
+param imageTag string = 'latest'
 
 @description('Optional override for the API image tag. Empty = use imageTag. Use when the API repo has shipped a fix that the portal repo has not.')
 param apiImageTag string = ''

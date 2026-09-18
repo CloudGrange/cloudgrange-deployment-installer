@@ -14,11 +14,11 @@
 #   R2_PUBLIC_BASE   public base URL of the bucket (e.g. its r2.dev URL or custom download domain)
 #
 # Usage:
-#   Publish-Release.sh --version 2609.0.0-preview.3 --bundle-dir <dir with Install-CloudGrange-Bundled.zip(.sha256)> \
+#   Publish-Release.sh --version 2609.0.0-preview.3 --bundle-dir <dir with Install-CloudGrange-K3s-Bundled.zip(.sha256)> \
 #     --channel preview|stable --severity security|recommended|optional --summary "<one line>"
 set -euo pipefail
 
-VERSION=""; DIR=""; CHANNEL=""; SEVERITY=""; SUMMARY=""
+VERSION=""; DIR=""; CHANNEL=""; SEVERITY=""; SUMMARY=""; PLATFORM_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION=$2; shift 2 ;;
@@ -26,14 +26,22 @@ while [ $# -gt 0 ]; do
     --channel) CHANNEL=$2; shift 2 ;;
     --severity) SEVERITY=$2; shift 2 ;;
     --summary) SUMMARY=$2; shift 2 ;;
+    # AB#9171: output of New-PlatformRelease.sh (manifest.json, manifest.json.sig, cloudgrange-<v>.tgz).
+    # Published next to the bundle; the channel then carries latest.manifestUrl, which the in-cluster
+    # Platform updater verifies and applies. Run New-PlatformRelease.sh with
+    # --chart-base-url "$R2_PUBLIC_BASE/releases/<version>" so the manifest points at this upload.
+    --platform-release-dir) PLATFORM_DIR=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# AB#9171: the bundle New-ReleaseBundleK3s.sh builds. The Compose bundle (Install-CloudGrange-Bundled.zip)
+# is retired, and this script still looked for it, so it could not publish a K3s release.
+BUNDLE=Install-CloudGrange-K3s-Bundled.zip
 [[ "$VERSION" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-(preview|rc)\.[0-9]+)?$ ]] || { echo "--version must be YYMM.MINOR.PATCH[-preview.N|-rc.N]" >&2; exit 2; }
 case "$CHANNEL" in preview|stable) ;; *) echo "--channel must be preview or stable" >&2; exit 2 ;; esac
 case "$SEVERITY" in security|recommended|optional) ;; *) echo "--severity must be security, recommended or optional" >&2; exit 2 ;; esac
 : "${CF_ACCOUNT_ID:?}" "${CF_TOKEN:?}" "${CF_TOKEN_ID:?}" "${R2_BUCKET:?}" "${R2_PUBLIC_BASE:?}"
-[ -f "$DIR/Install-CloudGrange-Bundled.zip" ] && [ -f "$DIR/Install-CloudGrange-Bundled.zip.sha256" ] || { echo "bundle not found in $DIR" >&2; exit 2; }
+[ -f "$DIR/$BUNDLE" ] && [ -f "$DIR/$BUNDLE.sha256" ] || { echo "bundle not found in $DIR" >&2; exit 2; }
 
 SECRET=$(printf '%s' "$CF_TOKEN" | sha256sum | cut -d' ' -f1)
 S3="https://$CF_ACCOUNT_ID.r2.cloudflarestorage.com/$R2_BUCKET"
@@ -50,25 +58,38 @@ put() { # <file> <key> <content-type>
   [ "$code" = 200 ] || { head -c 400 "$WORK/put.out" >&2; echo >&2; exit 1; }
 }
 
-size=$(stat -c %s "$DIR/Install-CloudGrange-Bundled.zip")
+size=$(stat -c %s "$DIR/$BUNDLE")
 [ "$size" -lt $((5 * 1024 * 1024 * 1024)) ] || { echo "bundle is over 5 GiB: multipart upload is not implemented" >&2; exit 1; }
-sha=$(sha256sum "$DIR/Install-CloudGrange-Bundled.zip" | cut -d' ' -f1)
-[ "$sha" = "$(cut -d' ' -f1 "$DIR/Install-CloudGrange-Bundled.zip.sha256")" ] || { echo "bundle SHA-256 does not match its build record" >&2; exit 1; }
+sha=$(sha256sum "$DIR/$BUNDLE" | cut -d' ' -f1)
+[ "$sha" = "$(cut -d' ' -f1 "$DIR/$BUNDLE.sha256")" ] || { echo "bundle SHA-256 does not match its build record" >&2; exit 1; }
 printf '%s  %s\n' "$sha" "$ZIP" > "$WORK/$ZIP.sha256"
 
 put "$WORK/$ZIP.sha256" "releases/$VERSION/$ZIP.sha256" text/plain
-put "$DIR/Install-CloudGrange-Bundled.zip" "releases/$VERSION/$ZIP" application/zip
+put "$DIR/$BUNDLE" "releases/$VERSION/$ZIP" application/zip
 remote=$(curl -sSI "$PUBLIC/releases/$VERSION/$ZIP" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')
 [ "$remote" = "$size" ] || { echo "public size $remote does not match $size" >&2; exit 1; }
 
-python3 - "$VERSION" "$PUBLIC/releases/$VERSION/$ZIP" "$sha" "$size" "$SEVERITY" "$SUMMARY" > "$WORK/channel.json" <<'PY'
+MANIFEST_URL=""
+if [ -n "$PLATFORM_DIR" ]; then
+  for f in manifest.json manifest.json.sig "cloudgrange-$VERSION.tgz"; do
+    [ -f "$PLATFORM_DIR/$f" ] || { echo "$PLATFORM_DIR/$f missing (unsigned or incomplete platform release)" >&2; exit 2; }
+  done
+  python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["platform"]==sys.argv[2] and not m.get("dryRun"), "manifest is a dry run or for another version"' "$PLATFORM_DIR/manifest.json" "$VERSION" || exit 2
+  put "$PLATFORM_DIR/cloudgrange-$VERSION.tgz" "releases/$VERSION/cloudgrange-$VERSION.tgz" application/gzip
+  put "$PLATFORM_DIR/manifest.json.sig" "releases/$VERSION/manifest.json.sig" text/plain
+  put "$PLATFORM_DIR/manifest.json" "releases/$VERSION/manifest.json" application/json
+  MANIFEST_URL="$PUBLIC/releases/$VERSION/manifest.json"
+fi
+
+python3 - "$VERSION" "$PUBLIC/releases/$VERSION/$ZIP" "$sha" "$size" "$SEVERITY" "$SUMMARY" "$MANIFEST_URL" > "$WORK/channel.json" <<'PY'
 import json, sys, time
-version, url, sha, size, severity, summary = sys.argv[1:7]
+version, url, sha, size, severity, summary, manifest_url = sys.argv[1:8]
 print(json.dumps({
     "schema": "cg-onprem-channel-v1",
     "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     "latest": {"version": version, "bundleUrl": url, "sha256": sha, "sizeBytes": int(size),
-               "severity": severity, "summary": summary, "releaseNotesUrl": None},
+               "severity": severity, "summary": summary, "releaseNotesUrl": None,
+               "manifestUrl": manifest_url or None},
 }, indent=2))
 PY
 put "$WORK/channel.json" "channels/$CHANNEL.json" application/json

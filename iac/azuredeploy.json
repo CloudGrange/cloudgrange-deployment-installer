@@ -22,7 +22,7 @@
     },
     "imageTag": {
       "type": "string",
-      "defaultValue": "v1.0.0",
+      "defaultValue": "latest",
       "metadata": {
         "description": "CloudGrange container image tag. Use v1.0.0 for the latest stable release."
       }

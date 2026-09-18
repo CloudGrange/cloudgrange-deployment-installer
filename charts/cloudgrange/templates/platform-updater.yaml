@@ -1,0 +1,271 @@
+{{- /*
+AB#9171 (plan 2026-09-18-foundation-platform-separation §3/§4, E1) — the in-cluster Platform
+updater's identity, rights, backup volume and status ConfigMap. The Job itself is created by the
+API on an admin's request (reference spec: images/platform-updater/job.example.yaml), because a Job
+rendered by the chart would run on every install and upgrade.
+
+RBAC SCOPE. The Role below is scoped to the release namespace, as §4 requires. It grants what
+`helm upgrade` and `helm rollback` need on the kinds this chart renders, plus configmaps and
+secrets for Helm's release storage. Because Helm must create and update this release's own Roles
+and RoleBindings, the Role carries `bind` and `escalate` on roles in this namespace: inside the
+release namespace the updater is effectively namespace-admin. That is inherent to running Helm;
+nothing outside the namespace is granted by the Role.
+
+DEVIATION FROM §4, kept as narrow as possible: this chart also renders three objects that are not
+in the namespace, and Helm needs to read (and on change, update) every object in a release, so a
+namespace Role alone would fail every upgrade and every rollback:
+  - ClusterRole and ClusterRoleBinding <release>-promtail (observability subchart);
+  - ClusterIssuer <release>-selfsigned (templates/certmanager.yaml, when certManager.installOperator).
+The ClusterRole <release>-platform-updater covers exactly those objects BY NAME (resourceNames) and
+nothing else: read-only for the RBAC objects (see below), get/update/patch/delete for the issuer. When MetalLB or Velero config is enabled, a Role in metallb-system / velero covers
+this release's objects there.
+*/ -}}
+{{- if .Values.platformUpdater.enabled }}
+{{- $name := include "cloudgrange.platformUpdaterName" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+rules:
+  # Helm release storage (secrets, the default driver; configmaps for the configmap driver), the
+  # release's own ConfigMaps/Secrets/Services/PVCs/ServiceAccounts, and the update status ConfigMap.
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Health gate: pod readiness. The release has no bare pods, so no write verbs.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # On a failed update the updater stops the API and Keycloak (kubectl scale) before restoring the
+  # database. The scale subresource is authorised separately from deployments.
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
+  # `kubectl rollout status` and `helm --wait` read these to judge a rollout.
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "controllerrevisions"]
+    verbs: ["get", "list", "watch"]
+  # The chart's hook Jobs (secrets bootstrap, realm admin).
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The release's own Roles/RoleBindings (module runtime, secrets bootstrap, API update rights).
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "issuers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters", "scheduledbackups", "backups"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["secrets-store.csi.x-k8s.io"]
+    resources: ["secretproviderclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- $issuer := .Values.certManager.issuerRef | default dict }}
+{{- $ownsClusterObjects := or (and .Values.certManager.installOperator (not $issuer.name)) .Values.observability.promtail.enabled }}
+{{- if $ownsClusterObjects }}
+---
+# See the DEVIATION note at the top: only the release's own cluster-scoped objects, by name.
+# Rendered only when this release HAS cluster-scoped objects (the self-signed ClusterIssuer or
+# promtail). A BYO install with certManager.issuerRef set and promtail off has none, and then the
+# updater's rights are purely namespace-scoped, exactly as §4 describes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    # READ-ONLY on purpose. Update rights here (which need `escalate`/`bind`) would let the updater
+    # rewrite a ClusterRole or add itself to a ClusterRoleBinding, i.e. make itself cluster-admin.
+    # Helm only needs `get` for an object the new chart leaves unchanged; a release that DOES change
+    # one of these fails its upgrade (and rolls back) and must be applied by a cluster admin.
+    resourceNames: [{{ printf "%s-promtail" .Release.Name | quote }}, {{ $name | quote }}]
+    verbs: ["get"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["clusterissuers"]
+    resourceNames: [{{ printf "%s-selfsigned" .Release.Name | quote }}]
+    verbs: ["get", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- $extraNs := list }}
+{{- if and .Values.metallb.enabled .Values.metallb.addressPool }}{{ $extraNs = append $extraNs "metallb-system" }}{{ end }}
+{{- if .Values.backup.enabled }}{{ $extraNs = append $extraNs "velero" }}{{ end }}
+{{- range $ns := $extraNs }}
+---
+# This release's MetalLB / Velero objects live outside the release namespace (templates/metallb.yaml,
+# templates/velero-schedule.yaml); Helm must be able to read and update them there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+rules:
+  {{- if eq $ns "metallb-system" }}
+  - apiGroups: ["metallb.io"]
+    resources: ["ipaddresspools", "l2advertisements"]
+  {{- else }}
+  - apiGroups: ["velero.io"]
+    resources: ["schedules"]
+  {{- end }}
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- /* pg_dump backups (one directory per update) the updater restores from on failure or rollback.
+AB#9171 (found on kind v1.34): as a normal release resource this PVC blocked every `helm install
+--wait` for its full timeout. Nothing mounts it until an update runs, so on a WaitForFirstConsumer
+StorageClass it never binds, and Helm waits for every release PVC to be Bound. It is therefore a
+hook resource (Helm does not wait on hook PVCs), created once: `lookup` skips it when it already
+exists, so no install or upgrade ever recreates it, and it has no delete policy — a backup must
+outlive a failed or uninstalled release, which is what it is for. */ -}}
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "%s-backups" $name)) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-backups
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.platformUpdater.backup.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.platformUpdater.backup.size }}
+{{- end }}
+{{- if .Values.platformUpdater.signing.publicKey }}
+---
+# The cosign public key the updater verifies release manifests against. The updater reads it with
+# its own ServiceAccount, so the Job spec does not have to mount it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-signing
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+data:
+  cosign.pub: {{ .Values.platformUpdater.signing.publicKey | quote }}
+{{- end }}
+---
+# The update status ConfigMap (§4: fixed name, keys state/fromVersion/toVersion/message/updatedAt).
+# Created ONCE, at install, as a pre-install hook: hook objects are not part of the release, so a
+# later `helm upgrade` — run by the updater itself mid-update — cannot reset it to idle. The updater
+# owns it from then on (and creates it on releases installed before this chart version).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudgrange-platform-update-status
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  state: idle
+  fromVersion: ""
+  toVersion: ""
+  message: ""
+  updatedAt: ""
+{{- end }}
+{{- if .Values.platformUpdater.enabled }}
+---
+# §4: the API's own rights for Platform updates — create and track the updater Job, and read the
+# status ConfigMap (by name only). Bound to the API's ServiceAccount <release>-api, which the api
+# subchart now always creates (charts/api/templates/module-runtime-rbac.yaml).
+# E8 (cancel a stuck update): read the Job's pods, to tell a pod that never started (Pending,
+# ImagePullBackOff) from one that is working, and patch the status ConfigMap to record the cancel.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-api-platform-updates
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["cloudgrange-platform-update-status"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-api-platform-updates
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-api-platform-updates
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-api
+    namespace: {{ .Release.Namespace }}
+{{- end }}

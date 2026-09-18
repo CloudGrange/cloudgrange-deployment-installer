@@ -4,18 +4,29 @@ metadata:
   name: {{ .Release.Name }}-api-secrets
   labels: { app.kubernetes.io/part-of: cloudgrange }
 spec:
-  accessModes: [ReadWriteOnce]
+  accessModes: [{{ .Values.persistence.accessMode }}]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.persistence.secrets.size }}
+{{- if and (not .Values.updater.hostPath.enabled) .Values.updater.pvc.enabled }}
 ---
+# Only rendered where the updates directory is NOT a hostPath (AB#9189). On an appliance the
+# host's updater service needs a real host directory it can read; a PVC there would be a
+# channel the updater can never see.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ .Release.Name }}-api-updates
   labels: { app.kubernetes.io/part-of: cloudgrange }
 spec:
-  accessModes: [ReadWriteOnce]
+  accessModes: [{{ .Values.persistence.accessMode }}]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.persistence.updates.size }}
+{{- end }}

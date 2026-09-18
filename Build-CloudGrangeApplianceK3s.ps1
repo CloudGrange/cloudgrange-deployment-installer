@@ -11,12 +11,16 @@
 # install has completed.
 #
 # Usage:
-#   Build-CloudGrangeApplianceK3s.ps1 -OutputPath C:\CloudGrangeApplianceK3s -SshKeyPath <path> -VmIp <ip> [-Version 2609.0.0-preview1]
+#   Build-CloudGrangeApplianceK3s.ps1 -OutputPath C:\CloudGrangeApplianceK3s -SshKeyPath <path> -VmIp <ip> -Version 2609.0.0-preview1
 
 [CmdletBinding()]
 param(
     [string]$OutputPath = 'C:\CloudGrangeApplianceK3s',
-    [string]$Version = 'latest',
+    # AB#9171: required and pinned. The appliance boots offline from the images baked into it, and
+    # `latest` is not a version (methodology rule 4: no :latest in any shipped artifact).
+    [Parameter(Mandatory)]
+    [ValidatePattern('^\d{4}\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')]
+    [string]$Version,
     [string]$VmName = 'cloudgrange-k3s',
     [string]$CosignKeyPath = '',
     [switch]$SkipSigning,
@@ -59,8 +63,12 @@ if (-not $AllowUngeneralized) {
     Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "rm -rf $stage && mkdir -p $stage/appliance")) -TimeoutSeconds 120
     if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPLK3S-ERR-003: cannot reach '$VmName' over SSH at $VmIp (exit $LASTEXITCODE)." }
 
+    # AB#9189: cloudgrange-updater-k3s.service belongs here — the generalize script installs the
+    # in-app updater, and these lists are explicit, so a file the generalize step needs but nobody
+    # staged fails the whole build at the install step with "cannot stat".
     foreach ($f in 'cloudgrange-generalize-k3s.sh', 'cloudgrange-firstboot-k3s.sh', 'cloudgrange-firstboot-k3s.service', 'cloudgrange-capture-secrets-k3s.sh',
-                   'cloudgrange-kvp.py', 'cloudgrange-operator-access.sh', 'cloudgrange-operator-access.service') {
+                   'cloudgrange-kvp.py', 'cloudgrange-operator-access.sh', 'cloudgrange-operator-access-k3s.service',
+                   'cloudgrange-updater-k3s.service') {
         Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @((Join-Path $PSScriptRoot "appliance\$f"), "cloudgrange@${VmIp}:$stage/appliance/$f")) -TimeoutSeconds 120
         if ($LASTEXITCODE -ne 0) { Write-Error "CG-APPLK3S-ERR-003: upload of $f failed (exit $LASTEXITCODE)." }
     }
@@ -68,7 +76,9 @@ if (-not $AllowUngeneralized) {
     # persistently — re-upload them the same way Deploy-K3sHelm.ps1 did at install time
     # (that ephemeral copy was already deleted after install completed).
     Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @("cloudgrange@$VmIp", "mkdir -p $stage/scripts")) -TimeoutSeconds 60
-    foreach ($f in @('Install-CloudGrangeK3s.sh', 'New-ArtifactManifest.sh')) {
+    # AB#9171: the Foundation release signing key the Foundation updater verifies against.
+    Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @((Join-Path $PSScriptRoot 'cloudgrange-signing-key.pub'), "cloudgrange@${VmIp}:$stage/cloudgrange-signing-key.pub")) -TimeoutSeconds 120
+    foreach ($f in @('Install-CloudGrangeK3s.sh', 'New-ArtifactManifest.sh', 'cloudgrange-updater-k3s.py')) {
         Invoke-CloudGrangeSsh -Tool scp -ArgumentList ($sshOpts + @((Join-Path $PSScriptRoot "scripts\$f"), "cloudgrange@${VmIp}:$stage/scripts/$f")) -TimeoutSeconds 120
     }
     Get-ChildItem -Path (Join-Path $PSScriptRoot 'charts') -Recurse -File | ForEach-Object {

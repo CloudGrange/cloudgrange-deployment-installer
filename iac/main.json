@@ -76,7 +76,7 @@
     },
     "imageTag": {
       "type": "string",
-      "defaultValue": "v1.0.0",
+      "defaultValue": "latest",
       "metadata": {
         "description": "Default container image tag. Used for both API and portal unless overridden."
       }
@@ -1074,7 +1074,7 @@
             },
             "imageTag": {
               "type": "string",
-              "defaultValue": "main",
+              "defaultValue": "latest",
               "metadata": {
                 "description": "Default container image tag. Used for API and portal unless overridden."
               }

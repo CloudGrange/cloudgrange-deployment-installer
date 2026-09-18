@@ -13,13 +13,15 @@
 # instead of Docker Compose — the canonical target per the platform restructure plan
 # (cloudgrange-internal/pmo/plans/2026-09-15-platform-restructure-helm-k8s.md), running
 # in parallel with Compose for this release cycle per that plan's own rollout order.
-# --engine compose (the default, unchanged) is not going away this release — do not
-# remove it until AB#9189 explicitly retires it after K3s/Helm has proven out.
+# AB#9189: k3s is the default engine and the Compose BUNDLE is retired — releases no
+# longer build Install-CloudGrange-Bundled.zip. --engine compose still works against a
+# checkout or an older bundle, for existing Compose installs that have not migrated; it
+# is simply no longer a shipped artifact.
 #
 # Usage (run as root, from the extracted install bundle — this script expects a
-# sibling ./compose directory for --engine compose, or a sibling ./charts and
-# ./scripts/Install-CloudGrangeK3s.sh for --engine k3s, exactly like the bundle
-# New-ReleaseBundle.sh produces):
+# sibling ./charts and ./scripts/Install-CloudGrangeK3s.sh for --engine k3s, exactly like
+# the bundle New-ReleaseBundleK3s.sh produces, or a sibling ./compose for the legacy
+# --engine compose path):
 #   sudo ./Install-CloudGrange-Linux.sh --hostname cloudgrange.example.com [--version 2609.0.0]
 #   sudo ./Install-CloudGrange-Linux.sh --hostname cloudgrange.example.com --engine k3s
 #
@@ -35,17 +37,18 @@
 set -euo pipefail
 
 HOSTNAME_ARG=""
-VERSION="latest"
+VERSION=""
+PREFLIGHT_ONLY=false
 COMPOSE_DIR="/opt/cloudgrange"
 # K3s/Helm is THE deployment model for this product — that was the whole point of the
-# platform restructure. Compose remains reachable with --engine compose until AB#9189
-# retires it, but it is no longer what a customer gets by default: leaving the default on
-# compose meant every real install silently ran the stack the restructure replaced.
+# platform restructure. AB#9189 retired the Compose bundle; --engine compose remains
+# reachable for existing installs that have not migrated, but it is not built or shipped
+# as a release artifact any more.
 ENGINE="k3s"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange] [--engine compose|k3s]" >&2
+    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange] [--engine compose|k3s] [--preflight-only]" >&2
     exit 2
 }
 
@@ -55,6 +58,7 @@ while [ $# -gt 0 ]; do
         --version)     VERSION=$2; shift 2 ;;
         --compose-dir) COMPOSE_DIR=$2; shift 2 ;;
         --engine)      ENGINE=$2; shift 2 ;;
+        --preflight-only) PREFLIGHT_ONLY=true; shift ;;
         -h|--help)     usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
@@ -71,6 +75,86 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# AB#9171 — owner decision 2026-09-18 (plan §5): if the customer ran this script, CloudGrange owns
+# the Foundation, OS updates included (the admin-initiated Foundation card). That is only safe on a
+# host nobody else manages, so the published prerequisite is a DEDICATED, FRESH install of a
+# supported Ubuntu release, used only for CloudGrange -- and this preflight enforces it before
+# anything on the host changes. It reports every failed check at once, then refuses.
+#
+# Re-running on a host THIS installer already set up (a resume after an interruption, or a re-run)
+# is allowed: K3s and the ports it holds are then ours. Anyone else's K3s, Docker, containerd or
+# Kubernetes is refused; there is no switch to override that.
+#
+# Overridable for the tests only (test/appliance/test_linux_preflight.py): the os-release and
+# meminfo paths, the filesystem root the conflict checks look under, and the minimums.
+SUPPORTED_UBUNTU="24.04"
+MIN_CPUS=${CLOUDGRANGE_MIN_CPUS:-4}
+MIN_MEM_KB=${CLOUDGRANGE_MIN_MEM_KB:-7600000}            # an "8 GB" VM reports ~7.7 GiB
+MIN_DISK_KB=${CLOUDGRANGE_MIN_DISK_KB:-41943040}         # 40 GiB free under /var/lib
+REQUIRED_TCP_PORTS="80 443 6443 8443 10250"
+OS_RELEASE=${CLOUDGRANGE_OS_RELEASE_FILE:-/etc/os-release}
+MEMINFO=${CLOUDGRANGE_MEMINFO_FILE:-/proc/meminfo}
+PF_ROOT=${CLOUDGRANGE_PREFLIGHT_ROOT:-}
+
+preflight_dedicated_host() {
+    local failures=() ours=false id="" ver="" cmd dir unit port cpus mem_kb disk_kb listening
+    echo "Preflight: this host must be a dedicated, fresh Ubuntu $SUPPORTED_UBUNTU used only for CloudGrange."
+    if [ -f "$PF_ROOT/opt/cloudgrange/.install-state.json" ] || [ -s "$PF_ROOT/etc/cloudgrange/foundation-version" ]; then
+        ours=true
+        echo "  CloudGrange already installed here by this installer: re-run/resume allowed."
+    fi
+
+    # 1. Supported OS.
+    if [ -r "$OS_RELEASE" ]; then
+        id=$(. "$OS_RELEASE" && echo "${ID:-}")
+        ver=$(. "$OS_RELEASE" && echo "${VERSION_ID:-}")
+    fi
+    if [ "$id" != ubuntu ] || [ "$ver" != "$SUPPORTED_UBUNTU" ]; then
+        failures+=("unsupported OS '${id:-unknown} ${ver:-}': Ubuntu $SUPPORTED_UBUNTU is required")
+    fi
+
+    # 2. No container runtime or Kubernetes that is not ours.
+    for cmd in docker dockerd podman kubeadm kubelet microk8s k0s rke2; do
+        command -v "$cmd" >/dev/null 2>&1 && failures+=("'$cmd' is installed: this host already runs containers or Kubernetes")
+    done
+    for dir in /var/lib/docker /var/lib/containerd /etc/kubernetes /var/snap/microk8s /var/lib/k0s /var/lib/rancher/rke2; do
+        [ -e "$PF_ROOT$dir" ] && failures+=("$dir exists: this host already runs containers or Kubernetes")
+    done
+    for unit in docker.service containerd.service kubelet.service; do
+        systemctl is-active --quiet "$unit" 2>/dev/null && failures+=("$unit is running")
+    done
+    if [ "$ours" = false ]; then
+        if command -v k3s >/dev/null 2>&1 || [ -e "$PF_ROOT/var/lib/rancher/k3s" ] || [ -e "$PF_ROOT/etc/rancher/k3s" ]; then
+            failures+=("K3s is already installed, and not by this installer (a fresh host is required)")
+        fi
+        # 3. Ports K3s and CloudGrange need, free (on our own re-run K3s holds them itself).
+        listening=$(ss -Htln 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -un)
+        for port in $REQUIRED_TCP_PORTS; do
+            printf '%s\n' "$listening" | grep -qx "$port" && failures+=("TCP port $port is already in use")
+        done
+    fi
+
+    # 4. Minimum resources.
+    cpus=$(nproc 2>/dev/null || echo 0)
+    [ "$cpus" -ge "$MIN_CPUS" ] || failures+=("$cpus CPUs: at least $MIN_CPUS are required")
+    mem_kb=$(awk '/^MemTotal:/ {print $2}' "$MEMINFO" 2>/dev/null)
+    [ "${mem_kb:-0}" -ge "$MIN_MEM_KB" ] || failures+=("$(( ${mem_kb:-0} / 1024 )) MiB RAM: at least $(( MIN_MEM_KB / 1024 )) MiB is required")
+    disk_kb=$(df -Pk "$PF_ROOT/var/lib" 2>/dev/null | awk 'NR==2 {print $4}')
+    [ "${disk_kb:-0}" -ge "$MIN_DISK_KB" ] || failures+=("$(( ${disk_kb:-0} / 1048576 )) GiB free under /var/lib: at least $(( MIN_DISK_KB / 1048576 )) GiB is required")
+
+    if [ "${#failures[@]}" -gt 0 ]; then
+        echo "" >&2
+        echo "ERROR: preflight failed. Nothing on this host was changed." >&2
+        printf '  - %s\n' "${failures[@]}" >&2
+        echo "" >&2
+        echo "CloudGrange owns the OS and Kubernetes of a host this script installs (it applies OS and K3s" >&2
+        echo "updates from Platform -> Updates), so it needs a dedicated, freshly installed Ubuntu $SUPPORTED_UBUNTU" >&2
+        echo "server. To install onto a Kubernetes cluster you already run, use the Helm chart directly instead." >&2
+        exit 1
+    fi
+    echo "  Preflight OK: Ubuntu $ver, ${cpus} CPUs, $(( mem_kb / 1024 )) MiB RAM, $(( disk_kb / 1048576 )) GiB free, no conflicting runtime."
+}
+
 # AB#9183: --engine k3s delegates entirely to Install-CloudGrangeK3s.sh, which has its
 # own prereqs/bundle-layout checks (a sibling ./charts directory) and its own
 # checkpointed, resumable install flow (AB#9182) — nothing below this point applies to
@@ -78,8 +162,15 @@ fi
 if [ "$ENGINE" = "k3s" ]; then
     K3S_INSTALLER="$SCRIPT_DIR/scripts/Install-CloudGrangeK3s.sh"
     [ -x "$K3S_INSTALLER" ] || { echo "ERROR: expected $K3S_INSTALLER (is this an extracted install bundle?)" >&2; exit 1; }
-    exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG" --version "$VERSION"
+    preflight_dedicated_host
+    [ "$PREFLIGHT_ONLY" = true ] && { echo "Preflight passed."; exit 0; }
+    # AB#9171 (C1): no --version means the release the chart pins, not a wrapper-chosen `latest`.
+    if [ -n "$VERSION" ]; then
+        exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG" --version "$VERSION"
+    fi
+    exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG"
 fi
+[ "$VERSION" != "" ] || VERSION=latest   # --engine compose (legacy) keeps its old default tag
 
 if [ ! -d "$SCRIPT_DIR/compose" ]; then
     echo "ERROR: expected a 'compose' directory next to this script ($SCRIPT_DIR/compose) — is this an extracted install bundle?" >&2

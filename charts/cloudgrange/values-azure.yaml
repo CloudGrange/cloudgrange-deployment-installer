@@ -10,12 +10,18 @@
 #   - AKS cluster with the Azure Disk CSI driver (default-on) and the Secrets Store CSI
 #     Driver + Azure Key Vault provider add-on enabled
 #     (az aks enable-addons --addons azure-keyvault-secrets-provider)
+#   - AB#9171: the bootstrap secrets are GENERATED in-cluster by the chart, exactly as on-prem (the
+#     platform provisions, not the user). Only if you set global.aks.keyVaultSecrets=true:
 #   - An Azure Key Vault holding the 6 bootstrap secret values (same names as
 #     templates/secrets-bootstrap-job.yaml generates: postgres-password,
 #     keycloak-admin-user, keycloak-admin-password, keycloak-api-client-secret,
 #     grafana-admin-password, relay-enrollment-token, realm-admin-password)
 #   - A workload identity / managed identity with "Key Vault Secrets User" on that vault,
 #     federated to a Kubernetes ServiceAccount in this release's namespace
+#     (system:serviceaccount:<namespace>:<release>-api — the API runs as <release>-api)
+#   - AB#9171: the AKS application routing add-on (az aks approuting enable), which provides the
+#     webapprouting.kubernetes.azure.com IngressClass used below, with that Key Vault attached
+#     (az aks approuting update --attach-kv) and a TLS certificate for the hostname stored in it.
 global:
   cloud: true
   # Nested under global (not top-level) so every subchart can see it via .Values.global.aks
@@ -25,6 +31,30 @@ global:
     keyVaultName: ""             # required: the Azure Key Vault holding the bootstrap secrets
     tenantId: ""                  # required: the Azure AD tenant ID
     managedIdentityClientId: ""   # required: the workload identity's client ID
+    # AB#9171: Key Vault certificate URI WITHOUT the version, e.g.
+    # https://<vault>.vault.azure.net/certificates/<cert-name>. The application routing add-on syncs
+    # it into Secret keyvault-<release>, which the Ingress serves (ingress.tls.secretName below).
+    # Empty = no certificate is synced and the Ingress has no valid TLS Secret.
+    tlsCertificateUri: ""
+    # AB#9171: false (default) = the chart's secrets-bootstrap Job generates <release>-secrets, as
+    # on-prem. true = sync them from Key Vault through the Secrets Store CSI driver instead; you then
+    # create the bootstrap secret values in the vault first (see the prerequisites above).
+    keyVaultSecrets: false
+  # AB#9171: K3s's Traefik class and its annotations were inherited here, so on AKS no controller
+  # claimed the Ingress. The application routing add-on's managed NGINX class is the AKS default.
+  ingress:
+    className: webapprouting.kubernetes.azure.com
+    annotations: {}
+    tls:
+      secretName: "keyvault-{{ .Release.Name }}"
+
+api:
+  updater:
+    hostPath:
+      # AB#9189: there is no host-level updater service on AKS — nothing would ever read a
+      # hostPath here, and AKS node filesystems are not a place to keep release bundles.
+      # AKS updates by running `helm upgrade` against the cluster directly.
+      enabled: false
 
 postgres:
   persistence:
@@ -35,9 +65,11 @@ relay:
     type: LoadBalancer  # AKS's native LB — no MetalLB needed here, unlike bare K3s
 
 certManager:
-  # AKS clusters commonly already run cert-manager cluster-wide (shared across many
-  # apps); don't install a second copy by default. Set true to install it as part of
-  # this release anyway (e.g. a dedicated/single-tenant AKS cluster).
+  # AB#9171: this flag never installed cert-manager itself; it only renders the chart's own
+  # Certificate (and self-signed ClusterIssuer). On AKS the TLS Secret comes from Key Vault through
+  # the application routing add-on instead (global.aks.tlsCertificateUri), so no Certificate is
+  # rendered here. To use cert-manager on AKS instead, set this true, install cert-manager first,
+  # point certManager.issuerRef at your issuer, and clear global.ingress.tls.secretName.
   installOperator: false
 
 # AB#9178's bootstrap-secrets hook Job still runs regardless (harmless — Helm hooks
@@ -48,3 +80,10 @@ certManager:
 # secretKeyRef references keep working completely unchanged either way. The API
 # Deployment mounts the SecretProviderClass volume (global.aks.enabled gate in
 # charts/api/templates/deployment.yaml) to trigger that sync.
+
+# AB#9171: ship container logs to Loki on AKS too (support-bundle log export), but without the
+# privileged node-sysctl init container — AKS manages its node images and inotify limits.
+observability:
+  promtail:
+    enabled: true
+    raiseInotifyLimits: false
