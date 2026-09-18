@@ -29,3 +29,7 @@ for f in "" charts/cloudgrange/values-single-node.yaml charts/cloudgrange/values
     helm lint charts/cloudgrange -f "$f" >/dev/null 2>&1 && echo "lint OK   : $f" || echo "lint FAIL : $f"
   fi
 done
+
+echo
+echo "=== no latest / unpinned versions in shipped artifacts (AB#9171 B5) ==="
+bash test/lint-pins.sh >/dev/null 2>/tmp/lint-pins.err && echo "pins OK    : test/lint-pins.sh" || { echo "pins FAIL  : test/lint-pins.sh"; cat /tmp/lint-pins.err; }
