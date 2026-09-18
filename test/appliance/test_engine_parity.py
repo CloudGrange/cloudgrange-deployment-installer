@@ -113,13 +113,23 @@ class UpdaterParityTests(unittest.TestCase):
         self.assertIn("cloudgrange-updater-k3s.py", bundler)
         self.assertIn("cloudgrange-updater-k3s.service", bundler)
 
-    def test_both_updaters_speak_the_same_status_schema(self):
-        # The API and portal read one schema; if the engines diverge here the Updates page works
-        # on one engine and silently shows nothing on the other.
+    def test_the_two_host_updaters_diverge_on_purpose(self):
+        # AB#9171 (plan 2026-09-18 §3/§4): this USED to assert both engines spoke one status schema.
+        # They no longer do, deliberately. The Compose updater is the legacy Platform updater for
+        # unmigrated Compose installs (status/updater.json, cg-updater-status-v1). The K3s host
+        # service is the Foundation updater only: it writes status/foundation.json with exactly the
+        # §4 fields and refuses Platform requests, because Platform updates run in the cluster.
         compose = read("compose", "updater", "cloudgrange-updater.py")
         k3s     = read("scripts", "cloudgrange-updater-k3s.py")
         self.assertIn('STATUS_SCHEMA = "cg-updater-status-v1"', compose)
-        self.assertIn('STATUS_SCHEMA = "cg-updater-status-v1"', k3s)
+        self.assertNotIn("cg-updater-status-v1", k3s,
+                         "the K3s host service must not publish the Platform status document")
+        self.assertIn('STATUS_NAME = "foundation.json"', k3s)
+        for key in ("installedVersion", "availableVersion", "k3sVersion", "targetK3sVersion",
+                    "osUpdatesAvailable", "rebootRequired", "state", "message", "updatedAt"):
+            self.assertIn('"%s"' % key, k3s)
+        for action in ("foundation-check", "foundation-apply", "foundation-rollback"):
+            self.assertIn('"%s"' % action, k3s)
 
 
 class ApplianceStagingTests(unittest.TestCase):
