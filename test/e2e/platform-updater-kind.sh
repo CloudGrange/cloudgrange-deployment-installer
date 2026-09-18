@@ -50,6 +50,13 @@ for v in "$FROM" "$TO"; do for c in api portal relay; do
     kind load docker-image --name "$CLUSTER" "$REG/cloudgrange-$c:$v" >/dev/null 2>&1
 done; done
 kind load docker-image --name "$CLUSTER" "$REG/cloudgrange-platform-updater:$UPDATER_TAG" >/dev/null
+# `kind load` imports by tag only. containerd resolves a repo:tag@sha256 reference only against an
+# image NAMED repo@sha256 (the same reason the air-gap bundle adds those names,
+# scripts/release/Add-DigestImageNames.py), so name the TO images by their node digest.
+for c in api portal relay; do
+    d=$(docker exec "$CLUSTER-control-plane" ctr -n k8s.io images ls 2>/dev/null | awk -v n="$REG/cloudgrange-$c:$TO" '$1 == n {print $3}')
+    [ -n "$d" ] && docker exec "$CLUSTER-control-plane" ctr -n k8s.io images tag "$REG/cloudgrange-$c:$TO" "$REG/cloudgrange-$c@$d" >/dev/null 2>&1
+done
 
 log "charts and signing key"
 for v in "$FROM" "$TO"; do

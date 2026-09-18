@@ -132,6 +132,9 @@ if [ "$IMAGES" = registry ]; then
     # docker save lists images in map (random) order and stamps live mtimes; repack sorted
     # with fixed owners/modes/mtimes so the same inputs give a byte-identical bundle.
     mkdir -p "$WORK/img" && tar -xf "$WORK/images-raw.tar" -C "$WORK/img"
+    # AB#9171: give every digest-pinned image a repo@sha256 name too, or containerd cannot resolve
+    # the chart's repo:tag@sha256 reference offline (proven on kind: ImagePullBackOff without it).
+    python3 "$SOURCE/scripts/release/Add-DigestImageNames.py" "$WORK/img" "$WORK/images.txt"
     # Both files carry a LIST of entries whose order docker save does not fix; sorting the
     # keys alone is not enough -- the list itself has to be sorted or two runs over the same
     # images produce different bytes.
