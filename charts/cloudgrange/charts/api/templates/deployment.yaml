@@ -58,7 +58,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: api
-          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          image: {{ include "cloudgrange.firstPartyImage" . | quote }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.port }}
@@ -67,15 +67,14 @@ spec:
               value: "Production"
             # AB#2514 fix: Platform Health's version card always showed "unknown" for every
             # component on K3s — these env vars were never set anywhere in the chart, and
-            # GET /api/v1/platform/version falls back to "unknown" when unset. global.image.tag
-            # is what's actually deployed for both api and portal (same tag, see the image:
-            # line above and portal/templates/deployment.yaml); Chart.AppVersion is the
-            # umbrella chart's own version, the closest thing this chart has to a "solution
-            # version" until AB#9184's release-manifest work stamps a real one in per-release.
+            # GET /api/v1/platform/version falls back to "unknown" when unset. The first-party
+            # tag (cloudgrange.imageTag: global.image.tag, else appVersion) is what's actually
+            # deployed for api, portal and relay. AB#9171: Chart.AppVersion is the platform
+            # version, stamped per release by scripts/release/Set-ChartVersion.sh.
             - name: CLOUDGRANGE_VERSION
-              value: {{ .Values.global.image.tag | quote }}
+              value: {{ include "cloudgrange.imageTag" . | quote }}
             - name: CLOUDGRANGE_PORTAL_VERSION
-              value: {{ .Values.global.image.tag | quote }}
+              value: {{ include "cloudgrange.imageTag" . | quote }}
             - name: CLOUDGRANGE_SOLUTION_VERSION
               value: {{ .Chart.AppVersion | quote }}
             # AB#9166 fix: the built-in relay never showed up connected/registered on K3s
@@ -117,7 +116,7 @@ spec:
             - name: Keycloak__RequireHttpsMetadata
               value: "false"
             - name: CLOUDGRANGE_IMAGE_TAG
-              value: {{ .Values.global.image.tag | quote }}
+              value: {{ include "cloudgrange.imageTag" . | quote }}
             - name: CLOUDGRANGE_UPDATES_DIR
               value: "/var/lib/cloudgrange/updates"
             - name: CLOUDGRANGE_UPDATE_CHANNEL_URL

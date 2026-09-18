@@ -2,8 +2,22 @@ apiVersion: v2
 name: cloudgrange
 description: CloudGrange platform — umbrella chart (AB#9171)
 type: application
-version: 0.1.0
+# AB#9171 (plan B2): the chart IS the platform, so the chart carries the platform version
+# (YYMM.MINOR.PATCH, pmo/decisions-2026-09-15/release-versioning.md) in both fields. A release
+# stamps the real value into this file and into the api/portal/relay subcharts' appVersion with
+# scripts/release/Set-ChartVersion.sh. appVersion is also the default first-party image tag.
+version: 2609.0.0
 appVersion: "2609.0.0"
+# AB#9171 (plan B3/E5): the Kubernetes versions this platform release supports. Helm refuses to
+# install or upgrade onto a cluster outside the range, and the in-cluster Platform updater refuses
+# an update whose target chart excludes the running cluster. The API reports it to the portal as
+# CLOUDGRANGE_SUPPORTED_KUBE_RANGE (templates/platform-env-configmap.yaml).
+#   - lower bound 1.33: the oldest minor AKS still supports (GA until Jul 2026, LTS to Jul 2027);
+#   - upper bound below 1.38: 1.37 is the newest AKS GA minor; nothing newer is qualified;
+#   - the pinned managed-foundation K3s, v1.36.4+k3s1 (release/pins.conf), sits inside it.
+# The "-0" suffixes make pre-release/build-suffixed server versions (v1.36.4+k3s1, AKS, EKS
+# "-eks-…") compare as their base version instead of being excluded by SemVer pre-release rules.
+kubeVersion: ">=1.33.0-0 <1.38.0-0"
 icon: https://cloudgrange.com/favicon.svg
 # Subcharts are plain subdirectories under charts/ (api, portal, relay, postgres,
 # keycloak, observability). Declared below purely so `helm lint` doesn't flag them as

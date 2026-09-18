@@ -25,7 +25,7 @@ spec:
         fsGroup: 101
       containers:
         - name: portal
-          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          image: {{ include "cloudgrange.firstPartyImage" . | quote }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.port }}

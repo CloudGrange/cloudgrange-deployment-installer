@@ -19,7 +19,8 @@
 #
 # Inputs:
 #   --source DIR     an exported tree of one commit (git archive), not a working copy
-#   --version X.Y.Z  stamped as global.image.tag in the bundled values
+#   --version V      platform version YYMM.MINOR.PATCH[-preview.N|-rc.N]; stamped into the
+#                    bundled Chart.yaml (version/appVersion) and as global.image.tag
 #   --out DIR        receives the zip, its .sha256, and the manifest
 #   --images MODE    registry (default): pull+bundle every image for offline install;
 #                    none: no images bundled (install pulls from the network)
@@ -38,7 +39,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SOURCE" ] && [ -n "$VERSION" ] && [ -n "$OUT" ] || usage
 case "$IMAGES" in registry|none) ;; *) echo "--images must be registry or none" >&2; exit 2 ;; esac
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "invalid version: $VERSION" >&2; exit 1; }
+# AB#9171: the platform version scheme (pmo/decisions-2026-09-15/release-versioning.md), the same
+# rule Publish-Release.sh and Set-ChartVersion.sh enforce. Never "latest", never a free-form label.
+[[ "$VERSION" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-(preview|rc)\.[0-9]+)?$ ]] || { echo "invalid version: $VERSION (want YYMM.MINOR.PATCH[-preview.N|-rc.N])" >&2; exit 1; }
 SOURCE=$(cd "$SOURCE" && pwd)
 PINS="$SOURCE/release"
 EPOCH=${SOURCE_DATE_EPOCH:-$(tr -d '[:space:]' < "$PINS/SOURCE_DATE_EPOCH")}
@@ -66,7 +69,11 @@ cp "$SOURCE/charts/vendor/"*.tgz "$B/charts/vendor/"
 rm -f "$B/charts/cloudgrange/Chart.lock"
 find "$B/charts/cloudgrange/charts" -maxdepth 1 -name '*.tgz' -delete
 
-log "stamping version $VERSION into values-single-node.yaml's default image tag"
+log "stamping platform version $VERSION into the chart (Chart.yaml version/appVersion, first-party image tag)"
+# AB#9171: Chart.yaml carries the platform version; the first-party image tag defaults to appVersion.
+bash "$SOURCE/scripts/release/Set-ChartVersion.sh" "$B/charts/cloudgrange" "$VERSION"
+# The explicit values tag is kept as well: the host updater (cloudgrange-updater-k3s.py bundle_version)
+# still reads the bundle version from the first `tag:` line of values.yaml.
 python3 - "$B/charts/cloudgrange/values.yaml" "$VERSION" <<'PY'
 import sys, re
 path, version = sys.argv[1], sys.argv[2]

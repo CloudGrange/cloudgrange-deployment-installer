@@ -1,6 +1,10 @@
 replicaCount: 1
 image:
   repository: cloudgrange-api
+  # AB#9171: optional sha256:<64 hex>. When set, the image renders as repo:tag@digest (pinned by
+  # digest). The release tooling and the in-cluster Platform updater set it. The tag comes from
+  # global.image.tag, or from this chart's appVersion when that is empty. Never latest.
+  digest: ""
 port: 8080
 resources:
   requests: { cpu: 100m, memory: 256Mi }

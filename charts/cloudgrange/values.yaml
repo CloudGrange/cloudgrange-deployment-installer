@@ -11,7 +11,12 @@ global:
   hostname: cloudgrange.local
   image:
     registry: ghcr.io/cloudgrange
-    tag: latest
+    # AB#9171 (plan B2): the first-party image tag (api, portal, relay). EMPTY means "this chart's
+    # appVersion", which the release tooling stamps to the platform version (YYMM.MINOR.PATCH, see
+    # templates/_helpers.tpl). Never `latest`: a moving tag made two installs of the same release
+    # run different code, turned `helm upgrade` into a no-op under IfNotPresent, and caused
+    # ImagePullBackOff three times. test/lint-pins.sh fails the build if `latest` comes back.
+    tag: ""
     pullPolicy: IfNotPresent
   # This chart installs on ANY conformant Kubernetes, not just the bundled K3s. The
   # ingress controller differs per distribution, so never hardcode it:
