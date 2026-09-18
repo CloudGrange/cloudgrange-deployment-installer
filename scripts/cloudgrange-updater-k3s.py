@@ -470,7 +470,22 @@ class K3sUpdater:
         raise UpdateError("pods did not become healthy within %ds: %s" % (self.health_timeout, last))
 
     # ---- actions ----------------------------------------------------------------------------------
+    # AB#9148 — an update writes a full database dump and imports a set of container images.
+    # Starting one on a nearly-full disk is how you end up with a half-applied update AND no room
+    # to roll it back, so refuse up front instead of failing somewhere in the middle.
+    UPDATE_HEADROOM_BYTES = 5 * 1024 ** 3
+
+    def check_free_space(self):
+        st = os.statvfs(self.state_dir)
+        free = st.f_bavail * st.f_frsize
+        if free < self.UPDATE_HEADROOM_BYTES:
+            raise UpdateError(
+                "not enough free disk space to apply an update: %d MB free, %d GB required"
+                % (free // (1024 ** 2), self.UPDATE_HEADROOM_BYTES // (1024 ** 3)))
+
     def do_apply(self, req, job):
+        self.set_step("preflight")
+        self.check_free_space()
         self.set_step("staging")
         staged = self.stage_bundle(req)
         self.set_step("verifying")
