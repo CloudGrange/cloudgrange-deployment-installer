@@ -115,6 +115,16 @@ spec:
           # (curl'd against Docker Hub) existing tag rather than `latest`.
           image: {{ .Values.promtail.image }}
           args: ["-config.file=/etc/promtail/promtail.yaml"]
+          # AB#9171 real bug, found on a kind install: Promtail's kubernetes_sd (role: pod) only
+          # discovers pods on the node named by $HOSTNAME. Inside a container HOSTNAME is the POD
+          # name, which matches no node, so discovery returned 0/0 targets, nothing reached Loki,
+          # and every support-bundle log file said "No log lines found". The upstream promtail
+          # chart sets HOSTNAME to the node name for exactly this reason.
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           volumeMounts:
             - { name: config, mountPath: /etc/promtail }
             # AB#9171: /var/log only. Every distribution this chart targets runs containerd, which
