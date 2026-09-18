@@ -236,6 +236,8 @@ data:
 # §4: the API's own rights for Platform updates — create and track the updater Job, and read the
 # status ConfigMap (by name only). Bound to the API's ServiceAccount <release>-api, which the api
 # subchart now always creates (charts/api/templates/module-runtime-rbac.yaml).
+# E8 (cancel a stuck update): read the Job's pods, to tell a pod that never started (Pending,
+# ImagePullBackOff) from one that is working, and patch the status ConfigMap to record the cancel.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -246,9 +248,12 @@ rules:
     resources: ["jobs"]
     verbs: ["create", "get", "list", "delete"]
   - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
     resources: ["configmaps"]
     resourceNames: ["cloudgrange-platform-update-status"]
-    verbs: ["get"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
