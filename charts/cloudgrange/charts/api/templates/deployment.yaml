@@ -139,14 +139,8 @@ spec:
             - name: CLOUDGRANGE_UPDATES_DIR
               value: "/var/lib/cloudgrange/updates"
             - name: CLOUDGRANGE_UPDATE_CHANNEL_URL
-              {{- $ch := .Values.updateChannel }}
-              {{- $name := $ch.name }}
-              {{- if not $name }}
-              {{- $v := include "cloudgrange.imageTag" . }}
-              {{- $name = ternary "preview" (ternary "rc" "stable" (contains "-rc." $v)) (contains "-preview." $v) }}
-              {{- end }}
-              {{- if not (has $name (list "preview" "rc" "stable")) }}{{ fail (printf "api.updateChannel.name must be preview, rc or stable, got %q" $name) }}{{ end }}
-              value: {{ $ch.url | default (printf "%s/channels/%s.json" (trimSuffix "/" $ch.baseUrl) $name) | quote }}
+              # Shared with the platform updater's trust ConfigMap, so both read the same channel.
+              value: {{ include "cloudgrange.updateChannelUrl" (dict "ch" .Values.updateChannel "tag" (include "cloudgrange.imageTag" .)) | quote }}
             # AB#9171: the module catalog is a static cg-module-catalog-v1 index on the same public
             # download host as the update channel. No credentials: the old GitHub packages listing
             # needed a token, so the catalog was empty on every customer install.

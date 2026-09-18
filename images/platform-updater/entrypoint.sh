@@ -7,12 +7,18 @@
 # <release>-platform-updater. Works the same on K3s, BYO Kubernetes and AKS: it only talks to the
 # Kubernetes API, Helm and Postgres, never to the host.
 #
-#   apply --version <v> --manifest-url <url>
+#   apply --version <v> [--manifest-url <url>]
 #       1. refuse if another update is running or the release is not in a deployed state;
-#       2. download the release manifest (cg-release-manifest-v1) and verify its cosign signature
-#          (<url>.sig) — FAIL CLOSED when no signing key is configured;
+#       2. TRUST (owner decision 2026-09-18: HTTPS + digest pinning, no signing key required):
+#          read the update channel (cg-onprem-channel-v1) over https from the configured channel
+#          URL; download the release manifest (cg-release-manifest-v1) it lists for <v>, over https
+#          from the channel host (or a host listed in platformUpdater.trust.allowedHosts); refuse
+#          unless the manifest's SHA-256 equals the channel's latest.manifestSha256. A cosign
+#          signature (<manifest url>.sig) is OPTIONAL: verified when a public key is configured
+#          (platformUpdater.signing.publicKey), not required when none is;
 #       3. check the manifest: platform == <v>, not a dry run, the installed version is inside
-#          upgradeFrom, every first-party image pinned by digest;
+#          upgradeFrom, every first-party image pinned by @sha256 digest (an unpinned image is
+#          refused);
 #       4. download the chart, check its SHA-256 against the manifest, and refuse if the running
 #          cluster is outside the chart's kubeVersion;
 #       5. pg_dump the database to the backup volume;
@@ -32,7 +38,15 @@
 #   CLOUDGRANGE_NAMESPACE      namespace (default: this pod's namespace)
 #   CLOUDGRANGE_BACKUP_DIR     backup volume mount (default /backups)
 #   CLOUDGRANGE_HEALTH_TIMEOUT rollout timeout (default 10m)
-#   CLOUDGRANGE_SIGNING_KEY_FILE  cosign public key file (default: ConfigMap <release>-platform-updater-signing)
+#   CLOUDGRANGE_SIGNING_KEY_FILE  optional cosign public key file (default: ConfigMap
+#                              <release>-platform-updater-signing; neither = signatures not checked)
+#   CLOUDGRANGE_UPDATE_CHANNEL_URL   the update channel (default: ConfigMap
+#                              <release>-platform-updater-trust, key channelUrl, rendered by the chart
+#                              from api.updateChannel — the same URL the API reads)
+#   CLOUDGRANGE_UPDATE_ALLOWED_HOSTS extra hosts (space/comma separated) the manifest and chart may
+#                              come from besides the channel host (default: ConfigMap key allowedHosts)
+#   CLOUDGRANGE_UPDATE_CA_FILE       extra PEM CA bundle for a private https mirror (default:
+#                              ConfigMap key caBundle); added to the system CAs, never replacing them
 set -uo pipefail
 
 STATUS_CM=cloudgrange-platform-update-status
@@ -50,7 +64,8 @@ die() { log "ERROR: $*"; exit 1; }
 
 usage() {
     cat >&2 <<'EOF'
-usage: cloudgrange-platform-updater apply --version <YYMM.MINOR.PATCH[-pre]> --manifest-url <url>
+usage: cloudgrange-platform-updater apply --version <YYMM.MINOR.PATCH[-pre]> [--manifest-url <url>]
+       cloudgrange-platform-updater verify --version <v> [--manifest-url <url>]
        cloudgrange-platform-updater rollback
        cloudgrange-platform-updater check-kube-range <range> [<kube-version>]
 EOF
@@ -239,31 +254,135 @@ health_gate() {
     return 1
 }
 
-# ---- Signature ---------------------------------------------------------------------------------
-signing_key() { # prints the path of the public key, or fails
+# ---- Trust: HTTPS + digest pinning (owner decision 2026-09-18) ---------------------------------
+# No signing key is required. What is applied is trusted because:
+#   - every download is https:// (curl --proto =https, redirects included) with normal TLS
+#     verification, from the configured channel host or an explicitly allowed host;
+#   - the release manifest's SHA-256 equals the one the channel publishes for that version;
+#   - the manifest pins the chart by SHA-256 and every first-party image by @sha256 digest, and
+#     helm upgrade deploys exactly those digests.
+# A signature is an optional extra: verified when a public key is configured, skipped when none is.
+CHANNEL_URL='' ALLOWED_HOSTS='' CA_FILE=''
+trust_value() { # <configmap key>
+    kubectl get configmap "$RELEASE-platform-updater-trust" -n "$NS" -o "jsonpath={.data.$1}" 2>/dev/null || true
+}
+load_trust() {
+    CHANNEL_URL=${CLOUDGRANGE_UPDATE_CHANNEL_URL:-$(trust_value channelUrl)}
+    ALLOWED_HOSTS=${CLOUDGRANGE_UPDATE_ALLOWED_HOSTS:-$(trust_value allowedHosts)}
+    ALLOWED_HOSTS=${ALLOWED_HOSTS//,/ }
+    local extra="$WORK/extra-ca.pem"
+    if [ -n "${CLOUDGRANGE_UPDATE_CA_FILE:-}" ]; then cp "$CLOUDGRANGE_UPDATE_CA_FILE" "$extra" 2>/dev/null || true
+    else trust_value caBundle > "$extra"; fi
+    if grep -q 'BEGIN CERTIFICATE' "$extra" 2>/dev/null; then
+        # Added to the system CAs, never instead of them.
+        CA_FILE="$WORK/ca-bundle.pem"
+        cat /etc/ssl/certs/ca-certificates.crt "$extra" > "$CA_FILE" 2>/dev/null || cat "$extra" > "$CA_FILE"
+    fi
+}
+
+url_host() { # <https url> -> lower-case host[:port], with a default :443 dropped
+    local h=${1#*://}
+    h=${h%%[/?#]*}; h=${h##*@}; h=${h,,}; h=${h%:443}
+    echo "$h"
+}
+
+# check_source <what> <url> <channel host>: https only, from the channel host or an allowed host.
+check_source() {
+    local what=$1 url=$2 chost=$3 h a
+    [[ "$url" == https://* ]] || { echo "$what must be downloaded over https:// (got ${url:-nothing}); refusing"; return 1; }
+    h=$(url_host "$url")
+    [ -n "$h" ] || { echo "$what URL has no host: $url"; return 1; }
+    [ "$h" = "$chost" ] && return 0
+    for a in $ALLOWED_HOSTS; do [ "$h" = "$(url_host "https://$a")" ] && return 0; done
+    echo "$what comes from $h, which is neither the update channel host ($chost) nor in platformUpdater.trust.allowedHosts; refusing"
+    return 1
+}
+
+signing_key() { # prints the path of a usable public key; fails when none is configured
     local key="$WORK/cosign.pub"
     if [ -n "${CLOUDGRANGE_SIGNING_KEY_FILE:-}" ]; then
         cp "$CLOUDGRANGE_SIGNING_KEY_FILE" "$key" 2>/dev/null || return 1
     else
         kubectl get configmap "$RELEASE-platform-updater-signing" -n "$NS" -o jsonpath='{.data.cosign\.pub}' > "$key" 2>/dev/null || return 1
     fi
+    # An empty or placeholder key is "no key configured", not an error.
     grep -q 'BEGIN PUBLIC KEY' "$key" && ! grep -qi placeholder "$key" || return 1
     echo "$key"
 }
 
-verify_manifest() { # <manifest> <sig>
+# verify_signature_if_configured <manifest> <manifest url>: optional. With a configured key the
+# signature must exist and verify; without one it is not fetched at all.
+verify_signature_if_configured() {
     local key
-    key=$(signing_key) || {
-        echo "no release signing key is configured (platformUpdater.signing.publicKey); refusing an unverifiable update"
-        return 1
-    }
-    # Offline key-pair verification (the air-gapped case): trust comes from the pinned public key,
-    # not from a transparency log the cluster may not be able to reach.
-    cosign verify-blob --key "$key" --signature "$2" --insecure-ignore-tlog=true "$1" >&2 2>"$WORK/cosign.err" \
+    key=$(signing_key) || { log "no release signing key configured: trust is HTTPS + SHA-256/digest pinning"; return 0; }
+    fetch "$2.sig" "$WORK/manifest.json.sig" \
+        || { echo "a release signing key is configured but the manifest has no signature ($2.sig); refusing"; return 1; }
+    # Offline key-pair verification: no transparency log the cluster may not reach.
+    cosign verify-blob --key "$key" --signature "$WORK/manifest.json.sig" --insecure-ignore-tlog=true "$1" >&2 2>"$WORK/cosign.err" \
         || { echo "release manifest signature is invalid: $(tail -1 "$WORK/cosign.err")"; return 1; }
+    log "release manifest signature verified"
 }
 
-fetch() { curl -fsSL --retry 3 --max-time 600 -o "$2" "$1"; }
+# https only, redirects included; the extra CA bundle (if any) is added to the system CAs.
+fetch() {
+    local -a ca=()
+    [ -n "$CA_FILE" ] && ca=(--cacert "$CA_FILE")
+    curl -fsSL --proto '=https' --proto-redir '=https' "${ca[@]}" --retry 3 --max-time 600 -o "$2" "$1"
+}
+
+# resolve_release <version> <manifest url or ''> -> downloads and verifies $WORK/manifest.json;
+# on refusal prints the reason and fails. Sets MANIFEST_URL and CHANNEL_HOST.
+MANIFEST_URL='' CHANNEL_HOST=''
+resolve_release() {
+    local version=$1 given=$2 m="$WORK/manifest.json" ch="$WORK/channel.json" channel_url ch_version want got reason
+    channel_url=$CHANNEL_URL
+    # No configured channel: an API that passes the channel document itself as --manifest-url.
+    [ -n "$channel_url" ] || channel_url=$given
+    [ -n "$channel_url" ] || { echo "no update channel is configured (api.updateChannel); nothing to verify the release against"; return 1; }
+    [[ "$channel_url" == https://* ]] || { echo "the update channel must be https:// (got $channel_url); refusing"; return 1; }
+    CHANNEL_HOST=$(url_host "$channel_url")
+    fetch "$channel_url" "$ch" || { echo "could not download the update channel from $channel_url"; return 1; }
+    [ "$(jq -r '.schema // empty' "$ch" 2>/dev/null)" = cg-onprem-channel-v1 ] \
+        || { echo "$channel_url is not an update channel (cg-onprem-channel-v1)"; return 1; }
+    ch_version=$(jq -r '.latest.version // empty' "$ch")
+    [ "$ch_version" = "$version" ] || { echo "the channel offers ${ch_version:-nothing}, not $version"; return 1; }
+    MANIFEST_URL=$(jq -r '.latest.manifestUrl // empty' "$ch")
+    want=$(jq -r '.latest.manifestSha256 // empty' "$ch" | tr 'A-F' 'a-f')
+    [ -n "$MANIFEST_URL" ] || { echo "the channel publishes no release manifest for $version (latest.manifestUrl); refusing"; return 1; }
+    [[ "$want" =~ ^[0-9a-f]{64}$ ]] || { echo "the channel publishes no SHA-256 for the $version release manifest (latest.manifestSha256); refusing"; return 1; }
+    # The API passes the manifest URL it read from the same channel; a different one is refused.
+    if [ -n "$given" ] && [ "$given" != "$MANIFEST_URL" ] && [ "$given" != "$channel_url" ]; then
+        echo "the requested manifest $given is not the one the channel lists ($MANIFEST_URL); refusing"; return 1
+    fi
+    reason=$(check_source "the release manifest" "$MANIFEST_URL" "$CHANNEL_HOST") || { echo "$reason"; return 1; }
+    fetch "$MANIFEST_URL" "$m" || { echo "could not download the release manifest from $MANIFEST_URL"; return 1; }
+    got=$(sha256sum "$m" | cut -d' ' -f1)
+    [ "$got" = "$want" ] || { echo "release manifest SHA-256 $got does not match the channel ($want); refusing"; return 1; }
+    verify_signature_if_configured "$m" "$MANIFEST_URL" || return 1
+}
+
+# check_manifest <version> <manifest file>: the content rules; prints the reason and fails on refusal.
+check_manifest() {
+    local version=$1 m=$2 unpinned comp image chart_url chart_sha
+    jq -e . "$m" >/dev/null 2>&1 || { echo "the release manifest is not valid JSON"; return 1; }
+    [ "$(jq -r .schema "$m")" = cg-release-manifest-v1 ] || { echo "unknown manifest schema"; return 1; }
+    [ "$(jq -r .platform "$m")" = "$version" ] || { echo "manifest is for $(jq -r .platform "$m"), not $version"; return 1; }
+    [ "$(jq -r '.dryRun // false' "$m")" = false ] || { echo "manifest is a dry run and cannot be applied"; return 1; }
+    # Every image the manifest names must be pinned by digest: a tag alone can be moved.
+    unpinned=$(jq -r '(.components // {}) | to_entries[] | select((.value.image // "") | test("@sha256:[0-9a-f]{64}$") | not) | .key' "$m")
+    [ -z "$unpinned" ] || { echo "the release manifest has images not pinned by @sha256 digest: $(echo $unpinned); refusing"; return 1; }
+    for comp in api portal relay platform-updater; do
+        image=$(jq -r --arg c "cloudgrange-$comp" '.components[$c].image // empty' "$m")
+        if [ -z "$image" ]; then
+            [ "$comp" = platform-updater ] && continue
+            echo "manifest does not pin cloudgrange-$comp"; return 1
+        fi
+        [[ "$image" =~ :$version@sha256:[0-9a-f]{64}$ ]] || { echo "cloudgrange-$comp is not pinned as :$version@sha256:<digest> ($image)"; return 1; }
+    done
+    chart_url=$(jq -r '.chart.url // empty' "$m"); chart_sha=$(jq -r '.chart.sha256 // empty' "$m")
+    [ -n "$chart_url" ] && [[ "$chart_sha" =~ ^[0-9a-f]{64}$ ]] || { echo "manifest does not pin the chart"; return 1; }
+    check_source "the chart" "$chart_url" "$CHANNEL_HOST"
+}
 
 # ---- apply -------------------------------------------------------------------------------------
 cmd_apply() {
@@ -275,9 +394,10 @@ cmd_apply() {
             *) usage ;;
         esac
     done
-    [ -n "$version" ] && [ -n "$manifest_url" ] || usage
+    [ -n "$version" ] || usage
     [[ "$version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-(preview|rc)\.[0-9]+)?$ ]] || die "invalid platform version: $version"
     resolve_target
+    load_trust
     TO_VERSION=$version
     refuse_if_running
 
@@ -290,51 +410,31 @@ cmd_apply() {
     [ "$status" = deployed ] || fail "release $RELEASE is '$status', not deployed; resolve that before updating"
     set_status running "verifying release manifest"
 
-    # 2-3. manifest: signature first, then content.
+    # 2-3. trust (https + channel SHA-256 + optional signature), then content.
     local m="$WORK/manifest.json" reason
-    fetch "$manifest_url" "$m" || fail "could not download the release manifest from $manifest_url"
-    # The API may pass the update CHANNEL document (cg-onprem-channel-v1) instead of the manifest.
-    # The channel is unsigned, so it is used only to find the manifest URL for the requested
-    # version; everything applied still comes from the signature-verified manifest.
-    if [ "$(jq -r '.schema // empty' "$m" 2>/dev/null)" = cg-onprem-channel-v1 ]; then
-        local ch_version ch_manifest
-        ch_version=$(jq -r '.latest.version // empty' "$m")
-        ch_manifest=$(jq -r '.latest.manifestUrl // .manifestUrl // empty' "$m")
-        [ "$ch_version" = "$version" ] || fail "the channel at $manifest_url offers ${ch_version:-nothing}, not $version"
-        [ -n "$ch_manifest" ] || fail "the channel at $manifest_url publishes no signed release manifest (latest.manifestUrl); refusing"
-        manifest_url=$ch_manifest
-        fetch "$manifest_url" "$m" || fail "could not download the release manifest from $manifest_url"
-    fi
-    fetch "$manifest_url.sig" "$WORK/manifest.json.sig" || fail "the release manifest has no signature ($manifest_url.sig)"
-    reason=$(verify_manifest "$m" "$WORK/manifest.json.sig") || fail "$reason"
-    jq -e . "$m" >/dev/null 2>&1 || fail "the release manifest is not valid JSON"
-    [ "$(jq -r .schema "$m")" = cg-release-manifest-v1 ] || fail "unknown manifest schema"
-    [ "$(jq -r .platform "$m")" = "$version" ] || fail "manifest is for $(jq -r .platform "$m"), not $version"
-    [ "$(jq -r '.dryRun // false' "$m")" = false ] || fail "manifest is a dry run and cannot be applied"
+    reason=$(resolve_release "$version" "$manifest_url") || fail "${reason:-the release could not be verified}"
+    # resolve_release ran in a subshell; recompute what it established (it already passed).
+    CHANNEL_HOST=$(url_host "${CHANNEL_URL:-$manifest_url}")
+    reason=$(check_manifest "$version" "$m") || fail "$reason"
     local upgrade_from; upgrade_from=$(jq -r '.upgradeFrom // empty' "$m")
     if [ -n "$upgrade_from" ] && ! in_range "$FROM_VERSION" "$upgrade_from"; then
         fail "installed $FROM_VERSION cannot update directly to $version (supported from: $upgrade_from)"
     fi
     local -a sets=(--set "global.image.tag=$version")
-    local comp key image digest
+    local comp image digest
     for comp in api portal relay platform-updater; do
         image=$(jq -r --arg c "cloudgrange-$comp" '.components[$c].image // empty' "$m")
+        [ -n "$image" ] || continue
         digest=${image##*@}
-        if [ -z "$image" ]; then
-            [ "$comp" = platform-updater ] && continue
-            fail "manifest does not pin cloudgrange-$comp"
-        fi
-        [[ "$image" =~ :$version@sha256:[0-9a-f]{64}$ ]] || fail "cloudgrange-$comp is not pinned as :$version@sha256:<digest> ($image)"
         case "$comp" in
             platform-updater) sets+=(--set "platformUpdater.image.tag=$version" --set "platformUpdater.image.digest=$digest") ;;
-            *) key=$comp; sets+=(--set "$key.image.digest=$digest") ;;
+            *) sets+=(--set "$comp.image.digest=$digest") ;;
         esac
     done
 
     # 4. chart + compatibility gate.
     local chart="$WORK/cloudgrange-$version.tgz" chart_url chart_sha kube_range kube
-    chart_url=$(jq -r '.chart.url // empty' "$m"); chart_sha=$(jq -r '.chart.sha256 // empty' "$m")
-    [ -n "$chart_url" ] && [[ "$chart_sha" =~ ^[0-9a-f]{64}$ ]] || fail "manifest does not pin the chart"
+    chart_url=$(jq -r '.chart.url' "$m"); chart_sha=$(jq -r '.chart.sha256' "$m")
     set_status running "downloading chart $version"
     fetch "$chart_url" "$chart" || fail "could not download the chart from $chart_url"
     echo "$chart_sha  $chart" | sha256sum -c - >/dev/null 2>&1 || fail "chart SHA-256 does not match the manifest"
@@ -424,8 +524,34 @@ cmd_rollback() {
     fi
 }
 
+# ---- verify (no cluster needed) ----------------------------------------------------------------
+# verify --version <v> [--manifest-url <url>]: the trust and content checks of `apply` and the chart
+# download, and nothing else. Changes nothing; used by the tests and to diagnose a refusal.
+cmd_verify() {
+    local version='' manifest_url='' reason chart
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --version) version=$2; shift 2 ;;
+            --manifest-url) manifest_url=$2; shift 2 ;;
+            *) usage ;;
+        esac
+    done
+    [ -n "$version" ] || usage
+    RELEASE=${RELEASE:-cloudgrange} NS=${NS:-cloudgrange}
+    load_trust
+    reason=$(resolve_release "$version" "$manifest_url") || { echo "REFUSED: $reason"; exit 1; }
+    CHANNEL_HOST=$(url_host "${CHANNEL_URL:-$manifest_url}")
+    reason=$(check_manifest "$version" "$WORK/manifest.json") || { echo "REFUSED: $reason"; exit 1; }
+    chart="$WORK/chart.tgz"
+    fetch "$(jq -r .chart.url "$WORK/manifest.json")" "$chart" || { echo "REFUSED: could not download the chart"; exit 1; }
+    echo "$(jq -r .chart.sha256 "$WORK/manifest.json")  $chart" | sha256sum -c - >/dev/null 2>&1 \
+        || { echo "REFUSED: chart SHA-256 does not match the manifest"; exit 1; }
+    echo "VERIFIED: $version"
+}
+
 case "${1:-}" in
     apply) shift; cmd_apply "$@" ;;
+    verify) shift; cmd_verify "$@" ;;
     rollback) shift; cmd_rollback "$@" ;;
     check-kube-range) # diagnostic: check-kube-range <range> [<kube-version>]
         shift; [ $# -ge 1 ] || usage

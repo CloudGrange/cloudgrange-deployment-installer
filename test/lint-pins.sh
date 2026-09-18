@@ -18,7 +18,11 @@
 #   7. wrappers                no `latest` default / unpinned download in the delivery-path
 #                              scripts, except entries listed in test/lint-pins.allow (each with a
 #                              reason). An allowlist entry that no longer matches also FAILS, so the
-#                              list can only shrink.
+#                              list can only shrink;
+#   8. update trust            HTTPS + digest pinning, no signing key (owner decision 2026-09-18):
+#                              every profile renders an https:// update channel for the updater;
+#                              the updater downloads https-only and refuses unpinned images; the
+#                              release tooling publishes manifestSha256 and needs no key.
 # Needs: bash, grep, sed, awk, helm. Exit 0 = clean; 1 = at least one failure (all are listed).
 #
 # Env overrides (used to prove the gate catches a planted regression):
@@ -203,6 +207,22 @@ if [ -f "$ALLOW" ]; then
         grep -qxF "$afile|$asub" "$WORK/allow-used" || fail "$ALLOW entry no longer matches anything — remove it: $afile|$asub"
     done < "$ALLOW"
 fi
+
+# ---- 8. update trust: HTTPS + digest pinning, no signing key --------------------------------------
+for vf in "" values-single-node.yaml values-azure.yaml values-multi-node.yaml; do
+    args=(); [ -n "$vf" ] && args=(-f "$CHART/$vf")
+    ch=$(helm template cg "$CHART" "${args[@]}" 2>/dev/null | sed -n 's/^  channelUrl: "\(.*\)"$/\1/p' | head -1)
+    [[ "$ch" == https://* ]] || fail "${vf:-chart defaults}: the platform updater's trust ConfigMap has no https:// channelUrl (${ch:-none})"
+done
+EP=images/platform-updater/entrypoint.sh
+grep -q -- "--proto '=https' --proto-redir '=https'" "$EP" || fail "$EP: downloads are not restricted to https (curl --proto =https --proto-redir =https)"
+grep -q 'not pinned by @sha256 digest' "$EP" || fail "$EP: no refusal of images not pinned by digest"
+grep -q 'latest.manifestSha256' "$EP" || fail "$EP: the release manifest is not pinned to the channel's manifestSha256"
+grep -qi 'refusing an unverifiable' "$EP" scripts/cloudgrange-updater-k3s.py \
+    && fail "an updater still refuses updates for lack of a signing key (owner decision 2026-09-18: signatures are optional)"
+grep -q '"manifestSha256"' scripts/release/Publish-Release.sh || fail "Publish-Release.sh does not publish latest.manifestSha256"
+grep -q '"manifestSha256"' scripts/release/Publish-ModuleCatalog.sh || fail "Publish-ModuleCatalog.sh does not publish manifestSha256"
+grep -q 'manifest.json.sig" \]' scripts/release/Publish-Release.sh || fail "Publish-Release.sh must treat manifest.json.sig as optional"
 
 if [ "$FAILS" -gt 0 ]; then echo "PIN-LINT: $FAILS failure(s)" >&2; exit 1; fi
 echo "PIN-LINT: OK — no latest and no unpinned versions in shipped artifacts"

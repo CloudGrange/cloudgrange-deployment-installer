@@ -9,7 +9,10 @@
 #   2. stamp the version into a copy of the chart (Set-ChartVersion.sh) and `helm package` it;
 #   3. write the release manifest (cg-release-manifest-v1, release-versioning.md) that pins the
 #      chart by SHA-256 and every first-party image by digest;
-#   4. sign the manifest with cosign when a key is given (manifest.json.sig).
+#   4. write manifest.json.sha256 — the value Publish-Release.sh puts in the channel as
+#      latest.manifestSha256, which is what the Platform updater pins the manifest to;
+#   5. OPTIONALLY sign the manifest with cosign when a key is given (manifest.json.sig). No key is
+#      required: update trust is HTTPS + SHA-256/digest pinning (owner decision 2026-09-18).
 #
 # DRY RUN BY DEFAULT: without --push nothing is tagged or pushed; the commands are printed and the
 # manifest is written with "dryRun": true, which the Platform updater refuses to apply.
@@ -20,7 +23,7 @@
 #       [--registry REG]      default ghcr.io/cloudgrange
 #       [--channel C]         preview|rc|stable (default preview)
 #       [--upgrade-from R]    SemVer range of installed versions this release can update (default ">=2609.0.0-0")
-#       [--cosign-key PATH]   sign manifest.json -> manifest.json.sig (cosign sign-blob --key)
+#       [--cosign-key PATH]   optional: also sign manifest.json -> manifest.json.sig (cosign sign-blob --key)
 #       [--push]              really tag and push; needs `docker login ghcr.io` with write access
 # --chart-base-url is where the chart .tgz will be published, e.g. $R2_PUBLIC_BASE/releases/<version>
 set -euo pipefail
@@ -131,6 +134,16 @@ if [ -n "$COSIGN_KEY" ]; then
     cosign sign-blob --yes --key "$COSIGN_KEY" --new-bundle-format=false --use-signing-config=false \
         --tlog-upload=false --output-signature "$OUT/manifest.json.sig" "$OUT/manifest.json" >/dev/null
 else
-    log "WARNING: no --cosign-key; manifest.json is UNSIGNED and the Platform updater will refuse it"
+    rm -f "$OUT/manifest.json.sig"
+    log "no --cosign-key: manifest.json is unsigned (optional); updates trust its SHA-256 in the channel and the image digests"
 fi
-log "wrote $OUT/manifest.json and $CHART_TGZ (sha256 $chart_sha)$([ "$PUSH" = 1 ] || echo ' — DRY RUN, nothing pushed')"
+# Every image in the manifest must be pinned by digest; the updater refuses anything else.
+python3 - "$OUT/manifest.json" <<'PY'
+import json, re, sys
+m = json.load(open(sys.argv[1]))
+bad = [k for k, c in m["components"].items() if not re.search(r"@sha256:[0-9a-f]{64}$", c.get("image", ""))]
+sys.exit("images not pinned by digest: %s" % ", ".join(bad) if bad else 0)
+PY
+manifest_sha=$(sha256sum "$OUT/manifest.json" | cut -d' ' -f1)
+printf '%s  manifest.json\n' "$manifest_sha" > "$OUT/manifest.json.sha256"
+log "wrote $OUT/manifest.json (sha256 $manifest_sha) and $CHART_TGZ (sha256 $chart_sha)$([ "$PUSH" = 1 ] || echo ' — DRY RUN, nothing pushed')"

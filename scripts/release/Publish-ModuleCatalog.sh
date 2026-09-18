@@ -12,6 +12,8 @@
 #      metadata.version set, and uploads it to modules/<id>/<version>/module.json (immutable: an
 #      existing, different manifest for the same id and version is refused);
 #   2. adds or replaces the <id, version> entry in modules/catalog.json, keeping every other entry.
+#      The entry carries manifestSha256 (the SHA-256 of module.json): update trust is HTTPS + digest
+#      pinning (owner decision 2026-09-18), no signing key.
 #
 # Required environment (never committed) — the same as Publish-Release.sh:
 #   CF_ACCOUNT_ID, CF_TOKEN, CF_TOKEN_ID, R2_BUCKET, R2_PUBLIC_BASE
@@ -72,7 +74,7 @@ case "$code" in
 esac
 
 python3 - "$WORK/catalog.in.json" "$WORK/module.json" "$MANIFEST_URL" > "$WORK/catalog.json" <<'PY'
-import json, sys, time
+import hashlib, json, sys, time
 catalog_path, manifest_path, manifest_url = sys.argv[1:4]
 catalog = json.load(open(catalog_path))
 if catalog.get("schema") != "cg-module-catalog-v1":
@@ -87,6 +89,7 @@ entry = {
     "publisher": md.get("publisher", "CloudGrange"),
     "image": spec["image"],
     "manifestUrl": manifest_url,
+    "manifestSha256": hashlib.sha256(open(manifest_path, "rb").read()).hexdigest(),
     "sdkVersion": spec.get("sdkVersion", ""),
 }
 modules = [x for x in catalog.get("modules", []) if not (x.get("id") == entry["id"] and x.get("version") == entry["version"])]

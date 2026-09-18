@@ -1,6 +1,10 @@
 # AB#9171 (plan 2026-09-18-foundation-platform-separation §4) — REFERENCE Job for the API (E2).
 # Not applied by the chart. It shows the Job the API should create for
 #   POST /api/v1/platform/updates/platform/apply {version}   -> args: apply --version ... --manifest-url ...
+# Trust is HTTPS + digest pinning, no signing key (owner decision 2026-09-18): the updater reads the
+# update channel from ConfigMap <release>-platform-updater-trust (rendered by the chart from
+# api.updateChannel, the URL the API reads) and pins the manifest to the channel's
+# latest.manifestSha256. --manifest-url must be the manifest that channel lists, or the channel itself.
 #   POST /api/v1/platform/updates/platform/rollback          -> args: rollback
 # Every <…> value comes from the API's environment (templates/platform-env-configmap.yaml):
 #   image              CLOUDGRANGE_PLATFORM_UPDATER_IMAGE
