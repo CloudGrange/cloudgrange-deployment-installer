@@ -295,7 +295,9 @@ class GeneralizeSecretWipeOrderingTests(unittest.TestCase):
         the log wipe a few lines below used shred, so whether the residue survived depended on
         the free-space pass happening to cover those blocks -- which it did not.
         """
-        for pattern in ("ssh_host_", "authorized_keys"):
+        # cloud-init is included because the installer's public key arrives as user-data and
+        # cloud-init keeps several copies of it.
+        for pattern in ("ssh_host_", "authorized_keys", "cloud-init"):
             self.assertIsNotNone(
                 re.search(rf"find[^\n]*{pattern}[^\n]*shred", self.text),
                 f"{pattern} is removed without shredding its content first; the key material is "

@@ -190,6 +190,16 @@ systemctl mask --runtime fwupd.service fwupd-refresh.service fwupd-refresh.timer
 rm -f /var/lib/fwupd/pki/secret.key /var/lib/fwupd/pki/client.pem
 
 echo "[generalize-k3s] cleaning cloud-init, machine-id and temp files"
+# AB#9186: cloud-init holds the installer's SSH public key too — it is delivered as user-data at
+# VM creation, and cloud-init keeps copies (user-data.txt, cloud-config.txt, the NoCloud seed, the
+# per-instance directory). `cloud-init clean` and `rm -rf` are plain deletes, which leave that
+# content in freed blocks exactly as the authorized_keys delete did.
+#
+# Overwriting before unlinking is the only reliable option here, because the root filesystem is
+# mounted with `discard` (see /etc/fstab): freed blocks are trimmed through to the virtual disk
+# immediately, so the later free-space fill cannot be relied on to re-allocate and overwrite those
+# same blocks. Shred while the file still owns them.
+find /var/lib/cloud /run/cloud-init -type f -exec shred -zun 3 {} \; 2>/dev/null || true
 cloud-init clean --logs --seed --machine-id
 rm -f /var/lib/dbus/machine-id
 rm -rf /var/lib/cloud/instances/*
