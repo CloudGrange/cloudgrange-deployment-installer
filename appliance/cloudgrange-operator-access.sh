@@ -21,6 +21,13 @@
 # and the console, makes sure the API's token file is gone, and marks itself done.
 # Import-CloudGrangeAppliance.ps1 reads the KVP items and shows them to the operator once.
 # Paths and timings can be overridden with CLOUDGRANGE_* variables (test/appliance/test_operator_access.py).
+#
+# AB#9171 — both appliance engines. CLOUDGRANGE_ENGINE=compose (the default, for the legacy Compose
+# appliance) talks to the stack through `docker compose` and its .env; CLOUDGRANGE_ENGINE=k3s (set by
+# cloudgrange-operator-access-k3s.service) talks to the Helm release through `k3s kubectl`: the API and
+# Keycloak by `kubectl exec`, the bootstrap secrets from the <release>-secrets Secret, and the address
+# first boot recorded in $STATE_DIR/appliance-address. The publication, freshness, rotation and cleanup
+# logic below is shared, so the K3s appliance gets exactly the behaviour the Compose one was tested for.
 set -euo pipefail
 
 COMPOSE_DIR=${CLOUDGRANGE_COMPOSE_DIR:-/opt/cloudgrange}
@@ -41,12 +48,72 @@ TOKEN_FILE=/etc/cloudgrange/secrets/cloudgrange-initial-admin-token.txt
 KC_CONFIG=/tmp/kcadm-cloudgrange.config
 REALM=cloudgrange
 REALM_ADMIN_USER=admin@cloudgrange.local
+ENGINE=${CLOUDGRANGE_ENGINE:-compose}
+NAMESPACE=${CLOUDGRANGE_NAMESPACE:-default}
+RELEASE=${CLOUDGRANGE_HELM_RELEASE:-cloudgrange}
 log() { echo "[operator-access] $*"; }
 
-cd "$COMPOSE_DIR"
-dc() { docker compose --env-file .env "$@"; }
-api() { dc exec -T cloudgrange-api "$@"; }
-env_value() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }
+# --- engine adapters: everything engine-specific is in these functions -----------------------------
+#   api CMD...                  run CMD in the API container
+#   restart_api                 restart the API (it issues a new setup token at startup)
+#   kc ARGS... / kc_in ARGS...  kcadm.sh in the Keycloak container (kc_in also forwards stdin)
+#   keycloak_admin_user/_password, realm_admin_password, store_realm_password NEW, appliance_address
+case "$ENGINE" in
+compose)
+    cd "$COMPOSE_DIR"
+    dc() { docker compose --env-file .env "$@"; }
+    api() { dc exec -T cloudgrange-api "$@"; }
+    env_value() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }
+    restart_api() { dc restart cloudgrange-api >/dev/null; }
+    # --config in /tmp (a tmpfs): Keycloak runs as a dedicated uid with no writable home directory. The
+    # session file holds a master-realm token, so it is deleted right after use (kc_logout).
+    kc() { dc exec -T -e KC_CLI_PASSWORD keycloak /opt/keycloak/bin/kcadm.sh "$@" --config "$KC_CONFIG"; }
+    kc_in() { kc "$@"; }
+    kc_logout() { dc exec -T keycloak rm -f "$KC_CONFIG" >/dev/null 2>&1 || true; }
+    keycloak_admin_user() { env_value KEYCLOAK_ADMIN_USER; }
+    keycloak_admin_password() { env_value KEYCLOAK_ADMIN_PASSWORD; }
+    realm_admin_password() { env_value CLOUDGRANGE_REALM_ADMIN_PASSWORD; }
+    store_realm_password() { sed -i "s/^CLOUDGRANGE_REALM_ADMIN_PASSWORD=.*/CLOUDGRANGE_REALM_ADMIN_PASSWORD=$1/" .env; }
+    appliance_address() { env_value CLOUDGRANGE_HOSTNAME; }
+    ;;
+k3s)
+    export KUBECONFIG=${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}
+    kctl() { k3s kubectl -n "$NAMESPACE" "$@"; }
+    api() { kctl exec "deploy/$RELEASE-api" -- "$@"; }
+    restart_api() { kctl rollout restart "deploy/$RELEASE-api" >/dev/null && kctl rollout status "deploy/$RELEASE-api" --timeout=900s >/dev/null; }
+    # kubectl exec has no -e: the master-realm password goes over stdin (first line) and is exported
+    # inside the container, so it never appears on a command line on the host or in the pod.
+    kc_k3s() {
+        kctl exec -i "deploy/$RELEASE-keycloak" -- /bin/bash -c \
+            'IFS= read -r KC_CLI_PASSWORD; export KC_CLI_PASSWORD; exec /opt/keycloak/bin/kcadm.sh "$@"' kcadm \
+            "$@" --config "$KC_CONFIG"
+    }
+    kc() { printf '%s\n' "$KC_CLI_PASSWORD" | kc_k3s "$@"; }
+    kc_in() { { printf '%s\n' "$KC_CLI_PASSWORD"; cat; } | kc_k3s "$@"; }
+    kc_logout() { kctl exec "deploy/$RELEASE-keycloak" -- rm -f "$KC_CONFIG" >/dev/null 2>&1 || true; }
+    secret_value() { kctl get secret "$RELEASE-secrets" -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d 2>/dev/null || true; }
+    keycloak_admin_user() { secret_value keycloak-admin-user; }
+    keycloak_admin_password() { secret_value keycloak-admin-password; }
+    realm_admin_password() { secret_value realm-admin-password; }
+    # Keep the Secret in step with Keycloak, as the Compose engine keeps .env in step. The value goes
+    # through a root-only patch file, never argv (visible to every local user in the process table).
+    store_realm_password() {
+        local f rc=0
+        f=$(mktemp)
+        chmod 600 "$f"
+        printf '{"data":{"realm-admin-password":"%s"}}' "$(printf '%s' "$1" | base64 -w0)" > "$f"
+        kctl patch secret "$RELEASE-secrets" --type merge --patch-file "$f" >/dev/null || rc=$?
+        shred -u "$f" 2>/dev/null || rm -f "$f"
+        return $rc
+    }
+    appliance_address() {
+        if [ -s "$STATE_DIR/appliance-address" ]; then head -1 "$STATE_DIR/appliance-address"
+        else hostname -I 2>/dev/null | awk '{print $1}'; fi
+    }
+    ;;
+*) echo "[operator-access] unknown CLOUDGRANGE_ENGINE: $ENGINE" >&2; exit 2 ;;
+esac
+
 setup_complete() { api curl -sf http://localhost:8080/api/v1/setup/status 2>/dev/null | grep -q '"setupComplete":true'; }
 # Whether first-run setup asks for the one-use token. It does not by default (CLOUDGRANGE_REQUIRE_SETUP_TOKEN).
 token_required() { api curl -sf http://localhost:8080/api/v1/setup/status 2>/dev/null | grep -q '"setupTokenRequired":true'; }
@@ -85,7 +152,7 @@ ensure_fresh_token() {
     if [ "$LAST_API_RESTART" -eq 0 ] || [ $(( now - LAST_API_RESTART )) -ge "$TOKEN_RESTART_BACKOFF_SECONDS" ]; then
         log "the setup token is missing or expired; restarting the API so it issues a new one before anything is published"
         LAST_API_RESTART=$now
-        dc restart cloudgrange-api >/dev/null || log "WARNING: API restart failed"
+        restart_api || log "WARNING: API restart failed"
         wait_api || log "WARNING: the API did not become ready after the restart"
         t=$(read_token)
         age=$(token_age)
@@ -178,15 +245,10 @@ expire_access() {
     log "setup was not completed after $MAX_ROTATIONS rotations; stopped publishing credentials (CloudGrange.State=setup-stale). Re-arm: docs/appliance-operator-access.md"
 }
 
-# --config in /tmp (a tmpfs): Keycloak runs as a dedicated uid with no writable home directory. The session
-# file holds a master-realm token, so it is deleted right after use (kc_logout).
-kc() { dc exec -T -e KC_CLI_PASSWORD keycloak /opt/keycloak/bin/kcadm.sh "$@" --config "$KC_CONFIG"; }
-kc_logout() { dc exec -T keycloak rm -f "$KC_CONFIG" >/dev/null 2>&1 || true; }
-
 reset_temporary_password() {
-    KC_CLI_PASSWORD=$(env_value KEYCLOAK_ADMIN_PASSWORD)
+    KC_CLI_PASSWORD=$(keycloak_admin_password)
     export KC_CLI_PASSWORD
-    kc config credentials --server http://localhost:8080 --realm master --user "$(env_value KEYCLOAK_ADMIN_USER)" >/dev/null
+    kc config credentials --server http://localhost:8080 --realm master --user "$(keycloak_admin_user)" >/dev/null
     local id actions new
     id=$(kc get users -r "$REALM" -q "username=$REALM_ADMIN_USER" -q exact=true --fields id | grep -o '"id" *: *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
     if [ -z "$id" ]; then
@@ -203,8 +265,8 @@ reset_temporary_password() {
         return 0
     fi
     new=$(openssl rand -hex 24)
-    printf '{"type":"password","value":"%s","temporary":true}' "$new" | kc update "users/$id/reset-password" -r "$REALM" -f - >/dev/null
-    sed -i "s/^CLOUDGRANGE_REALM_ADMIN_PASSWORD=.*/CLOUDGRANGE_REALM_ADMIN_PASSWORD=$new/" .env
+    printf '{"type":"password","value":"%s","temporary":true}' "$new" | kc_in update "users/$id/reset-password" -r "$REALM" -f - >/dev/null
+    store_realm_password "$new"
     REALM_ADMIN_PASSWORD=$new
     log "rotated the temporary realm administrator password"
 }
@@ -235,8 +297,8 @@ if [ "$TOKEN_REQUIRED" -eq 1 ]; then
 else
     log "the platform does not require a setup token; publishing the setup URL only"
 fi
-REALM_ADMIN_PASSWORD=$(env_value CLOUDGRANGE_REALM_ADMIN_PASSWORD)
-ADDRESS=$(env_value CLOUDGRANGE_HOSTNAME)
+REALM_ADMIN_PASSWORD=$(realm_admin_password)
+ADDRESS=$(appliance_address)
 
 mkdir -p "$STATE_DIR"
 [ -s "$WINDOW_FILE" ] || date +%s > "$WINDOW_FILE"

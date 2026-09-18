@@ -28,8 +28,17 @@ INSTALLER_DIR=/opt/cloudgrange-k3s-installer
 echo "[generalize-k3s] recording the deployed version for firstboot to reuse"
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 mkdir -p /etc/cloudgrange
-APPLIANCE_VERSION=$(k3s kubectl get deploy cloudgrange-api -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://' || true)
-echo "${APPLIANCE_VERSION:-latest}" > /etc/cloudgrange/appliance-version
+APPLIANCE_VERSION=$(k3s kubectl get deploy cloudgrange-api -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/@sha256:.*//; s/.*://' || true)
+# AB#9171: an appliance boots offline from the images baked into it (below), with the chart's
+# IfNotPresent pull policy. `latest` cannot work that way -- it is not a version, first boot has
+# nothing to pin to, and methodology rule 4 forbids it in any shipped artifact. Refuse here, before
+# anything destructive has happened, rather than ship an image that silently depends on a registry.
+case "${APPLIANCE_VERSION:-}" in
+    ""|latest)
+        echo "[generalize-k3s] ERROR: the deployed API image tag is '${APPLIANCE_VERSION:-<none>}'. Install a pinned release (Install-CloudGrange.ps1 -Version <YYMM.MINOR.PATCH>) before building an appliance." >&2
+        exit 1 ;;
+esac
+echo "$APPLIANCE_VERSION" > /etc/cloudgrange/appliance-version
 
 echo "[generalize-k3s] staging the K3s installer + charts persistently for firstboot"
 # Unlike the ephemeral SSH upload directory (removed at the end of this script), firstboot
@@ -42,6 +51,31 @@ cp -r "$STAGE_DIR/../scripts" "$STAGE_DIR/../charts" "$INSTALLER_DIR/" 2>/dev/nu
     exit 1
 }
 chmod +x "$INSTALLER_DIR/scripts/"*.sh
+# AB#9171: Install-CloudGrangeK3s.sh refuses to finish without the Foundation updater's unit (every
+# managed foundation has one), and installs the Foundation release signing key from the installer root.
+mkdir -p "$INSTALLER_DIR/appliance"
+cp "$STAGE_DIR/cloudgrange-updater-k3s.service" "$INSTALLER_DIR/appliance/"
+if [ -f "$STAGE_DIR/../cloudgrange-signing-key.pub" ]; then
+    cp "$STAGE_DIR/../cloudgrange-signing-key.pub" "$INSTALLER_DIR/"
+fi
+
+echo "[generalize-k3s] exporting every container image on this node for an offline first boot"
+# AB#9171: wiping /var/lib/rancher/k3s below also wipes containerd's image store, so without this the
+# customer's first boot had to pull every image (and K3s's own system images) from the internet -- an
+# appliance that cannot boot on an isolated network. Export exactly what this node is running, by
+# name (digest-only references are skipped; each image's named reference covers the same content), and
+# hand it back to K3s after the wipe. Images hold no install-time secrets: those live in the datastore.
+AIRGAP_DIR="$INSTALLER_DIR/airgap"
+mkdir -p "$AIRGAP_DIR"
+mapfile -t NODE_IMAGES < <(k3s ctr -n k8s.io images ls -q | grep -v '^sha256:' | sort -u)
+if [ "${#NODE_IMAGES[@]}" -eq 0 ]; then
+    echo "[generalize-k3s] ERROR: containerd reports no images to export" >&2
+    exit 1
+fi
+k3s ctr -n k8s.io images export --platform linux/amd64 "$AIRGAP_DIR/cloudgrange-images-amd64.tar" "${NODE_IMAGES[@]}"
+(cd "$AIRGAP_DIR" && sha256sum cloudgrange-images-amd64.tar > cloudgrange-images-amd64.tar.sha256)
+printf '%s\n' "${NODE_IMAGES[@]}" > "$AIRGAP_DIR/images.txt"
+echo "[generalize-k3s] exported ${#NODE_IMAGES[@]} images ($(du -m "$AIRGAP_DIR/cloudgrange-images-amd64.tar" | cut -f1) MiB)"
 
 echo "[generalize-k3s] stopping K3s and wiping its data directory"
 # K3s's own containerd (like Docker's) keeps deleted container specs — including their
@@ -62,6 +96,11 @@ else
     systemctl stop k3s.service 2>/dev/null || true
 fi
 rm -rf /var/lib/rancher/k3s /etc/rancher/k3s /var/lib/kubelet
+# K3s imports every tarball in agent/images into containerd when it starts, before any pod is
+# scheduled, so first boot never needs a registry. A hard link: the tarball is not stored twice.
+install -d -m 0755 /var/lib/rancher/k3s/agent/images
+ln "$AIRGAP_DIR/cloudgrange-images-amd64.tar" /var/lib/rancher/k3s/agent/images/cloudgrange-images-amd64.tar 2>/dev/null \
+    || cp "$AIRGAP_DIR/cloudgrange-images-amd64.tar" /var/lib/rancher/k3s/agent/images/cloudgrange-images-amd64.tar
 
 echo "[generalize-k3s] /opt/cloudgrange root-owned (if the compose fallback path ever ran here too)"
 if [ -d /opt/cloudgrange ]; then
@@ -77,10 +116,10 @@ systemctl enable cloudgrange-firstboot-k3s.service
 mkdir -p /etc/cloudgrange
 touch /etc/cloudgrange/firstboot-pending
 
-echo "[generalize-k3s] installing the in-app updater (AB#9189)"
-# Without this the K3s appliance has no in-app update path at all and a customer would have to
-# reinstall to take a new release -- the exact gap the Compose engine's cloudgrange-updater.service
-# has covered since AB#8129.
+echo "[generalize-k3s] installing the Foundation updater (AB#9189, AB#9171)"
+# The appliance is a managed foundation: CloudGrange owns its OS and K3s, and an administrator applies
+# Foundation updates from Platform -> Updates. This host service does that, and only on request.
+# (Platform updates run in the cluster, not here.)
 install -m 0755 "$STAGE_DIR/../scripts/cloudgrange-updater-k3s.py" /usr/local/sbin/cloudgrange-updater-k3s.py
 install -m 0644 "$STAGE_DIR/cloudgrange-updater-k3s.service" /etc/systemd/system/cloudgrange-updater-k3s.service
 # requests/ and incoming/ are the only places the non-root API pod may write; status/ is root-owned
@@ -92,11 +131,31 @@ install -d -m 0755 /var/lib/cloudgrange/updates/status
 systemctl daemon-reload
 systemctl enable cloudgrange-updater-k3s.service
 
+echo "[generalize-k3s] disabling automatic OS updates (owner decision 2026-09-18: an admin always clicks)"
+# The image must ship with them off, not just rely on first boot: a customer's VM may sit on a network
+# for a while before first-boot setup completes. Same settings as Install-CloudGrangeK3s.sh.
+install -d -m 0755 /etc/apt/apt.conf.d
+cat > /etc/apt/apt.conf.d/99cloudgrange-no-automatic-updates <<'APTCONF'
+// CloudGrange managed foundation (AB#9171): nothing is installed automatically. OS updates are
+// applied by an administrator from Platform -> Updates -> Foundation (cloudgrange-updater-k3s).
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+APT::Periodic::Unattended-Upgrade "0";
+APTCONF
+for unit in unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer; do
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    systemctl mask "$unit" >/dev/null 2>&1 || true
+done
+if command -v snap >/dev/null 2>&1; then snap refresh --hold >/dev/null 2>&1 || true; fi
+
 echo "[generalize-k3s] installing operator access (Hyper-V KVP + local console until setup completes)"
 install -d -m 0755 /usr/local/lib/cloudgrange
 install -m 0755 "$STAGE_DIR/cloudgrange-kvp.py" /usr/local/lib/cloudgrange/cloudgrange-kvp.py
 install -m 0755 "$STAGE_DIR/cloudgrange-operator-access.sh" /usr/local/sbin/cloudgrange-operator-access.sh
-install -m 0644 "$STAGE_DIR/cloudgrange-operator-access.service" /etc/systemd/system/cloudgrange-operator-access.service
+# AB#9171: the K3s unit, not the Compose one. The Compose unit Requires=cloudgrange.service, which does
+# not exist here, so on a K3s appliance it never ran and the operator never got the setup credentials.
+install -m 0644 "$STAGE_DIR/cloudgrange-operator-access-k3s.service" /etc/systemd/system/cloudgrange-operator-access-k3s.service
 # AB#9186 real bug, found via a real appliance build: the Ubuntu 24.04 cloud image
 # New-CloudGrangeVm.ps1 provisions does NOT ship linux-cloud-tools-virtual (the package
 # providing hv-kvp-daemon) — this used to hard-fail here instead of installing it. Install
@@ -112,11 +171,11 @@ fi
 install -d -m 0755 /etc/systemd/system/hv-kvp-daemon.service.d
 printf '[Service]\nUMask=0077\n' > /etc/systemd/system/hv-kvp-daemon.service.d/10-cloudgrange-umask.conf
 systemctl daemon-reload
-systemctl enable cloudgrange-operator-access.service
+systemctl enable cloudgrange-operator-access-k3s.service
 systemctl enable hv-kvp-daemon.service 2>/dev/null || { echo "[generalize-k3s] ERROR: hv-kvp-daemon (linux-cloud-tools) is not installed" >&2; exit 1; }
 grep -qx 'UMask=0077' /etc/systemd/system/hv-kvp-daemon.service.d/10-cloudgrange-umask.conf || { echo "[generalize-k3s] ERROR: hv-kvp-daemon UMask drop-in missing" >&2; exit 1; }
 [ "$(systemctl show -p UMask --value hv-kvp-daemon.service)" = "0077" ] || { echo "[generalize-k3s] ERROR: hv-kvp-daemon does not run with UMask=0077" >&2; exit 1; }
-systemctl stop cloudgrange-operator-access.service hv-kvp-daemon.service 2>/dev/null || true
+systemctl stop cloudgrange-operator-access-k3s.service hv-kvp-daemon.service 2>/dev/null || true
 rm -f /var/lib/hyperv/.kvp_pool_* /etc/issue.d/90-cloudgrange.issue /etc/cloudgrange/operator-access-cleared \
     /etc/cloudgrange/operator-access-stale /etc/cloudgrange/operator-access-rotations /etc/cloudgrange/operator-access-window-start
 rm -rf /run/cloudgrange-operator

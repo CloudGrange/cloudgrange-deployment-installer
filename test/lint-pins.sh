@@ -170,6 +170,9 @@ drift() { # <file> <extracted value> <pin key>
 }
 drift scripts/Install-CloudGrangeK3s.sh "$(sed -nE 's/^K3S_VERSION="\$\{CLOUDGRANGE_K3S_VERSION:-([^}]*)\}".*/\1/p' scripts/Install-CloudGrangeK3s.sh)" K3S_VERSION
 drift scripts/Install-CloudGrangeK3s.sh "$(sed -nE 's/^[[:space:]]*local helm_version="([^"]*)".*/\1/p' scripts/Install-CloudGrangeK3s.sh)" HELM_VERSION
+drift scripts/Install-CloudGrangeK3s.sh "$(sed -nE 's/^K3S_INSTALL_SH_SHA256="\$\{CLOUDGRANGE_K3S_INSTALL_SH_SHA256:-([^}]*)\}".*/\1/p' scripts/Install-CloudGrangeK3s.sh)" K3S_INSTALL_SH_SHA256
+drift scripts/Install-CloudGrangeK3s.sh "$(sed -nE 's/^FOUNDATION_VERSION="\$\{CLOUDGRANGE_FOUNDATION_VERSION:-([^}]*)\}".*/\1/p' scripts/Install-CloudGrangeK3s.sh)" FOUNDATION_VERSION
+drift scripts/Install-CloudGrangeK3s.sh "$(sed -nE 's/^FOUNDATION_CHANNEL_URL="\$\{CLOUDGRANGE_FOUNDATION_CHANNEL_URL:-([^}]*)\}".*/\1/p' scripts/Install-CloudGrangeK3s.sh)" FOUNDATION_CHANNEL_URL
 drift scripts/CloudGrange-Prereqs.ps1 "$(sed -nE "s/^\\\$script:CloudGrangeQemuVersion[[:space:]]*=[[:space:]]*'([^']*)'.*/\\1/p" scripts/CloudGrange-Prereqs.ps1)" QEMU_WINDOWS_BUILD
 drift "$CHART/values.yaml secretsBootstrap.image" "$(awk '/^secretsBootstrap:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/values.yaml")" CHART_SECRETS_BOOTSTRAP_IMAGE
 drift "$CHART/charts/observability/values.yaml busybox.image" "$(awk '/^busybox:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/charts/observability/values.yaml")" CHART_BUSYBOX_IMAGE

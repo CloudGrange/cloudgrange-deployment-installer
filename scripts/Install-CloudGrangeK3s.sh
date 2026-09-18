@@ -30,7 +30,10 @@ CHARTS_DIR="$BUNDLE_ROOT/charts"
 AIRGAP_DIR="${CLOUDGRANGE_AIRGAP_DIR:-$BUNDLE_ROOT/airgap}"
 UPDATES_DIR="${CLOUDGRANGE_UPDATES_SHARED:-/var/lib/cloudgrange/updates}"
 HOSTNAME_VALUE="${CLOUDGRANGE_HOSTNAME:-cloudgrange.local}"
-VERSION_VALUE="${CLOUDGRANGE_VERSION:-latest}"
+# AB#9171 (C1): empty means "the release the chart itself pins" (values.yaml global.image.tag, stamped
+# at release time). This used to default to `latest`, so the WRAPPER decided which Platform build ran,
+# overriding the chart -- and a bring-your-own-Kubernetes install of the same chart got a different one.
+VERSION_VALUE="${CLOUDGRANGE_VERSION:-}"
 
 # AB#9184/AB#9189 — K3s is PINNED, never "whatever get.k3s.io serves today". This script
 # previously ran a bare `curl -sfL https://get.k3s.io | sh -`, which installs whatever the
@@ -40,6 +43,25 @@ VERSION_VALUE="${CLOUDGRANGE_VERSION:-latest}"
 # retired New-CloudGrangeBundle.ps1 (see its CG-BUNDLE-ERR-001 notice). This pin is the
 # version verified end to end on a real Hyper-V VM install (AB#9185).
 K3S_VERSION="${CLOUDGRANGE_K3S_VERSION:-v1.36.4+k3s1}"
+# SHA-256 of K3s's install.sh at that tag; the online path checks the download against it.
+# Copy kept in sync with release/pins.conf K3S_INSTALL_SH_SHA256 (test/lint-pins.sh checks it).
+K3S_INSTALL_SH_SHA256="${CLOUDGRANGE_K3S_INSTALL_SH_SHA256:-46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad}"
+
+# AB#9171 — the Foundation release this installer lays down (plan 2026-09-18 §3: Foundation and
+# Platform have separate versions). Recorded in $ETC_DIR/foundation-version for the Foundation
+# updater, which reports it as installedVersion and advances it on each admin-applied update.
+FOUNDATION_VERSION="${CLOUDGRANGE_FOUNDATION_VERSION:-F2609.0.0}"
+# Where a foundation-check looks for newer Foundation releases (the Foundation card's "available"
+# version). Separate from the Platform update channel: separate releases, separate cadence.
+# Copies kept in sync with release/pins.conf: FOUNDATION_VERSION, FOUNDATION_CHANNEL_URL.
+FOUNDATION_CHANNEL_URL="${CLOUDGRANGE_FOUNDATION_CHANNEL_URL:-https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/foundation-preview.json}"
+
+# Host locations, overridable only so the qualification tests can run this script unprivileged
+# against a scratch tree. Production never sets these.
+ETC_DIR="${CLOUDGRANGE_ETC_DIR:-/etc/cloudgrange}"
+APT_CONF_DIR="${CLOUDGRANGE_APT_CONF_DIR:-/etc/apt/apt.conf.d}"
+SBIN_DIR="${CLOUDGRANGE_SBIN_DIR:-/usr/local/sbin}"
+SYSTEMD_DIR="${CLOUDGRANGE_SYSTEMD_DIR:-/etc/systemd/system}"
 
 # AB#9183: --hostname/--version give this script the same CLI contract as
 # Install-CloudGrange-Linux.sh, which delegates to this script under --engine k3s.
@@ -126,8 +148,14 @@ do_prereqs_checked() {
         local helm_tar="helm-${helm_version}-linux-amd64.tar.gz"
         local tmp_dir
         tmp_dir="$(mktemp -d)"
-        curl -sfL "https://get.helm.sh/${helm_tar}" -o "$tmp_dir/${helm_tar}"
-        curl -sfL "https://get.helm.sh/${helm_tar}.sha256sum" -o "$tmp_dir/${helm_tar}.sha256sum"
+        # AB#9171: an offline bundle carries the same pinned Helm tarball (New-ReleaseBundleK3s.sh);
+        # without this an air-gapped install died here, before K3s was even touched.
+        if [ -f "$AIRGAP_DIR/${helm_tar}" ] && [ -f "$AIRGAP_DIR/${helm_tar}.sha256sum" ]; then
+            cp "$AIRGAP_DIR/${helm_tar}" "$AIRGAP_DIR/${helm_tar}.sha256sum" "$tmp_dir/"
+        else
+            curl -sfL "https://get.helm.sh/${helm_tar}" -o "$tmp_dir/${helm_tar}"
+            curl -sfL "https://get.helm.sh/${helm_tar}.sha256sum" -o "$tmp_dir/${helm_tar}.sha256sum"
+        fi
         (cd "$tmp_dir" && sha256sum -c "${helm_tar}.sha256sum")
         tar -xzf "$tmp_dir/${helm_tar}" -C "$tmp_dir"
         install -m 0755 "$tmp_dir/linux-amd64/helm" /usr/local/bin/helm
@@ -138,27 +166,73 @@ do_prereqs_checked() {
         echo "vendored cert-manager chart missing: $CHARTS_DIR/vendor/cert-manager-v1.21.2.tgz" >&2
         exit 1
     fi
+    disable_automatic_updates
     install_updater
 }
 
-# AB#9189 — the in-app updater. The API pod mounts $UPDATES_DIR as a hostPath and drops update
-# requests + uploaded bundles there; this root service picks them up. Without it, a K3s install
-# has no in-app update path at all and a new release means a reinstall.
+# AB#9171 — owner decision 2026-09-18: on a managed foundation (every host this script installs:
+# the VHDX appliance, the Windows script's VM and the Linux script's server) an administrator
+# ALWAYS starts a Foundation update from Platform -> Updates. Nothing patches the host on its own,
+# not even security updates, so Ubuntu's own automatic machinery is switched off here: the
+# unattended-upgrades service, the apt-daily/apt-daily-upgrade timers that drive it, and snap
+# auto-refresh. The Foundation updater (cloudgrange-updater-k3s.service) runs apt itself, and only
+# when asked. Idempotent: the appliance's first boot runs this again.
+disable_automatic_updates() {
+    log "managed foundation: disabling automatic OS updates (an administrator applies them from Platform -> Updates)"
+    install -d -m 0755 "$APT_CONF_DIR"
+    cat > "$APT_CONF_DIR/99cloudgrange-no-automatic-updates" <<'APTCONF'
+// CloudGrange managed foundation (AB#9171): nothing is installed automatically. OS updates are
+// applied by an administrator from Platform -> Updates -> Foundation (cloudgrange-updater-k3s).
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+APT::Periodic::Unattended-Upgrade "0";
+APTCONF
+    chmod 0644 "$APT_CONF_DIR/99cloudgrange-no-automatic-updates"
+    local unit
+    for unit in unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer; do
+        # A unit that is not installed is already "off"; that is not an error.
+        if systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+            systemctl disable --now "$unit" >/dev/null 2>&1 || log "WARNING: could not disable $unit"
+            systemctl mask "$unit" >/dev/null 2>&1 || log "WARNING: could not mask $unit"
+        fi
+    done
+    if command -v snap >/dev/null 2>&1; then
+        snap refresh --hold >/dev/null 2>&1 || log "WARNING: could not hold snap auto-refresh"
+    fi
+}
+
+# AB#9189/AB#9171 — the Foundation updater (host service, managed foundations only). The API pod
+# mounts $UPDATES_DIR as a hostPath and drops Foundation requests (foundation-check/-apply/-rollback)
+# and uploaded Foundation releases there; this root service acts on them and on nothing else.
+# Platform updates do not come here any more: they run in the cluster.
 install_updater() {
     local src="$BUNDLE_ROOT/scripts/cloudgrange-updater-k3s.py"
     local unit_src="$BUNDLE_ROOT/appliance/cloudgrange-updater-k3s.service"
+    local key_src="$BUNDLE_ROOT/cloudgrange-signing-key.pub"
     # requests/ and incoming/ are the only directories the non-root API pod may write to;
     # status/ stays root-owned so the pod can read progress but never forge it.
     install -d -m 0755 "$UPDATES_DIR"
     install -d -m 0733 "$UPDATES_DIR/requests" "$UPDATES_DIR/incoming"
     install -d -m 0755 "$UPDATES_DIR/status"
-    [ -f "$src" ] || { log "updater not present in this bundle; skipping (no in-app updates)"; return 0; }
-    install -m 0755 "$src" /usr/local/sbin/cloudgrange-updater-k3s.py
-    if [ -f "$unit_src" ]; then
-        install -m 0644 "$unit_src" /etc/systemd/system/cloudgrange-updater-k3s.service
-        systemctl daemon-reload
-        systemctl enable --now cloudgrange-updater-k3s.service
+    # What Foundation this host is on. Written once: a re-run of this installer must not undo a
+    # Foundation update the administrator has applied since.
+    install -d -m 0755 "$ETC_DIR"
+    [ -s "$ETC_DIR/foundation-version" ] || echo "$FOUNDATION_VERSION" > "$ETC_DIR/foundation-version"
+    [ -s "$ETC_DIR/foundation-channel-url" ] || echo "$FOUNDATION_CHANNEL_URL" > "$ETC_DIR/foundation-channel-url"
+    # The key Foundation releases are verified against. The updater refuses every release while this
+    # is missing or still the repository placeholder, so a missing key fails closed, never open.
+    if [ -f "$key_src" ]; then
+        install -m 0644 "$key_src" "$ETC_DIR/foundation-signing-key.pub"
     fi
+    # The updater is part of every managed foundation (owner: no deploy without an updater), so a
+    # bundle or upload without it is a packaging error, not something to skip past.
+    [ -f "$src" ] || { echo "Foundation updater missing from this installer ($src)" >&2; exit 1; }
+    [ -f "$unit_src" ] || { echo "Foundation updater unit missing from this installer ($unit_src)" >&2; exit 1; }
+    install -m 0755 "$src" "$SBIN_DIR/cloudgrange-updater-k3s.py"
+    install -m 0644 "$unit_src" "$SYSTEMD_DIR/cloudgrange-updater-k3s.service"
+    systemctl daemon-reload
+    systemctl enable --now cloudgrange-updater-k3s.service
 }
 
 # AB#9184 — import the bundle's CloudGrange/vendor service images into containerd.
@@ -186,13 +260,22 @@ do_k3s_installed() {
     if [ -f "$AIRGAP_DIR/k3s" ] && [ -f "$AIRGAP_DIR/k3s-airgap-images-amd64.tar" ]; then
         log "air-gapped k3s install from bundle ($K3S_VERSION)"
         (cd "$AIRGAP_DIR" && sha256sum -c k3s.sha256 && sha256sum -c k3s-airgap-images-amd64.tar.sha256)
+        if [ -f "$AIRGAP_DIR/k3s-install.sh.sha256" ]; then (cd "$AIRGAP_DIR" && sha256sum -c k3s-install.sh.sha256); fi
         install -m 0755 "$AIRGAP_DIR/k3s" /usr/local/bin/k3s
         install -d -m 0755 /var/lib/rancher/k3s/agent/images
         install -m 0644 "$AIRGAP_DIR/k3s-airgap-images-amd64.tar" /var/lib/rancher/k3s/agent/images/
         INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_VERSION="$K3S_VERSION" sh "$AIRGAP_DIR/k3s-install.sh"
     else
         log "online k3s install, pinned to $K3S_VERSION"
-        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -
+        # AB#9171: K3s's install.sh as of the pinned tag, not whatever get.k3s.io serves today, and
+        # checked against the pinned SHA-256 before it runs as root.
+        local k3s_install_sh
+        k3s_install_sh=$(mktemp)
+        curl -sfL "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_VERSION//+/%2B}/install.sh" -o "$k3s_install_sh"
+        echo "$K3S_INSTALL_SH_SHA256  $k3s_install_sh" | sha256sum -c - >/dev/null \
+            || { rm -f "$k3s_install_sh"; echo "k3s install.sh for $K3S_VERSION does not match K3S_INSTALL_SH_SHA256" >&2; exit 1; }
+        INSTALL_K3S_VERSION="$K3S_VERSION" sh "$k3s_install_sh"
+        rm -f "$k3s_install_sh"
     fi
     # K3s's own install script starts+enables the systemd unit; wait for the
     # node to actually report Ready rather than trusting "service started" alone.
@@ -236,10 +319,12 @@ do_chart_installed() {
     # aren't Ready yet" (tolerable — do_ready is the real safety net for that) from
     # "the release doesn't exist at all" (a hard failure, fail loudly here instead of
     # silently continuing to a do_ready check that can't explain what's actually wrong).
+    local tag_args=()
+    [ -z "$VERSION_VALUE" ] || tag_args=(--set "global.image.tag=$VERSION_VALUE")
     helm upgrade --install cloudgrange "$CHARTS_DIR/cloudgrange" \
         -f "$CHARTS_DIR/cloudgrange/values-single-node.yaml" \
         --set "global.hostname=$HOSTNAME_VALUE" \
-        --set "global.image.tag=$VERSION_VALUE" \
+        "${tag_args[@]}" \
         --timeout 5m --wait || log "WARNING: 'helm upgrade --install --wait' did not succeed — continuing only far enough for the checks below to report exactly what is wrong; do_ready fails the install if any pod is not Ready"
     helm status cloudgrange >/dev/null 2>&1 || {
         echo "helm upgrade --install failed completely (no release exists) — see the error above" >&2

@@ -1,0 +1,26 @@
+# AB#9171 — appliance operator access for the K3s/Helm appliance: publish the setup URL, one-use setup
+# token (when required), temporary realm admin password and operator SSH key to Hyper-V KVP and the local
+# console until setup completes, then remove them. Same script as the Compose appliance
+# (cloudgrange-operator-access.sh), with the K3s engine adapter selected below. The Compose unit could not
+# be reused: it Requires=cloudgrange.service, which does not exist on a K3s appliance, so on a K3s
+# appliance it never started and the operator never received the setup credentials.
+[Unit]
+Description=CloudGrange appliance operator access, K3s engine (KVP and local console until setup completes)
+ConditionPathExists=!/etc/cloudgrange/operator-access-cleared
+# After the rotation ceiling nothing is published until an administrator re-arms (docs/appliance-operator-access.md).
+ConditionPathExists=!/etc/cloudgrange/operator-access-stale
+# First boot installs the release (and writes /etc/cloudgrange/appliance-address); the script itself also
+# waits for the API to be ready, so ordering here is a courtesy, not the correctness guarantee.
+Wants=k3s.service hv-kvp-daemon.service
+After=k3s.service cloudgrange-firstboot-k3s.service hv-kvp-daemon.service
+
+[Service]
+Type=simple
+Environment=CLOUDGRANGE_ENGINE=k3s
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+ExecStart=/usr/local/sbin/cloudgrange-operator-access.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

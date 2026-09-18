@@ -109,6 +109,230 @@ function Install-CloudGrangeQemu {
     Write-Host "  qemu-img installed at $InstallDir" -ForegroundColor Green
 }
 
+# ---------------------------------------------------------------------------------------------
+# AB#9171 (C3) — the VM's base disk. Windows PowerShell 5.1 compatible: New-CloudGrangeVm.ps1 runs
+# under powershell.exe because the Hyper-V module needs it.
+#
+# Preferred: download the pre-converted, pinned Ubuntu base VHDX that the release publishes
+# (scripts/release/New-UbuntuBaseVhdx.sh), so a customer's Windows host needs no qemu-img at all.
+# Fallback, ONLY when this release pins no base VHDX or it cannot be downloaded: the pinned Ubuntu
+# cloud image (by serial, never noble/current) converted locally with qemu-img. A checksum MISMATCH is
+# never a reason to fall back -- it means the file was altered or the pin is wrong, so it stops.
+# ---------------------------------------------------------------------------------------------
+
+function Read-CloudGrangePins {
+    <#
+    .SYNOPSIS
+        Reads release/pins.conf (KEY=VALUE, '#' comments) into a hashtable.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "CG-INST-ERR-014: the pins file $Path is missing; this installer package is incomplete."
+    }
+    $pins = @{}
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^\s*#') { continue }
+        if ($line -match '^([A-Z0-9_]+)=(.*)$') { $pins[$Matches[1]] = $Matches[2].Trim() }
+    }
+    return $pins
+}
+
+function Get-CloudGrangeSha256 {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+    # .NET directly, not Get-FileHash: under powershell.exe with a PSModulePath inherited from pwsh,
+    # Microsoft.PowerShell.Utility can resolve to the PS7 copy, which 5.1 cannot load, and
+    # Get-FileHash is then "not recognized" (reproduced while testing this function).
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).ProviderPath)
+    try {
+        return ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
+function Invoke-CloudGrangeDownload {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$OutFile)
+    $ProgressPreference = 'SilentlyContinue'   # the progress bar makes large downloads many times slower on 5.1
+    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+}
+
+function Get-CloudGrangePinnedBaseVhdx {
+    <#
+    .SYNOPSIS
+        Returns a verified pre-converted base VHDX in $CacheDir, or $null when the release pins none or
+        it cannot be downloaded (the caller then falls back to qemu-img). Throws on any checksum mismatch.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Pins,
+        [Parameter(Mandatory)][string]$CacheDir
+    )
+    $url     = [string]$Pins['UBUNTU_BASE_VHDX_ZIP_URL']
+    $zipSha  = [string]$Pins['UBUNTU_BASE_VHDX_ZIP_SHA256']
+    $vhdxSha = [string]$Pins['UBUNTU_BASE_VHDX_SHA256']
+    if ([string]::IsNullOrEmpty($url) -or $zipSha -notmatch '^[0-9a-f]{64}$' -or $vhdxSha -notmatch '^[0-9a-f]{64}$') {
+        Write-Host "  This release pins no pre-converted base VHDX." -ForegroundColor Gray
+        return $null
+    }
+    New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
+    $cached = Join-Path $CacheDir ('ubuntu-base-{0}.vhdx' -f $vhdxSha.Substring(0, 16))
+    if (Test-Path -LiteralPath $cached) {
+        if ((Get-CloudGrangeSha256 -Path $cached) -eq $vhdxSha) {
+            Write-Host "  Base VHDX: cached and verified ($cached)" -ForegroundColor Green
+            return $cached
+        }
+        Remove-Item -LiteralPath $cached -Force
+    }
+    $zip = Join-Path $CacheDir 'ubuntu-base-download.zip'
+    Write-Host "  Downloading the pre-converted Ubuntu base VHDX..."
+    try {
+        Invoke-CloudGrangeDownload -Uri $url -OutFile $zip
+    } catch {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        Write-Warning "The pre-converted base VHDX is unavailable ($($_.Exception.Message)); falling back to converting the pinned cloud image with qemu-img."
+        return $null
+    }
+    $actual = Get-CloudGrangeSha256 -Path $zip
+    if ($actual -ne $zipSha) {
+        Remove-Item -LiteralPath $zip -Force
+        throw "CG-INST-ERR-015: the base VHDX download does not match its pinned SHA-256 (expected $zipSha, got $actual). The download was deleted. This is not retried with qemu-img: a mismatch means the file was altered or the pin is wrong."
+    }
+    $extract = Join-Path $CacheDir 'ubuntu-base-extract'
+    Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+    Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+    Remove-Item -LiteralPath $zip -Force
+    $vhdx = Get-ChildItem -LiteralPath $extract -Filter '*.vhdx' -File | Select-Object -First 1
+    if (-not $vhdx) {
+        Remove-Item -LiteralPath $extract -Recurse -Force
+        throw "CG-INST-ERR-015: the base VHDX download contains no .vhdx file."
+    }
+    $actual = Get-CloudGrangeSha256 -Path $vhdx.FullName
+    if ($actual -ne $vhdxSha) {
+        Remove-Item -LiteralPath $extract -Recurse -Force
+        throw "CG-INST-ERR-015: the extracted base VHDX does not match its pinned SHA-256 (expected $vhdxSha, got $actual)."
+    }
+    Move-Item -LiteralPath $vhdx.FullName -Destination $cached -Force
+    Remove-Item -LiteralPath $extract -Recurse -Force
+    Write-Host "  Base VHDX: downloaded and verified" -ForegroundColor Green
+    return $cached
+}
+
+function Get-CloudGrangePinnedCloudImage {
+    <#
+    .SYNOPSIS
+        The pinned Ubuntu cloud image (by serial, from release/pins.conf), downloaded once into $CacheDir
+        and verified against the pinned SHA-256. Replaces the old noble/current download, which installed
+        whatever Canonical published that day and checked it against a checksum fetched from the same place.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Pins,
+        [Parameter(Mandatory)][string]$CacheDir
+    )
+    $serial = [string]$Pins['UBUNTU_CLOUDIMG_SERIAL']
+    $sha    = [string]$Pins['UBUNTU_CLOUDIMG_SHA256']
+    if ($serial -notmatch '^\d{8}(\.\d+)?$' -or $sha -notmatch '^[0-9a-f]{64}$') {
+        throw "CG-INST-ERR-014: release/pins.conf has no valid UBUNTU_CLOUDIMG_SERIAL/UBUNTU_CLOUDIMG_SHA256."
+    }
+    New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
+    $img = Join-Path $CacheDir "noble-server-cloudimg-amd64-$serial.img"
+    if ((Test-Path -LiteralPath $img) -and (Get-CloudGrangeSha256 -Path $img) -eq $sha) { return $img }
+    Remove-Item -LiteralPath $img -Force -ErrorAction SilentlyContinue
+    Write-Host "  Downloading the pinned Ubuntu 24.04 cloud image (serial $serial)..."
+    Invoke-CloudGrangeDownload -Uri "https://cloud-images.ubuntu.com/noble/$serial/noble-server-cloudimg-amd64.img" -OutFile $img
+    $actual = Get-CloudGrangeSha256 -Path $img
+    if ($actual -ne $sha) {
+        Remove-Item -LiteralPath $img -Force
+        throw "CG-INST-ERR-016: the Ubuntu cloud image (serial $serial) does not match its pinned SHA-256 (expected $sha, got $actual). The download was deleted."
+    }
+    return $img
+}
+
+function Convert-CloudGrangeCloudImage {
+    <#
+    .SYNOPSIS
+        Fallback only: resize a verified cloud image to 30 GB and convert it to a dynamic VHDX with qemu-img.
+    .DESCRIPTION
+        Works on a scratch copy. The old code resized the cached, verified download IN PLACE, so the next
+        install's checksum check always failed on it ("checksum mismatch. Re-download aborted.").
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ImagePath,
+        [Parameter(Mandatory)][string]$VhdxPath,
+        [switch]$InstallPinnedQemu
+    )
+    Initialize-CloudGrangePrereqs -InstallPinnedQemu:$InstallPinnedQemu
+    $qemuImg = (Get-Command qemu-img -ErrorAction Stop).Source
+    $work = "$VhdxPath.source.img"
+    Copy-Item -LiteralPath $ImagePath -Destination $work -Force
+    try {
+        # qemu-img resize supports qcow2/raw but not VHDX subformat=dynamic, and Resize-VHD fails
+        # post-conversion in SYSTEM context, so resize first. cloud-init growpart fills it on first boot.
+        Write-Host "  Expanding the image to 30 GB before conversion..."
+        & $qemuImg resize $work 30G
+        if ($LASTEXITCODE -ne 0) { throw "qemu-img resize failed (exit $LASTEXITCODE)." }
+        Write-Host "  Converting the cloud image to VHDX (qemu-img)..."
+        & $qemuImg convert -f qcow2 -O vhdx -o subformat=dynamic $work $VhdxPath
+        if ($LASTEXITCODE -ne 0) { throw "qemu-img convert failed (exit $LASTEXITCODE)." }
+    } finally {
+        Remove-Item -LiteralPath $work -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function New-CloudGrangeBaseDisk {
+    <#
+    .SYNOPSIS
+        Puts the VM's 30 GB Ubuntu 24.04 base disk at $VhdxPath: the pinned pre-converted VHDX when the
+        release has one (no qemu-img), else the pinned cloud image converted with qemu-img.
+    .PARAMETER BundledImagePath
+        Offline installs: a base .vhdx (preferred) or a cloud .img shipped next to the installer.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$VhdxPath,
+        [Parameter(Mandatory)][string]$PinsPath,
+        [string]$BundledImagePath = '',
+        [switch]$InstallPinnedQemu
+    )
+    $pins = Read-CloudGrangePins -Path $PinsPath
+    $cacheDir = Split-Path $VhdxPath -Parent
+    $base = $null
+    $image = $null
+    if (-not [string]::IsNullOrEmpty($BundledImagePath)) {
+        if (-not (Test-Path -LiteralPath $BundledImagePath)) { throw "Bundled image not found at: $BundledImagePath" }
+        if ($BundledImagePath -like '*.vhdx') {
+            $want = [string]$pins['UBUNTU_BASE_VHDX_SHA256']
+            if ($want -match '^[0-9a-f]{64}$' -and (Get-CloudGrangeSha256 -Path $BundledImagePath) -ne $want) {
+                throw "CG-INST-ERR-015: the bundled base VHDX does not match the SHA-256 pinned in release/pins.conf."
+            }
+            $base = $BundledImagePath
+        } else {
+            $want = [string]$pins['UBUNTU_CLOUDIMG_SHA256']
+            if ((Get-CloudGrangeSha256 -Path $BundledImagePath) -ne $want) {
+                throw "CG-INST-ERR-016: the bundled cloud image does not match the SHA-256 pinned in release/pins.conf."
+            }
+            $image = $BundledImagePath
+        }
+    } else {
+        $base = Get-CloudGrangePinnedBaseVhdx -Pins $pins -CacheDir $cacheDir
+        if (-not $base) { $image = Get-CloudGrangePinnedCloudImage -Pins $pins -CacheDir $cacheDir }
+    }
+    if ($base) {
+        # A plain copy, not a differencing disk: the appliance build exports this very file.
+        Write-Host "  Creating the VM disk from the pre-converted base VHDX (no qemu-img needed)..."
+        Copy-Item -LiteralPath $base -Destination $VhdxPath -Force
+    } else {
+        Convert-CloudGrangeCloudImage -ImagePath $image -VhdxPath $VhdxPath -InstallPinnedQemu:$InstallPinnedQemu
+    }
+    Clear-CloudGrangeSparseAttribute -Path $VhdxPath
+}
+
 function Clear-CloudGrangeSparseAttribute {
     <#
     .SYNOPSIS

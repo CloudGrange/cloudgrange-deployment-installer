@@ -1,14 +1,6 @@
 # AB#9171 — known unpinned spots in the delivery-path wrappers that test/lint-pins.sh tolerates.
 # Format: <file>|<exact substring of the offending line>|<reason / owner>
 # Each entry must still match, or the gate fails: fix the wrapper, then delete its line here.
-# These wrappers are owned by the wrapper/compose-updater change running in parallel (plan
-# 2026-09-18-foundation-platform-separation C1); they stay listed until that change lands.
-Install-CloudGrange.ps1|[string]$Version = 'latest'|Windows wrapper default image tag; should default to the chart appVersion (pass no tag)
-Install-CloudGrange-Linux.sh|VERSION="latest"|Linux wrapper default image tag; same fix
-Build-CloudGrangeApplianceK3s.ps1|[string]$Version = 'latest'|VHDX build default image tag; same fix
-scripts/Deploy-K3sHelm.ps1|[string]$Version = 'latest'|Windows->VM K3s deploy default image tag; same fix
-scripts/Install-CloudGrangeK3s.sh|VERSION_VALUE="${CLOUDGRANGE_VERSION:-latest}"|K3s installer passes --set global.image.tag=latest by default; should omit the --set when no version is given
-scripts/Install-CloudGrangeK3s.sh|curl -sfL https://get.k3s.io|online path runs the current get.k3s.io script (binary is pinned by INSTALL_K3S_VERSION); should use the install.sh at the pinned tag (K3S_INSTALL_SH_SHA256)
-scripts/New-CloudGrangeVm.ps1|noble/current/noble-server-cloudimg-amd64.img|Windows script downloads the CURRENT Ubuntu image; should use UBUNTU_CLOUDIMG_SERIAL/SHA256 from release/pins.conf
-scripts/New-CloudGrangeVm.ps1|noble/current/SHA256SUMS|same: verifies against the current checksum list instead of the pinned hash
-appliance/cloudgrange-generalize-k3s.sh|APPLIANCE_VERSION:-latest|appliance version file defaults to latest when the build passes none
+# Empty on purpose: the thin-wrapper change (plan 2026-09-18-foundation-platform-separation C1)
+# removed every `latest` default, the get.k3s.io script and the Ubuntu noble/current download.
+# Adding an entry here is a regression that needs a reason and an owner.

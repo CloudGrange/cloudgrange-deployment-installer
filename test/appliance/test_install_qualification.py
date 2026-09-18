@@ -95,6 +95,12 @@ class Harness:
         env["CG_FAIL_ON"] = fail_on or ""
         env["CLOUDGRANGE_INSTALL_STATE"] = self.state
         env["CLOUDGRANGE_UPDATES_SHARED"] = self.updates
+        # AB#9171: the prereqs stage installs the Foundation updater and turns off automatic OS
+        # updates; keep both inside the sandbox instead of the machine running the tests.
+        for var, sub in (("CLOUDGRANGE_ETC_DIR", "etc-cloudgrange"), ("CLOUDGRANGE_APT_CONF_DIR", "apt.conf.d"),
+                         ("CLOUDGRANGE_SBIN_DIR", "sbin"), ("CLOUDGRANGE_SYSTEMD_DIR", "systemd")):
+            env[var] = os.path.join(self.tmp, sub)
+            os.makedirs(env[var], exist_ok=True)
         return env
 
     def run(self, fail_on=None):
@@ -181,6 +187,46 @@ class InterruptAndResumeTests(unittest.TestCase):
                 self.assertTrue(self.h.stages().get(stage))
         else:
             self.assertNotIn("install complete", proc.stdout)
+
+
+class ManagedFoundationTests(unittest.TestCase):
+    """AB#9171: every install this script performs is a managed foundation. It must leave the
+    Foundation updater running and Ubuntu's automatic updates off, and never reset the recorded
+    Foundation version on a re-run."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.h = Harness(self.tmp)
+
+    def test_a_clean_run_installs_the_foundation_updater_and_disables_automatic_updates(self):
+        proc = self.h.run()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        j = lambda *p: os.path.join(self.tmp, *p)  # noqa: E731
+        with open(j("apt.conf.d", "99cloudgrange-no-automatic-updates")) as f:
+            self.assertIn('APT::Periodic::Unattended-Upgrade "0";', f.read())
+        self.assertTrue(os.path.isfile(j("sbin", "cloudgrange-updater-k3s.py")))
+        self.assertTrue(os.path.isfile(j("systemd", "cloudgrange-updater-k3s.service")))
+        with open(j("etc-cloudgrange", "foundation-version")) as f:
+            self.assertRegex(f.read().strip(), r"^F\d{4}\.\d+\.\d+$")
+        self.assertTrue(os.path.isfile(j("etc-cloudgrange", "foundation-signing-key.pub")))
+        with open(j("etc-cloudgrange", "foundation-channel-url")) as f:
+            self.assertRegex(f.read().strip(), r"^https://\S+\.json$", "foundation-check needs a channel to report availableVersion")
+        calls = open(self.h.log).read()
+        self.assertIn("systemctl enable --now cloudgrange-updater-k3s.service", calls)
+        for unit in ("unattended-upgrades.service", "apt-daily-upgrade.timer"):
+            self.assertIn("systemctl disable --now %s" % unit, calls)
+            self.assertIn("systemctl mask %s" % unit, calls)
+
+    def test_a_rerun_keeps_a_foundation_version_an_update_already_advanced(self):
+        path = os.path.join(self.tmp, "etc-cloudgrange", "foundation-version")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("F2610.3.1\n")
+        proc = self.h.run()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        with open(path) as f:
+            self.assertEqual(f.read().strip(), "F2610.3.1")
 
 
 class UninstallRetentionTests(unittest.TestCase):

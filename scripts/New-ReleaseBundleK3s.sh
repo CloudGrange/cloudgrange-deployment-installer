@@ -63,6 +63,8 @@ cp "$SOURCE/scripts/Install-CloudGrangeK3s.sh" "$SOURCE/scripts/New-ArtifactMani
 cp "$SOURCE/scripts/cloudgrange-updater-k3s.py" "$B/scripts/"
 mkdir -p "$B/appliance"
 cp "$SOURCE/appliance/cloudgrange-updater-k3s.service" "$B/appliance/"
+# AB#9171: the key Foundation releases are verified against (installed to /etc/cloudgrange by the installer).
+cp "$SOURCE/cloudgrange-signing-key.pub" "$B/cloudgrange-signing-key.pub"
 cp -r "$SOURCE/charts/cloudgrange" "$B/charts/cloudgrange"
 mkdir -p "$B/charts/vendor"
 cp "$SOURCE/charts/vendor/"*.tgz "$B/charts/vendor/"
@@ -96,12 +98,26 @@ if [ "$IMAGES" = registry ]; then
     # rather than trusting the download, then emit per-file .sha256 the installer verifies.
     (cd "$A" && grep -E ' (k3s|k3s-airgap-images-amd64\.tar)$' "$WORK/k3s-sha256sum.txt" | sed 's| .*/| |' | sha256sum -c -)
     (cd "$A" && sha256sum k3s > k3s.sha256 && sha256sum k3s-airgap-images-amd64.tar > k3s-airgap-images-amd64.tar.sha256)
-    # AB#9171: the installer script at the pinned K3s tag, checksum-verified — get.k3s.io serves
-    # whatever install.sh is current, which made the bundle's installer script unpinned.
+    # AB#9171: K3s's install.sh as of the PINNED tag, not whatever get.k3s.io serves on the day the
+    # bundle is built (the same script also performs the Foundation updater's K3s upgrades). It is
+    # checked against K3S_INSTALL_SH_SHA256 in release/pins.conf, then given the per-file .sha256
+    # that Install-CloudGrangeK3s.sh verifies on the target.
     K3S_INSTALL_SH_SHA256=$(sed -n 's/^K3S_INSTALL_SH_SHA256=//p' "$PINS/pins.conf" | tr -d '[:space:]')
+    [[ "$K3S_INSTALL_SH_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "K3S_INSTALL_SH_SHA256 missing or malformed in release/pins.conf" >&2; exit 1; }
     curl -sfL "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_VERSION//+/%2B}/install.sh" -o "$A/k3s-install.sh"
     echo "$K3S_INSTALL_SH_SHA256  $A/k3s-install.sh" | sha256sum -c - >/dev/null \
         || { echo "k3s install.sh does not match K3S_INSTALL_SH_SHA256 in release/pins.conf" >&2; exit 1; }
+    (cd "$A" && sha256sum k3s-install.sh > k3s-install.sh.sha256)
+
+    # AB#9171: Helm too. Install-CloudGrangeK3s.sh installs it from here when the host has none, and
+    # without it an offline install died at its very first stage fetching get.helm.sh.
+    HELM_VERSION=$(sed -n 's/^HELM_VERSION=//p' "$PINS/pins.conf" | tr -d '[:space:]')
+    HELM_SHA=$(sed -n 's/^HELM_LINUX_AMD64_SHA256=//p' "$PINS/pins.conf" | tr -d '[:space:]')
+    [[ "$HELM_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$HELM_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "HELM_VERSION/HELM_LINUX_AMD64_SHA256 missing or malformed in release/pins.conf" >&2; exit 1; }
+    helm_tar="helm-${HELM_VERSION}-linux-amd64.tar.gz"
+    curl -sfL "https://get.helm.sh/${helm_tar}" -o "$A/${helm_tar}"
+    printf '%s  %s\n' "$HELM_SHA" "$helm_tar" > "$A/${helm_tar}.sha256sum"
+    (cd "$A" && sha256sum -c "${helm_tar}.sha256sum")
 
     # Derive the image list from the rendered chart -- never a hand-maintained list, which
     # would silently drift the moment a subchart changes an image. cert-manager is rendered

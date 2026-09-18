@@ -74,8 +74,18 @@ if [ -z "$IP" ]; then
 fi
 echo "[firstboot-k3s] address: $IP"
 
+# AB#9171: the address the operator-access service (cloudgrange-operator-access-k3s.service)
+# publishes over KVP and on the console as the setup URL.
+echo "$IP" > /etc/cloudgrange/appliance-address
+
 echo "[firstboot-k3s] running the K3s/Helm installer (fresh state -> fresh secrets via AB#9178)"
-VERSION=$(cat /etc/cloudgrange/appliance-version 2>/dev/null || echo latest)
+# The pinned release baked into this image (cloudgrange-generalize-k3s.sh refuses to build without one).
+# Its images are already in K3s's agent/images directory, so this needs no registry.
+VERSION=$(cat /etc/cloudgrange/appliance-version 2>/dev/null || true)
+if [ -z "$VERSION" ] || [ "$VERSION" = latest ]; then
+    echo "[firstboot-k3s] ERROR: /etc/cloudgrange/appliance-version does not name a pinned release; leaving the marker"
+    exit 1
+fi
 rm -f /opt/cloudgrange/.install-state.json
 bash "$INSTALLER_DIR/scripts/Install-CloudGrangeK3s.sh" --hostname "$IP" --version "$VERSION"
 
