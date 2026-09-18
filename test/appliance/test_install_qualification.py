@@ -263,14 +263,14 @@ class GeneralizeSecretWipeOrderingTests(unittest.TestCase):
 
     def test_journald_is_made_volatile_before_the_free_space_wipe(self):
         volatile = self._line_of("Storage=volatile")
-        wipe = self._line_of("of=/var/cloudgrange-zerofill")
+        wipe = self._line_of("of=/cloudgrange-zerofill")
         self.assertLess(volatile, wipe,
                         "journald must be volatile before the wipe, or the shutdown-time journal "
                         "flush writes install-time secrets into blocks the wipe already passed")
 
     def test_the_staged_upload_is_removed_before_the_wipe_not_after(self):
         remove = self._line_of('rm -rf "$STAGE_DIR"')
-        wipe = self._line_of("of=/var/cloudgrange-zerofill")
+        wipe = self._line_of("of=/cloudgrange-zerofill")
         self.assertLess(remove, wipe,
                         "deleting the staged upload after the wipe leaves its contents in freed "
                         "blocks the wipe already went over")

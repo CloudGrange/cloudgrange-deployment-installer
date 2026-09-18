@@ -219,10 +219,34 @@ STAGE_PARENT="$(dirname "$STAGE_DIR")"
 rm -rf "$STAGE_DIR"
 
 echo "[generalize-k3s] overwriting free space (deleted secrets must not survive in freed blocks)"
+# AB#9186: this pass is the ONLY thing that can clear blocks freed before this script ran — a
+# forensic trace of the last remaining finding was cloud-init NoCloud seed user-data (containing
+# ssh_authorized_keys) sitting in a block with no owning inode, i.e. freed long before
+# generalization started. Shredding live files cannot reach those; only overwriting free space can.
+#
+# It used to be `dd ... 2>/dev/null || true`, which hid whether the fill did anything at all. dd is
+# EXPECTED to end in ENOSPC — that is success, not failure — so the only meaningful check is
+# whether it actually consumed the free space, and that is now asserted rather than assumed.
 sync
-dd if=/dev/zero of=/var/cloudgrange-zerofill bs=16M status=none 2>/dev/null || true
+avail_kb_before=$(df --output=avail -k / | tail -1 | tr -d ' ')
+echo "[generalize-k3s] free space before fill: $((avail_kb_before / 1024)) MiB"
+# Fill the root filesystem. ENOSPC is the intended stopping condition.
+dd if=/dev/zero of=/cloudgrange-zerofill bs=16M status=none 2>/dev/null || true
 sync
-rm -f /var/cloudgrange-zerofill
+filled_kb=$(du -k /cloudgrange-zerofill 2>/dev/null | awk '{print $1}')
+filled_kb=${filled_kb:-0}
+avail_kb_after=$(df --output=avail -k / | tail -1 | tr -d ' ')
+echo "[generalize-k3s] fill wrote $((filled_kb / 1024)) MiB; free space now $((avail_kb_after / 1024)) MiB"
+# The fill must leave the filesystem essentially full. Allow 64 MiB of slack for metadata and the
+# root-reserved blocks; more than that means the fill stopped early and freed blocks were NOT
+# overwritten, which is exactly the silent failure that let key material reach four exported images.
+if [ "$avail_kb_after" -gt 65536 ]; then
+    echo "[generalize-k3s] ERROR: free-space overwrite stopped early — $((avail_kb_after / 1024)) MiB still free." >&2
+    echo "[generalize-k3s] Refusing to continue: blocks freed before generalization would keep their contents." >&2
+    rm -f /cloudgrange-zerofill
+    exit 1
+fi
+rm -f /cloudgrange-zerofill
 sync
 echo "[generalize-k3s] discarding free blocks"
 fstrim -av || true
