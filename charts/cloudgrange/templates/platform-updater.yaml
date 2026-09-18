@@ -171,15 +171,23 @@ subjects:
     name: {{ $name }}
     namespace: {{ $.Release.Namespace }}
 {{- end }}
+{{- /* pg_dump backups (one directory per update) the updater restores from on failure or rollback.
+AB#9171 (found on kind v1.34): as a normal release resource this PVC blocked every `helm install
+--wait` for its full timeout. Nothing mounts it until an update runs, so on a WaitForFirstConsumer
+StorageClass it never binds, and Helm waits for every release PVC to be Bound. It is therefore a
+hook resource (Helm does not wait on hook PVCs), created once: `lookup` skips it when it already
+exists, so no install or upgrade ever recreates it, and it has no delete policy — a backup must
+outlive a failed or uninstalled release, which is what it is for. */ -}}
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "%s-backups" $name)) }}
 ---
-# pg_dump backups (one directory per update) the updater restores from on failure or rollback.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ $name }}-backups
   labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
   annotations:
-    # A backup must outlive a failed or uninstalled release — that is what it is for.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
     "helm.sh/resource-policy": keep
 spec:
   accessModes: ["ReadWriteOnce"]
@@ -189,6 +197,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.platformUpdater.backup.size }}
+{{- end }}
 {{- if .Values.platformUpdater.signing.publicKey }}
 ---
 # The cosign public key the updater verifies release manifests against. The updater reads it with
