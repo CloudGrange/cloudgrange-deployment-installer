@@ -274,6 +274,39 @@ if [ -n "$root_dev" ]; then
 fi
 echo "[generalize-k3s] discarding free blocks"
 fstrim -av || true
+
+# AB#9186 — the final, authoritative wipe.
+#
+# Everything above is best-effort: shredding covers live files, and the dd fill covers blocks that
+# were already free when it ran. Neither can cover a block written AFTER the fill, and evidence
+# said something was doing exactly that. A verified-complete fill (0 MiB free, 0% reserved) still
+# left installer-key bytes in blocks that were free, not the journal, not swap, not outside the
+# root partition, and not a VHDX-file artifact — which only leaves a write during the
+# fill→poweroff window.
+#
+# Remounting the root filesystem read-only removes that window by construction: after this point
+# nothing can write to the disk at all. zerofree then zeroes every unallocated block of the
+# read-only filesystem, which is precisely the job it exists for and which cannot be done safely
+# on a read-write mount.
+echo "[generalize-k3s] installing zerofree for the final free-block wipe"
+if ! command -v zerofree >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq -y zerofree >/dev/null 2>&1 || true
+fi
+
+if command -v zerofree >/dev/null 2>&1 && [ -n "$root_dev" ]; then
+    echo "[generalize-k3s] remounting / read-only (nothing may write after this point)"
+    sync
+    if mount -o remount,ro / 2>/dev/null; then
+        echo "[generalize-k3s] zeroing every free block on $root_dev"
+        # Non-fatal: a failure here leaves the image no worse than the passes above, and the
+        # build's own secret scan is the gate that decides whether it ships.
+        zerofree -v "$root_dev" || echo "[generalize-k3s] WARNING: zerofree failed on $root_dev" >&2
+    else
+        echo "[generalize-k3s] WARNING: could not remount / read-only; skipping zerofree" >&2
+    fi
+else
+    echo "[generalize-k3s] WARNING: zerofree unavailable; relying on the fill pass alone" >&2
+fi
 sync
 
 # This must be the LAST thing the script does. Nothing may write to disk between the wipe above
@@ -282,5 +315,10 @@ sync
 # the shutdown transaction's own logging cannot land on disk either.
 echo "[generalize-k3s] complete; powering off in 5 seconds"
 cd /
+# The root filesystem is read-only from here (see the zerofree step), so this is expected to fail
+# and is harmless -- the staged directory's contents were already removed before the wipe.
 rmdir "$STAGE_PARENT" 2>/dev/null || true
-systemd-run --on-active=5 /bin/systemctl poweroff >/dev/null
+# systemd-run writes its transient unit to /run, which is tmpfs, so this still works on a
+# read-only root. Use `poweroff -f` so shutdown does not try to remount or fsck the disk we just
+# finished zeroing.
+systemd-run --on-active=5 /bin/systemctl poweroff --force >/dev/null

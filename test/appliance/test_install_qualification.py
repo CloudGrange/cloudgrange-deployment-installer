@@ -275,16 +275,43 @@ class GeneralizeSecretWipeOrderingTests(unittest.TestCase):
                         "deleting the staged upload after the wipe leaves its contents in freed "
                         "blocks the wipe already went over")
 
-    def test_nothing_writes_to_disk_between_the_wipe_and_poweroff(self):
-        fstrim = self._line_of("fstrim -av")
+    def test_the_root_filesystem_is_read_only_before_poweroff(self):
+        """AB#9186 — the wipe must END with the filesystem read-only.
+
+        The earlier invariant ("nothing that looks like a write appears after fstrim") was too
+        weak: it could only police the lines it could see, and the evidence said something was
+        still writing into freed blocks during the fill->poweroff window. Remounting read-only
+        removes that window by construction rather than by inspection, so that is what is
+        asserted now.
+        """
+        remount = self._line_of("remount,ro /")
         poweroff = self._line_of("systemctl poweroff")
-        between = [l.strip() for l in self.lines[fstrim + 1:poweroff]
+        self.assertLess(remount, poweroff,
+                        "the root filesystem must be remounted read-only before poweroff, so "
+                        "nothing can write to the disk after the final wipe")
+
+    def test_zerofree_runs_on_the_read_only_root(self):
+        """zerofree is the authoritative pass: it zeroes every unallocated block, which the dd
+        fill cannot guarantee, and it requires the read-only mount established above."""
+        remount = self._line_of("remount,ro /")
+        zerofree = self._line_of("zerofree -v")
+        self.assertLess(remount, zerofree,
+                        "zerofree must run after the read-only remount — it is unsafe on a "
+                        "read-write filesystem")
+
+    def test_nothing_writes_to_disk_after_the_read_only_remount(self):
+        remount = self._line_of("remount,ro /")
+        poweroff = self._line_of("systemctl poweroff")
+        between = [l.strip() for l in self.lines[remount + 1:poweroff]
                    if l.strip() and not l.strip().startswith("#")]
-        # Only these are allowed after the wipe: they touch no file content.
-        allowed = ("sync", "echo ", "cd /", "rmdir ")
+        # Permitted after the remount: the wipe itself, control flow, and things that cannot
+        # write to the root filesystem (echo/sync/cd, and rmdir which is expected to fail on ro).
+        allowed = ("sync", "echo ", "cd /", "rmdir ", "zerofree", "else", "fi", "then", "if ",
+                   "mount -o remount,ro")
         offenders = [l for l in between if not l.startswith(allowed)]
         self.assertEqual(offenders, [],
-                         "these run after the free-space wipe and may write to disk:\n" + "\n".join(offenders))
+                         "these run after the root filesystem is read-only and either cannot "
+                         "work or would defeat the wipe:\n" + "\n".join(offenders))
 
     def test_ssh_key_material_is_shredded_not_just_deleted(self):
         """AB#9186 — a plain delete leaves the key material in freed blocks.
