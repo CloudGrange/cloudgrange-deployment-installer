@@ -63,6 +63,8 @@ jobs:
         run: |
           test -z "${CLOUDGRANGE_TEST_ALLOW_SKIP:-}"
           sudo -E python3 -m unittest discover -v -s test/appliance -p 'test_install_scripts.py'
+          # AB#9182's interrupt/resume and uninstall-retention qualification gates.
+          python3 -m unittest discover -v -s test/appliance -p 'test_install_qualification.py'
           # Kept after the Compose BUNDLE's retirement: this gate covers the compose/ engine
           # content (container hardening, image pins, nginx config), which still ships. It is
           # not a bundle-build test, so retiring the bundle is no reason to drop it.
