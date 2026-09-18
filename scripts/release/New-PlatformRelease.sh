@@ -119,7 +119,10 @@ PY
 
 if [ -n "$COSIGN_KEY" ]; then
     log "signing manifest.json with $COSIGN_KEY"
-    cosign sign-blob --yes --key "$COSIGN_KEY" --tlog-upload=false --output-signature "$OUT/manifest.json.sig" "$OUT/manifest.json" >/dev/null
+    # Legacy detached signature (manifest.json.sig), key-pair only, no transparency log: the same
+    # form the appliance uses, and verifiable offline. cosign v3 needs the explicit opt-outs.
+    cosign sign-blob --yes --key "$COSIGN_KEY" --new-bundle-format=false --use-signing-config=false \
+        --tlog-upload=false --output-signature "$OUT/manifest.json.sig" "$OUT/manifest.json" >/dev/null
 else
     log "WARNING: no --cosign-key; manifest.json is UNSIGNED and the Platform updater will refuse it"
 fi
