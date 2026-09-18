@@ -8,6 +8,7 @@
 #   namespace          CLOUDGRANGE_NAMESPACE
 #   backups claimName  CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC   (additive to §4; without this mount
 #                      an apply still restores on failure, but a later `rollback` has no backup)
+#   CLOUDGRANGE_HEALTH_TIMEOUT  CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT (additive)
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -43,6 +44,7 @@ spec:
           env:
             - { name: CLOUDGRANGE_RELEASE_NAME, value: "<CLOUDGRANGE_RELEASE_NAME>" }
             - { name: CLOUDGRANGE_NAMESPACE, value: "<CLOUDGRANGE_NAMESPACE>" }
+            - { name: CLOUDGRANGE_HEALTH_TIMEOUT, value: "<CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT>" }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }

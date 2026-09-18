@@ -29,4 +29,6 @@ data:
   # Additive to §4: the PVC the updater Job must mount at /backups so a later `rollback` can restore
   # the database backup taken by `apply` (images/platform-updater/job.example.yaml).
   CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC: {{ printf "%s-backups" (include "cloudgrange.platformUpdaterName" .) | quote }}
+  # Additive to §4: pass to the Job as CLOUDGRANGE_HEALTH_TIMEOUT (platformUpdater.healthTimeout).
+  CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT: {{ .Values.platformUpdater.healthTimeout | quote }}
   {{- end }}

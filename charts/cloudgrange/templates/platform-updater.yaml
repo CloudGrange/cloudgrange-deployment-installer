@@ -49,6 +49,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # On a failed update the updater stops the API and Keycloak (kubectl scale) before restoring the
+  # database. The scale subresource is authorised separately from deployments.
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
   # `kubectl rollout status` and `helm --wait` read these to judge a rollout.
   - apiGroups: ["apps"]
     resources: ["replicasets", "controllerrevisions"]
@@ -87,8 +92,14 @@ subjects:
   - kind: ServiceAccount
     name: {{ $name }}
     namespace: {{ .Release.Namespace }}
+{{- $issuer := .Values.certManager.issuerRef | default dict }}
+{{- $ownsClusterObjects := or (and .Values.certManager.installOperator (not $issuer.name)) .Values.observability.promtail.enabled }}
+{{- if $ownsClusterObjects }}
 ---
 # See the DEVIATION note at the top: only the release's own cluster-scoped objects, by name.
+# Rendered only when this release HAS cluster-scoped objects (the self-signed ClusterIssuer or
+# promtail). A BYO install with certManager.issuerRef set and promtail off has none, and then the
+# updater's rights are purely namespace-scoped, exactly as §4 describes.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -121,6 +132,7 @@ subjects:
   - kind: ServiceAccount
     name: {{ $name }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- $extraNs := list }}
 {{- if and .Values.metallb.enabled .Values.metallb.addressPool }}{{ $extraNs = append $extraNs "metallb-system" }}{{ end }}
 {{- if .Values.backup.enabled }}{{ $extraNs = append $extraNs "velero" }}{{ end }}

@@ -182,16 +182,36 @@ restore_db() { # <dir>
         --dbname="$PGDATABASE" "$1/cloudgrange.dump"
 }
 
-# Stop everything that writes to the database before a restore; helm rollback restores the
-# replica counts from the previous revision's manifest.
+# Stop everything that writes to the database before a restore. The replica counts are saved
+# first and put back after `helm rollback`: Helm's three-way merge sees the same replicas in both
+# revisions and leaves the live 0 alone, so the rollback on its own would leave them stopped.
+declare -A SAVED_REPLICAS=()
+WRITERS=(api keycloak)
 quiesce_writers() {
-    local d
-    for d in "$RELEASE-api" "$RELEASE-keycloak"; do
-        kubectl scale deployment "$d" -n "$NS" --replicas=0 >/dev/null 2>&1 || true
+    local c d n rc=0
+    for c in "${WRITERS[@]}"; do
+        d="$RELEASE-$c"
+        n=$(kubectl get deployment "$d" -n "$NS" -o jsonpath='{.spec.replicas}' 2>/dev/null) || continue
+        SAVED_REPLICAS[$d]=${n:-1}
+        kubectl scale deployment "$d" -n "$NS" --replicas=0 >&2 || { log "cannot scale $d to 0"; rc=1; }
     done
-    for d in "$RELEASE-api" "$RELEASE-keycloak"; do
-        kubectl wait --for=delete pod -n "$NS" -l "app.kubernetes.io/name=cloudgrange-${d#"$RELEASE"-}" --timeout=120s >/dev/null 2>&1 || true
+    for c in "${WRITERS[@]}"; do
+        kubectl wait --for=delete pod -n "$NS" -l "app.kubernetes.io/name=cloudgrange-$c" --timeout=180s >/dev/null 2>&1 \
+            || log "WARNING: $RELEASE-$c pods still present after 180s"
     done
+    # Anything still connected (a pod that outlived the wait, a module) would hold locks the
+    # restore needs or keep writing mid-restore.
+    psql -qAt -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()" >/dev/null \
+        || log "WARNING: could not terminate other database sessions"
+    return $rc
+}
+
+resume_writers() {
+    local d rc=0
+    for d in "${!SAVED_REPLICAS[@]}"; do
+        kubectl scale deployment "$d" -n "$NS" --replicas="${SAVED_REPLICAS[$d]}" >&2 || { log "cannot scale $d back to ${SAVED_REPLICAS[$d]}"; rc=1; }
+    done
+    return $rc
 }
 
 # ---- Health gate -------------------------------------------------------------------------------
@@ -349,9 +369,10 @@ cmd_apply() {
 
 undo() { # <backup dir> <revision>
     local ok=0
-    quiesce_writers
+    quiesce_writers || { log "could not stop the database writers; restoring anyway after terminating their sessions"; }
     restore_db "$1" || { log "database restore failed"; ok=1; }
     helm rollback "$RELEASE" "$2" -n "$NS" --wait --timeout "$HEALTH_TIMEOUT" >&2 || { log "helm rollback failed"; ok=1; }
+    resume_writers || ok=1
     [ "$ok" = 0 ] && health_gate && return 0
     return 1
 }
