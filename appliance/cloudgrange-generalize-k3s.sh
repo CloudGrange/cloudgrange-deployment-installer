@@ -228,6 +228,24 @@ echo "[generalize-k3s] overwriting free space (deleted secrets must not survive 
 # EXPECTED to end in ENOSPC — that is success, not failure — so the only meaningful check is
 # whether it actually consumed the free space, and that is now asserted rather than assumed.
 sync
+# ext4 reserves 5% of blocks for root (mkfs default). `df --output=avail` reports what is
+# available to NON-root users, so it can read 0 MiB while ~5% of the filesystem is still free in
+# reserved blocks — and those reserved blocks are spread through the low block groups, which is
+# exactly where surviving key material kept being found (blocks ~34839/~38922, free, not the
+# journal, on a filesystem the fill had just reported as full). Drop the reservation to 0 for the
+# duration of the fill so it genuinely reaches every free block, then restore it.
+root_dev=$(findmnt -no SOURCE /)
+reserved_pct_restore=5
+if [ -n "$root_dev" ]; then
+    reserved_blocks=$(tune2fs -l "$root_dev" 2>/dev/null | awk -F: '/Reserved block count/{gsub(/ /,"",$2);print $2}')
+    total_blocks=$(tune2fs -l "$root_dev" 2>/dev/null | awk -F: '/^Block count/{gsub(/ /,"",$2);print $2}')
+    if [ -n "$reserved_blocks" ] && [ -n "$total_blocks" ] && [ "$total_blocks" -gt 0 ]; then
+        reserved_pct_restore=$(( (reserved_blocks * 100 + total_blocks - 1) / total_blocks ))
+    fi
+    echo "[generalize-k3s] temporarily dropping ext4 reserved blocks on $root_dev (was ${reserved_pct_restore}%)"
+    tune2fs -m 0 "$root_dev" >/dev/null 2>&1 || true
+fi
+
 avail_kb_before=$(df --output=avail -k / | tail -1 | tr -d ' ')
 echo "[generalize-k3s] free space before fill: $((avail_kb_before / 1024)) MiB"
 # Fill the root filesystem. ENOSPC is the intended stopping condition.
@@ -248,6 +266,12 @@ if [ "$avail_kb_after" -gt 65536 ]; then
 fi
 rm -f /cloudgrange-zerofill
 sync
+# Restore the reservation before shipping: 0% reserved on a root filesystem lets a runaway log
+# fill the disk to the point where root itself cannot recover it.
+if [ -n "$root_dev" ]; then
+    echo "[generalize-k3s] restoring ext4 reserved blocks to ${reserved_pct_restore}% on $root_dev"
+    tune2fs -m "$reserved_pct_restore" "$root_dev" >/dev/null 2>&1 || true
+fi
 echo "[generalize-k3s] discarding free blocks"
 fstrim -av || true
 sync
