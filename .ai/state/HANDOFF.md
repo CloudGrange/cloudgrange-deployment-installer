@@ -1,5 +1,20 @@
 # HANDOFF — cloudgrange-deployment-installer
 
+## 2026-09-18 — Foundation release builder (branch `feat/foundation-release-builder`, AB#9171)
+
+- `scripts/release/New-FoundationRelease.sh` builds `cloudgrange-foundation-<F version>.zip`
+  (cg-foundation-release-v1) from `release/pins.conf`: K3s binary and air-gap images checked against
+  K3s's `sha256sum-amd64.txt`, `install.sh` against `K3S_INSTALL_SH_SHA256`, and the updater plus its
+  unit as host files. `--version` must equal `FOUNDATION_VERSION` in pins.conf. Signing is optional
+  (owner decision 2026-09-18: trust is HTTPS + SHA-256). The builder runs the updater's own
+  extract/load_manifest over the result. Unsigned builds are byte-reproducible.
+- `scripts/release/Publish-FoundationRelease.sh` runs as a dry run by default and uploads only with `--publish`. It writes
+  `foundation/<v>/…zip(.sha256)` and adds `{version,bundleUrl,sha256,k3sVersion,…}` to
+  `FOUNDATION_CHANNEL_URL`. **It has never been run with `--publish`.**
+- Test: `test/appliance/test_foundation_release_builder.py` (run as root in WSL).
+- Gotcha: r2.dev returns **HTTP 403 to Python-urllib's User-Agent**. The publisher reads with curl for
+  that reason.
+
 **Updated:** 2026-09-18
 **Branch:** `feat/k3s-airgap-bundle-retire-compose` (16 commits, **UNPUSHED**, no PR)
 
