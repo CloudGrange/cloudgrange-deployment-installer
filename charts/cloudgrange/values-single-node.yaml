@@ -1,5 +1,10 @@
-# Default profile — one K3s node, everything in this file matches base values.yaml.
+# Default profile — one K3s node.
 # `helm install cloudgrange charts/cloudgrange -f values-single-node.yaml`
+#
+# This is the profile CloudGrange's own installers use: the VHDX appliance, the Windows
+# VM script and the Linux script. Anything that depends on those installers having
+# configured the host belongs here, not in base values.yaml, which has to stay correct
+# for someone running the chart on a cluster they already had.
 global:
   deployment:
     profile: single-node
@@ -7,6 +12,14 @@ api:
   replicaCount: 1
   redis:
     enabled: false
+  updater:
+    hostPath:
+      # AB#9189: each of the installers using this profile also installs
+      # cloudgrange-updater-k3s.service on the node. That service runs on the host, outside the
+      # cluster, so it can only read a real host directory — the updates directory must be a
+      # hostPath here or in-app updates cannot work. The chart default is false, for
+      # bring-your-own-Kubernetes installs that have no host updater and use `helm upgrade`.
+      enabled: true
 portal:
   replicaCount: 1
 relay:

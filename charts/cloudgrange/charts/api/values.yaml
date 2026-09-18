@@ -27,10 +27,17 @@ updater:
   # never see them, and an update could never start. The directory is created with the right
   # ownership by the appliance's generalize step (and by Install-CloudGrangeK3s.sh).
   #
-  # Set hostPath.enabled=false for clusters where no host updater exists (AKS — see
-  # values-azure.yaml, which updates via `helm upgrade` directly rather than in-app).
+  # DEFAULT IS false, because the default case is "somebody ran this chart on a Kubernetes cluster
+  # they already had". Only CloudGrange's own installers put cloudgrange-updater-k3s.service on the
+  # node — the VHDX appliance, the Windows VM script and the Linux script — and those all install
+  # with values-single-node.yaml, which turns this on explicitly.
+  #
+  # Defaulting it on would hand a bring-your-own-Kubernetes install a hostPath mount with no
+  # service behind it: in-app updates that silently do nothing. On a cluster with a restrictive
+  # PodSecurity policy the hostPath can stop the API pod scheduling at all. Those installs update
+  # with `helm upgrade`, exactly like AKS.
   hostPath:
-    enabled: true
+    enabled: false
     path: /var/lib/cloudgrange/updates
 updateChannelUrl: "https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json"
 redis:
