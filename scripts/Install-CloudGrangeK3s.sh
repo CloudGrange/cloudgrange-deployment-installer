@@ -48,6 +48,10 @@ K3S_VERSION="${CLOUDGRANGE_K3S_VERSION:-v1.36.4+k3s1}"
 # Platform have separate versions). Recorded in $ETC_DIR/foundation-version for the Foundation
 # updater, which reports it as installedVersion and advances it on each admin-applied update.
 FOUNDATION_VERSION="${CLOUDGRANGE_FOUNDATION_VERSION:-F2609.0.0}"
+# Where a foundation-check looks for newer Foundation releases (the Foundation card's "available"
+# version). Separate from the Platform update channel: separate releases, separate cadence.
+# Copies kept in sync with release/pins.conf: FOUNDATION_VERSION, FOUNDATION_CHANNEL_URL.
+FOUNDATION_CHANNEL_URL="${CLOUDGRANGE_FOUNDATION_CHANNEL_URL:-https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/foundation-preview.json}"
 
 # Host locations, overridable only so the qualification tests can run this script unprivileged
 # against a scratch tree. Production never sets these.
@@ -212,6 +216,7 @@ install_updater() {
     # Foundation update the administrator has applied since.
     install -d -m 0755 "$ETC_DIR"
     [ -s "$ETC_DIR/foundation-version" ] || echo "$FOUNDATION_VERSION" > "$ETC_DIR/foundation-version"
+    [ -s "$ETC_DIR/foundation-channel-url" ] || echo "$FOUNDATION_CHANNEL_URL" > "$ETC_DIR/foundation-channel-url"
     # The key Foundation releases are verified against. The updater refuses every release while this
     # is missing or still the repository placeholder, so a missing key fails closed, never open.
     if [ -f "$key_src" ]; then

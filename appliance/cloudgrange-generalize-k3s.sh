@@ -72,7 +72,7 @@ if [ "${#NODE_IMAGES[@]}" -eq 0 ]; then
     echo "[generalize-k3s] ERROR: containerd reports no images to export" >&2
     exit 1
 fi
-k3s ctr -n k8s.io images export "$AIRGAP_DIR/cloudgrange-images-amd64.tar" "${NODE_IMAGES[@]}"
+k3s ctr -n k8s.io images export --platform linux/amd64 "$AIRGAP_DIR/cloudgrange-images-amd64.tar" "${NODE_IMAGES[@]}"
 (cd "$AIRGAP_DIR" && sha256sum cloudgrange-images-amd64.tar > cloudgrange-images-amd64.tar.sha256)
 printf '%s\n' "${NODE_IMAGES[@]}" > "$AIRGAP_DIR/images.txt"
 echo "[generalize-k3s] exported ${#NODE_IMAGES[@]} images ($(du -m "$AIRGAP_DIR/cloudgrange-images-amd64.tar" | cut -f1) MiB)"

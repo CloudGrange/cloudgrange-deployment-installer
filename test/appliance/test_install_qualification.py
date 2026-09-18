@@ -210,6 +210,8 @@ class ManagedFoundationTests(unittest.TestCase):
         with open(j("etc-cloudgrange", "foundation-version")) as f:
             self.assertRegex(f.read().strip(), r"^F\d{4}\.\d+\.\d+$")
         self.assertTrue(os.path.isfile(j("etc-cloudgrange", "foundation-signing-key.pub")))
+        with open(j("etc-cloudgrange", "foundation-channel-url")) as f:
+            self.assertRegex(f.read().strip(), r"^https://\S+\.json$", "foundation-check needs a channel to report availableVersion")
         calls = open(self.h.log).read()
         self.assertIn("systemctl enable --now cloudgrange-updater-k3s.service", calls)
         for unit in ("unattended-upgrades.service", "apt-daily-upgrade.timer"):
