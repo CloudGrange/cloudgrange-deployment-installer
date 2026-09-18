@@ -293,6 +293,18 @@ cmd_apply() {
     # 2-3. manifest: signature first, then content.
     local m="$WORK/manifest.json" reason
     fetch "$manifest_url" "$m" || fail "could not download the release manifest from $manifest_url"
+    # The API may pass the update CHANNEL document (cg-onprem-channel-v1) instead of the manifest.
+    # The channel is unsigned, so it is used only to find the manifest URL for the requested
+    # version; everything applied still comes from the signature-verified manifest.
+    if [ "$(jq -r '.schema // empty' "$m" 2>/dev/null)" = cg-onprem-channel-v1 ]; then
+        local ch_version ch_manifest
+        ch_version=$(jq -r '.latest.version // empty' "$m")
+        ch_manifest=$(jq -r '.latest.manifestUrl // .manifestUrl // empty' "$m")
+        [ "$ch_version" = "$version" ] || fail "the channel at $manifest_url offers ${ch_version:-nothing}, not $version"
+        [ -n "$ch_manifest" ] || fail "the channel at $manifest_url publishes no signed release manifest (latest.manifestUrl); refusing"
+        manifest_url=$ch_manifest
+        fetch "$manifest_url" "$m" || fail "could not download the release manifest from $manifest_url"
+    fi
     fetch "$manifest_url.sig" "$WORK/manifest.json.sig" || fail "the release manifest has no signature ($manifest_url.sig)"
     reason=$(verify_manifest "$m" "$WORK/manifest.json.sig") || fail "$reason"
     jq -e . "$m" >/dev/null 2>&1 || fail "the release manifest is not valid JSON"
