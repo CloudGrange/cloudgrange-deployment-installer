@@ -106,11 +106,22 @@ class LinuxPreflightTests(unittest.TestCase):
         self.write(os.path.join(self.tmp, "ss"), "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 [::]:8443 [::]:*\n")
         self.assert_refused(self.run_preflight(), "TCP port 80 is already in use", "TCP port 8443 is already in use")
 
-    def test_an_undersized_machine_is_refused_with_every_reason_at_once(self):
+    def test_an_undersized_machine_warns_with_every_reason_but_still_passes(self):
+        # PR #71: hardware minimums WARN only. The owner's 2-CPU server installed and ran for weeks,
+        # so an undersized host must never be refused; every shortfall is still named at once.
         self.stub("nproc", "echo 2")
         self.write(self.meminfo, "MemTotal:        4000000 kB\n")
         self.stub("df", 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"; echo "/dev/sda1 1 1 1048576 1% /"')
-        self.assert_refused(self.run_preflight(), "2 CPUs: at least 4", "MiB RAM: at least", "1 GiB free under /var/lib")
+        proc = self.run_preflight()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("Preflight passed", proc.stdout)
+        for reason in ("2 CPUs; 4 or more recommended", "MiB RAM;", "1 GiB free under /var/lib;"):
+            self.assertIn(reason, proc.stderr)
+
+    def test_an_undersized_machine_still_refuses_a_real_conflict(self):
+        self.stub("nproc", "echo 1")
+        self.stub("docker", "exit 0")
+        self.assert_refused(self.run_preflight(), "'docker' is installed")
 
     def test_the_k3s_installer_is_never_reached_when_preflight_fails(self):
         self.write(self.os_release, 'ID=fedora\nVERSION_ID="40"\n')
