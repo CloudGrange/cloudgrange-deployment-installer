@@ -92,8 +92,14 @@ def check_helper(root, bad):
     options = function_body(text, "Get-CloudGrangeSshOptions")
     invoke = function_body(text, "Invoke-CloudGrangeSsh")
     bounded = function_body(text, "Invoke-CloudGrangeBoundedProcess")
+    # AB#9171: -CaptureOutput runs in Invoke-CloudGrangeBoundedProcessToFile, which is the path EVERY
+    # captured ssh call takes. It is checked with the same rules as the pipe path; before this it was
+    # not checked at all, so the capture path could lose its timeout kill or its stdin redirection
+    # without the gate noticing.
+    bounded_to_file = function_body(text, "Invoke-CloudGrangeBoundedProcessToFile")
     for name, body in (("Get-CloudGrangeSshRequiredOptions", required), ("Get-CloudGrangeSshOptions", options),
-                       ("Invoke-CloudGrangeSsh", invoke), ("Invoke-CloudGrangeBoundedProcess", bounded)):
+                       ("Invoke-CloudGrangeSsh", invoke), ("Invoke-CloudGrangeBoundedProcess", bounded),
+                       ("Invoke-CloudGrangeBoundedProcessToFile", bounded_to_file)):
         if body is None:
             bad("%s: function %s missing" % (HELPER, name))
     if required is not None:
@@ -111,13 +117,16 @@ def check_helper(root, bad):
                 bad("%s: Invoke-CloudGrangeSsh does not %s" % (HELPER, what))
         if not re.search(r"\[Parameter\(Mandatory\)\]\s*\[ValidateRange\(1,\s*\d+\)\]\s*\[int\]\$TimeoutSeconds", invoke):
             bad("%s: Invoke-CloudGrangeSsh -TimeoutSeconds must be mandatory and bounded" % HELPER)
-    if bounded is not None:
+    for function_name, body in (("Invoke-CloudGrangeBoundedProcess", bounded),
+                                ("Invoke-CloudGrangeBoundedProcessToFile", bounded_to_file)):
+        if body is None:
+            continue
         for needle, what in (("WaitForExit($TimeoutSeconds * 1000)", "wait with the timeout"),
                              (".Kill($true)", "stop the process tree on timeout"),
                              ("CG-SSH-ERR-002", "throw on timeout"),
                              ("RedirectStandardInput = $true", "keep stdin off the console")):
-            if needle not in bounded:
-                bad("%s: Invoke-CloudGrangeBoundedProcess does not %s" % (HELPER, what))
+            if needle not in body:
+                bad("%s: %s does not %s" % (HELPER, function_name, what))
 
 
 def check_calls(rel, text, bad, counts):

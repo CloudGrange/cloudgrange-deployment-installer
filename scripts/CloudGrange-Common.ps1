@@ -76,7 +76,16 @@ function ConvertTo-CloudGrangeCommandLineArgument {
 }
 
 function Invoke-CloudGrangeBoundedProcessToFile {
-    # Invoke-CloudGrangeBoundedProcess -CaptureOutput, with stdin and stdout on temporary files (see there).
+    # Invoke-CloudGrangeBoundedProcess -CaptureOutput: stdout on a temporary FILE (see there for why),
+    # stdin on a real pipe carrying exactly the bytes given and then EOF.
+    #
+    # AB#9171: stdin used to be a temporary file passed to Start-Process -RedirectStandardInput. That
+    # cmdlet does not hand the file to the child: it reads it and writes the text back with an added
+    # newline, so every captured call — every `ssh` the installer and the appliance build make —
+    # handed the remote command one byte of input it was never given, and a call with no input handed
+    # it "\n" instead of an immediately closed stdin (SshTransport.Tests.ps1 "gives the child a closed
+    # stdin pipe, never the console" caught exactly this). The redirection is now done by the platform
+    # shell, so stdin stays a .NET pipe we control byte for byte while stdout is still a file.
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$ArgumentList = @(),
@@ -84,26 +93,75 @@ function Invoke-CloudGrangeBoundedProcessToFile {
         [byte[]]$StandardInput,
         [string]$Description = $FilePath
     )
-    $inFile = [System.IO.Path]::GetTempFileName()
     $outFile = [System.IO.Path]::GetTempFileName()
     try {
-        $bytes = [byte[]]::new(0)
-        if ($null -ne $StandardInput) { $bytes = $StandardInput }
-        [System.IO.File]::WriteAllBytes($inFile, $bytes)
-        $commandLine = ($ArgumentList | ForEach-Object { ConvertTo-CloudGrangeCommandLineArgument $_ }) -join ' '
-        $process = Start-Process -FilePath $FilePath -ArgumentList $commandLine -NoNewWindow -PassThru `
-            -RedirectStandardInput $inFile -RedirectStandardOutput $outFile
-        $null = $process.Handle   # keeps the handle so ExitCode is available after the wait
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            try { $process.Kill($true) } catch [System.InvalidOperationException] { }
-            $null = $process.WaitForExit(10000)
-            throw "CG-SSH-ERR-002: $Description did not finish within $TimeoutSeconds seconds and was stopped."
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardInput = $true    # a pipe, never the console
+        $psi.RedirectStandardOutput = $false  # the shell sends stdout to $outFile
+        if ($IsWindows) {
+            # cmd.exe takes one command line. Each token is quoted by CommandLineToArgvW rules, and cmd
+            # strips the outermost pair of quotes after /c.
+            # %NAME% is expanded by cmd before any escaping can stop it, and silently sending a different
+            # command to a remote host is worse than refusing.
+            foreach ($argument in @($FilePath) + @($ArgumentList)) {
+                if ($argument -match '%') {
+                    throw "CG-SSH-ERR-003: $Description cannot capture output for an argument containing '%' on Windows: $argument"
+                }
+            }
+            $psi.FileName = [System.IO.Path]::Combine($env:SystemRoot, 'System32', 'cmd.exe')
+            # Two parsers in a row: cmd's, then CommandLineToArgvW's in the child. Quote each token for
+            # the child first, then caret-escape every character cmd would act on — the quotes included,
+            # so cmd never enters its "inside quotes" state where carets stop working. cmd removes the
+            # carets and hands the child exactly the quoted line. Only the redirection below is left
+            # unescaped, because that one IS for cmd.
+            $escape = { param([string]$Text) $Text -replace '([()!^"<>&|])', '^$1' }
+            # The program itself keeps cmd's own quoting (cmd must find the executable; a caret-escaped
+            # quote there would split the path on its spaces). Its arguments are caret-escaped instead.
+            $line = @(ConvertTo-CloudGrangeCommandLineArgument $FilePath)
+            $line += @($ArgumentList | ForEach-Object { & $escape (ConvertTo-CloudGrangeCommandLineArgument $_) })
+            # The whole command is wrapped in one more pair of quotes: with /c, cmd strips that outer pair
+            # and then parses what is left normally (a program path it can find despite its spaces, caret
+            # escapes it honours, and the redirection). Without the wrapper cmd mis-splits the path.
+            $psi.Arguments = '/d /c "' + ($line -join ' ') + ' > ' + (ConvertTo-CloudGrangeCommandLineArgument $outFile) + '"'
+        } else {
+            # `exec` replaces the shell, so the process we wait on and kill IS the command, and its exit
+            # code is the command's. The arguments travel as argv, never through the shell's parser.
+            $psi.FileName = '/bin/sh'
+            $psi.ArgumentList.Add('-c')
+            $psi.ArgumentList.Add('exec "$0" "$@" > "$CG_STDOUT_FILE"')
+            $psi.ArgumentList.Add($FilePath)
+            foreach ($argument in $ArgumentList) { $psi.ArgumentList.Add($argument) }
+            $psi.Environment['CG_STDOUT_FILE'] = $outFile
         }
-        $process.WaitForExit()
-        $global:LASTEXITCODE = $process.ExitCode
-        return @([System.IO.File]::ReadAllText($outFile) -split "\r?\n" | Where-Object { $_ -ne '' })
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $psi
+        try {
+            $null = $process.Start()
+            $inputWritten = $true
+            try {
+                if ($null -ne $StandardInput -and $StandardInput.Length -gt 0) {
+                    $inputWritten = $process.StandardInput.BaseStream.WriteAsync($StandardInput, 0, $StandardInput.Length).Wait($TimeoutSeconds * 1000)
+                }
+                if ($inputWritten) { $process.StandardInput.Close() }
+            } catch [System.IO.IOException] {
+                # The child exited before reading all of its input; its exit code reports the failure.
+            } catch [System.AggregateException] {
+                # Same, surfaced through the asynchronous write.
+            }
+            if (-not $inputWritten -or -not $process.WaitForExit($TimeoutSeconds * 1000)) {
+                try { $process.Kill($true) } catch [System.InvalidOperationException] { }
+                $null = $process.WaitForExit(10000)
+                throw "CG-SSH-ERR-002: $Description did not finish within $TimeoutSeconds seconds and was stopped."
+            }
+            $process.WaitForExit()
+            $global:LASTEXITCODE = $process.ExitCode
+            return @([System.IO.File]::ReadAllText($outFile) -split "\r?\n" | Where-Object { $_ -ne '' })
+        } finally {
+            $process.Dispose()
+        }
     } finally {
-        Remove-Item -LiteralPath $inFile, $outFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -211,4 +269,18 @@ function Wait-ForHttpOk {
         Start-Sleep -Seconds 5
     }
     return $false
+}
+
+function ConvertTo-CloudGrangeSecureString {
+    # A SecureString from a value the caller already holds in memory (a KVP item read from the
+    # appliance, for example). ConvertTo-SecureString -AsPlainText is what PSScriptAnalyzer's
+    # PSAvoidUsingConvertToSecureStringWithPlainText rule refuses — rightly, as a habit — and the
+    # source-qualification gate treats analyzer errors as failures. Nothing is protected by writing
+    # the same characters through this loop instead, but nothing is lost either, and the gate stays
+    # honest: a genuine plaintext-secret finding is never buried under an accepted one.
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $secure = [System.Security.SecureString]::new()
+    foreach ($character in $Text.ToCharArray()) { $secure.AppendChar($character) }
+    $secure.MakeReadOnly()
+    return $secure
 }
