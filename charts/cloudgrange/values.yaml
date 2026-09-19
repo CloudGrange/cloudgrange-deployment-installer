@@ -67,13 +67,14 @@ certManager:
   # why). This flag only gates whether OUR OWN ClusterIssuer/Certificate templates render;
   # turn it off if cert-manager isn't installed at all (no TLS) or if a customer manages
   # issuers/certificates themselves.
-  # AB#9171 (C2, kind v1.34): DEFAULT false. On a cluster without cert-manager, rendering a
-  # Certificate/ClusterIssuer failed the whole install ("no matches for kind Certificate"). The
-  # managed-foundation profiles install cert-manager first and turn this on. On BYO, turn it on when
-  # cert-manager is present (ideally with issuerRef), or bring your own TLS Secret
-  # (global.ingress.tls.secretName). Even when true, the chart renders the Certificate only if the
-  # cluster actually serves cert-manager.io/v1.
-  installOperator: false
+  # AB#9171: DEFAULT true, and the Certificate/ClusterIssuer render ONLY when the cluster serves
+  # cert-manager.io/v1 (templates/certmanager.yaml), so a cluster without cert-manager still installs.
+  # It was false (C2, kind v1.34), which left a bring-your-own cluster that followed the install docs
+  # (cert-manager first) with NO certificate: the Ingress named a TLS Secret that never existed, the
+  # controller served its own fake certificate, and `cg auth login` could not trust the platform
+  # (live BYO kind install, preview.12). Set false to manage certificates yourself
+  # (global.ingress.tls.secretName), or point certManager.issuerRef at your own issuer.
+  installOperator: true
   # AB#9171: use an issuer the customer already runs (ACME/Let's Encrypt, an internal CA) instead
   # of the chart's self-signed ClusterIssuer. Set name (and kind: ClusterIssuer or Issuer); the chart
   # then creates only the Certificate, against that issuer. Empty name = the self-signed default.
