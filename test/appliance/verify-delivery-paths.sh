@@ -89,3 +89,23 @@ registry_check "BYO helm (chart defaults)"        off
 registry_check "VHDX / Windows / Linux (online)"  off -f charts/cloudgrange/values-single-node.yaml
 registry_check "VHDX / Windows / Linux (offline)" on  -f charts/cloudgrange/values-single-node.yaml --set airgap.registry.enabled=true
 registry_check "AKS"                              off -f charts/cloudgrange/values-azure.yaml --set global.aks.keyVaultName=kv --set global.aks.tenantId=t --set global.aks.managedIdentityClientId=c
+
+# AB#9171 regression: an in-app Platform update runs the INSTALLED updater, which upgrades with --reuse-values, so
+# Helm renders the new chart with the OLD release's values and none of this chart's new top-level defaults. On a
+# release from before E7 there is no airgap key at all; the chart must still render (with the registry off). A
+# values file with `airgap: null` removes the key the same way. Live failure this guards: AKS and BYO .16 -> .19
+# rolled back with "nil pointer evaluating interface {}.registry".
+reuse_check() {
+  local label=$1; shift
+  local values out
+  values=$(mktemp); printf 'airgap: null\n' > "$values"
+  if out=$(helm template cg charts/cloudgrange -n cloudgrange -f "$values" "$@" 2>&1); then
+    if printf '%s' "$out" | grep -q 'name: cg-airgap-registry$'; then echo "reuse FAIL: $label: registry rendered without an airgap key"
+    else echo "reuse OK  : $label renders with no airgap key (registry off)"; fi
+  else
+    echo "reuse FAIL: $label: $(printf '%s' "$out" | grep -m1 -i error)"
+  fi
+  rm -f "$values"
+}
+reuse_check "BYO helm (chart defaults)"
+reuse_check "VHDX / Windows / Linux" -f charts/cloudgrange/values-single-node.yaml
