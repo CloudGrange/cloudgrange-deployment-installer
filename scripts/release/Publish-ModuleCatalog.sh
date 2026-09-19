@@ -23,12 +23,22 @@
 # --dedupe-only rewrites the current catalog into that one-entry-per-id shape without publishing a
 # manifest (used once to repair the live catalog; idempotent).
 #
+#
+# AB#9171 — ONE shared image package for every module: ghcr.io/cloudgrange/cloudgrange-modules,
+# tagged <short-name>-<version> where <short-name> is metadata.id without "cloudgrange-module-"
+# (cloudgrange-module-hello 2609.0.0-preview.12 -> cloudgrange-modules:hello-2609.0.0-preview.12).
+# GitHub has no API to make a NEW container package public, so a package per module needed a
+# manual visibility click for every module; the shared package is made public once. --image must
+# be in that package with exactly that tag. Existing catalog entries that point at the old
+# per-module package (cloudgrange-module-hello:2609.0.0-preview.9/.10) are left as they are and
+# stay resolvable: they remain in the entry's version history, pinned by their own digests.
+#
 # Required environment (never committed) — the same as Publish-Release.sh:
 #   CF_ACCOUNT_ID, CF_TOKEN, CF_TOKEN_ID, R2_BUCKET, R2_PUBLIC_BASE
 #
-# Usage:
-#   Publish-ModuleCatalog.sh --module-json <path/to/module.json> --version 2609.0.0-preview.9 \
-#       --image ghcr.io/cloudgrange/cloudgrange-module-hello:2609.0.0-preview.9@sha256:<digest> [--dry-run]
+# Usage (the module repo's scripts/Build-ModuleImage.sh --push prints this exact command):
+#   Publish-ModuleCatalog.sh --module-json <path/to/module.json> --version 2609.0.0-preview.12 \
+#       --image ghcr.io/cloudgrange/cloudgrange-modules:hello-2609.0.0-preview.12@sha256:<digest> [--dry-run]
 #   Publish-ModuleCatalog.sh --dedupe-only [--dry-run]
 set -euo pipefail
 
@@ -63,6 +73,12 @@ if [ "$DEDUPE_ONLY" = 0 ]; then
   [[ "$ID" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "module id '$ID' is not a valid package id" >&2; exit 2; }
   MANIFEST_KEY="modules/$ID/$VERSION/module.json"
   MANIFEST_URL="$PUBLIC/$MANIFEST_KEY"
+  MODULE_REPO=${CLOUDGRANGE_MODULE_REPOSITORY:-ghcr.io/cloudgrange/cloudgrange-modules}
+  EXPECTED_TAG="$MODULE_REPO:${ID#cloudgrange-module-}-$VERSION"
+  [ "${IMAGE%@*}" = "$EXPECTED_TAG" ] || {
+    echo "--image must be $EXPECTED_TAG@sha256:<digest> (all modules publish to the shared package $MODULE_REPO); got ${IMAGE%@*}" >&2
+    exit 2
+  }
 
   python3 - "$MODULE_JSON" "$VERSION" "$IMAGE" > "$WORK/module.json" <<'PY'
 import json, sys
