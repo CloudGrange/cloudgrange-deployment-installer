@@ -107,6 +107,15 @@ release name is the fullname. */ -}}
 {{- end -}}
 
 {{- /* AB#9171 (E7) — the chart-shipped in-cluster registry (airgap.registry.enabled). */ -}}
+{{- /* "true" when the in-cluster registry is on, read NIL-SAFELY. An in-app update runs the INSTALLED updater,
+which upgrades with --reuse-values: Helm then replaces this chart's defaults with the old release's values, so on an
+install from before 2609.0.0-preview.18 there is no airgap key at all and .Values.airgap.registry.enabled failed to
+render ("nil pointer evaluating interface {}.registry"); every online update from .17 or older rolled back. With no
+airgap key the registry is off, and nothing else of it is read. */ -}}
+{{- define "cloudgrange.airgapRegistryEnabled" -}}
+{{- if ((.Values.airgap | default dict).registry | default dict).enabled -}}true{{- end -}}
+{{- end -}}
+
 {{- define "cloudgrange.airgapRegistryName" -}}
 {{- printf "%s-airgap-registry" .Release.Name -}}
 {{- end -}}

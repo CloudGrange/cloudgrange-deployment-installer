@@ -13,7 +13,7 @@ chart's digest pin still matches) but only the amd64 image under it. Two distrib
 share one volume: a read-only one the node pulls from (NodePort) and a writable one only the
 updater Job can reach (ClusterIP + NetworkPolicy). Non-root, Pod Security "restricted".
 */ -}}
-{{- if .Values.airgap.registry.enabled }}
+{{- if include "cloudgrange.airgapRegistryEnabled" . }}
 {{- $name := include "cloudgrange.airgapRegistryName" . }}
 {{- $r := .Values.airgap.registry }}
 apiVersion: v1
