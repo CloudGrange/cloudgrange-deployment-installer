@@ -1,0 +1,36 @@
+#cloud-config
+# AB#9171 - the Azure VM delivery path: a thin wrapper around the Linux script (plan: wrappers only
+# provision a host and Kubernetes, then run the chart). Pass this file as the custom data of a FRESH
+# Ubuntu 24.04 LTS (amd64) Azure VM. On first boot it downloads the latest CloudGrange release bundle from
+# GitHub, checks its SHA-256 and runs Install-CloudGrange-Linux.sh with the VM's own address as the
+# hostname: its public IP (instance metadata, else an internet lookup), else its private IP. Set
+# CLOUDGRANGE_HOSTNAME below to a DNS name instead if you have one. Progress: /var/log/cloudgrange-azure-vm.log.
+package_update: true
+packages: [unzip, curl]
+write_files:
+  - path: /usr/local/sbin/cloudgrange-azure-vm-install.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      exec >> /var/log/cloudgrange-azure-vm.log 2>&1
+      CLOUDGRANGE_HOSTNAME=""
+      base=https://github.com/CloudGrange/cloudgrange-deployment-installer/releases/latest/download
+      imds() { curl -fsS -m 5 -H Metadata:true "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/$1?api-version=2021-02-01&format=text" || true; }
+      # A Standard-SKU public IP is not reported by the instance metadata service, so fall back to asking
+      # the internet which address this VM leaves from, and only then to the private address.
+      host=${CLOUDGRANGE_HOSTNAME:-$(imds publicIpAddress)}
+      host=${host:-$(curl -fsS -m 10 https://api.ipify.org || true)}
+      host=${host:-$(imds privateIpAddress)}
+      [ -n "$host" ] || { echo "cannot determine the VM address; set CLOUDGRANGE_HOSTNAME"; exit 1; }
+      mkdir -p /opt/cloudgrange-download && cd /opt/cloudgrange-download
+      curl -fsSLO "$base/Install-CloudGrange-K3s-Bundled.zip"
+      curl -fsSLO "$base/Install-CloudGrange-K3s-Bundled.zip.sha256"
+      sha256sum --check Install-CloudGrange-K3s-Bundled.zip.sha256
+      rm -rf cloudgrange-k3s && unzip -q Install-CloudGrange-K3s-Bundled.zip -d cloudgrange-k3s
+      cd cloudgrange-k3s
+      echo "installing $(grep -m1 '^version:' charts/cloudgrange/Chart.yaml) for https://$host"
+      ./Install-CloudGrange-Linux.sh --hostname "$host"
+      echo "CloudGrange is ready: https://$host (complete setup in the browser)"
+runcmd:
+  - [ /usr/local/sbin/cloudgrange-azure-vm-install.sh ]
