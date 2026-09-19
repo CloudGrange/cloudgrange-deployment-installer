@@ -50,7 +50,7 @@ K3S_INSTALL_SH_SHA256="${CLOUDGRANGE_K3S_INSTALL_SH_SHA256:-46177d4c99440b4c0311
 # AB#9171 — the Foundation release this installer lays down (plan 2026-09-18 §3: Foundation and
 # Platform have separate versions). Recorded in $ETC_DIR/foundation-version for the Foundation
 # updater, which reports it as installedVersion and advances it on each admin-applied update.
-FOUNDATION_VERSION="${CLOUDGRANGE_FOUNDATION_VERSION:-F2609.1.0}"
+FOUNDATION_VERSION="${CLOUDGRANGE_FOUNDATION_VERSION:-F2609.1.1}"
 # Where a foundation-check looks for newer Foundation releases (the Foundation card's "available"
 # version). Separate from the Platform update channel: separate releases, separate cadence.
 # Copies kept in sync with release/pins.conf: FOUNDATION_VERSION, FOUNDATION_CHANNEL_URL.
