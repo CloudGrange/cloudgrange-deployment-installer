@@ -1,24 +1,98 @@
 {{- /* AB#9171: on the managed K3s foundation, make the platform certificate Traefik's DEFAULT
 certificate. Browsers and the cg CLI reach an on-prem install by IP address, and a TLS client sends
 no SNI for an IP, so Traefik could not match the Ingress's certificate and served its own
-"TRAEFIK DEFAULT CERT" instead. The platform certificate (which carries the IP SAN) was never
-presented, so `cg auth login --ca-cert <platform CA>` failed with an SSL error on a live preview.12
-install. A TLSStore named "default" is Traefik's fallback for connections without a matching SNI.
-Only rendered when asked (values-single-node.yaml: our wrappers own that cluster) and when the
-Traefik CRD exists, so a bring-your-own cluster's Traefik is never reconfigured. */ -}}
-{{- /* A wrapper-owned cluster is recognised by foundation.managed (set by the wrapper profiles) as well
-as the explicit flag: an in-app update runs `helm upgrade --reuse-values`, which carries the values an
-install STORED (foundation.managed is among them) but not a key a profile file gained later, so gating
-on the new flag alone would never reach an existing install. BYO (foundation.managed=false) is untouched. */ -}}
+"TRAEFIK DEFAULT CERT" instead; `cg auth login --ca-cert <platform CA>` then failed with an SSL
+error. A TLSStore named "default" is Traefik's fallback for connections without a matching SNI.
+
+Applied by a post-install/post-upgrade HOOK Job, not as a normal chart resource. Before an upgrade,
+Helm reads every resource of the new manifest with the permissions of whoever runs it; in an in-app
+update that is the INSTALLED release's platform-updater, whose Role predates this resource type. A
+live preview.10 -> preview.13 update failed exactly there ("cannot get resource tlsstores") and
+rolled itself back. Hook objects are only created when the hook runs, and the kinds involved here
+(ServiceAccount, Role, RoleBinding, Job) are ones every updater may manage, so this reaches existing
+installs through the in-app updater.
+
+Rendered for a wrapper-owned cluster (foundation.managed, which --reuse-values carries from the
+install) or when asked explicitly, and only when the Traefik CRD exists; BYO clusters are untouched. */ -}}
 {{- $wanted := or .Values.global.ingress.traefikDefaultCertificate .Values.foundation.managed }}
 {{- if and $wanted (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/TLSStore") }}
-apiVersion: traefik.io/v1alpha1
-kind: TLSStore
+{{- $name := printf "%s-traefik-default-cert" .Release.Name }}
+apiVersion: v1
+kind: ServiceAccount
 metadata:
-  name: default
-  namespace: {{ .Release.Namespace }}
+  name: {{ $name }}
   labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: ingress }
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: ingress }
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: ["traefik.io"]
+    resources: ["tlsstores"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: ingress }
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }} }
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: ingress }
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
-  defaultCertificate:
-    secretName: {{ include "cloudgrange.tlsSecretName" . | quote }}
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 65534) | nindent 8 }}
+      containers:
+        - name: tlsstore
+          image: {{ .Values.secretsBootstrap.image }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              cat <<'EOF' | kubectl apply -n {{ .Release.Namespace }} -f -
+              apiVersion: traefik.io/v1alpha1
+              kind: TLSStore
+              metadata:
+                name: default
+                labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: ingress }
+              spec:
+                defaultCertificate:
+                  secretName: {{ include "cloudgrange.tlsSecretName" . }}
+              EOF
+              echo "Traefik default certificate: Secret {{ include "cloudgrange.tlsSecretName" . }}"
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
 {{- end }}
