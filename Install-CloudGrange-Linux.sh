@@ -48,7 +48,8 @@ ENGINE="k3s"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange] [--engine compose|k3s] [--preflight-only]" >&2
+    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange] [--engine compose|k3s] [--preflight-only]
+       sudo $0 --uninstall [--yes] [--remove-docker]" >&2
     exit 2
 }
 
@@ -59,6 +60,9 @@ while [ $# -gt 0 ]; do
         --compose-dir) COMPOSE_DIR=$2; shift 2 ;;
         --engine)      ENGINE=$2; shift 2 ;;
         --preflight-only) PREFLIGHT_ONLY=true; shift ;;
+        # AB#9171: remove this install (K3s or legacy Compose) so the host is clean for a reinstall.
+        # Delegates to the bundled Uninstall-CloudGrange-Linux.sh; remaining args go to it.
+        --uninstall)   shift; exec "${BASH:-/bin/bash}" "$SCRIPT_DIR/Uninstall-CloudGrange-Linux.sh" "$@" ;;
         -h|--help)     usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
