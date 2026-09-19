@@ -34,6 +34,10 @@ spec:
           env:
             - name: CLOUDGRANGE_API_UPSTREAM
               value: "http://{{ .Release.Name }}-api:8080"
+            # AB#9171: Keycloak picks its /resources/<5-char version>/ theme path at start-up, so the
+            # Ingress cannot route one fixed segment; the portal proxies the pattern to Keycloak.
+            - name: CLOUDGRANGE_KEYCLOAK_UPSTREAM
+              value: "http://{{ .Release.Name }}-keycloak:8080"
             - name: CLOUDGRANGE_API_URL
               value: ""
           # AB#9171: the platform's PUBLIC TLS certificate, served by the portal at
