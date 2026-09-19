@@ -262,9 +262,11 @@ run_job e2e-rollback "" 10m rollback
 [ "$(kubectl -n $NS get deploy $REL-api -o jsonpath='{.status.readyReplicas}')" = 1 ] && ok "api ready after rollback" || bad "api not ready after rollback"
 
 refused() { # <case> <expected message fragment> <label>
+    # --manifest-url is the channel document itself (the form an API without a manifest URL passes), so
+    # the refusal comes from what the channel lists, not from a mismatch with a URL we made up.
     local before after
     before=$(revisions)
-    run_job "e2e-$1" "$BASE/$1/channel.json" 10m apply --version "$TO" --manifest-url "$BASE/$1/manifest.json"
+    run_job "e2e-$1" "$BASE/$1/channel.json" 10m apply --version "$TO" --manifest-url "$BASE/$1/channel.json"
     [ "$(status_of state)" = failed ] && [[ "$(status_of message)" == *"$2"* ]] && ok "$3 refused: $(status_of message)" || bad "$3: $(status_of state) $(status_of message)"
     after=$(revisions)
     [ "$before" = "$after" ] && ok "no helm revision created by the refused $3" || bad "helm revisions $before -> $after after $3"
