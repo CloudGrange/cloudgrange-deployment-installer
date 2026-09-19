@@ -17,6 +17,11 @@ param(
     [ValidateSet('Compose', 'K3s')]
     [string]$Engine = 'K3s',
     [string]$VmIp = '192.168.100.10',
+    # AB#9171: the Hyper-V VM name. Defaults per engine (cloudgrange-k3s / cloudgrange-docker).
+    # A second install on the same host MUST pass its own name (and -VmIp): provisioning removes and
+    # replaces an existing VM of this name, and the VHDX path defaults to <name>.vhdx.
+    [ValidatePattern('^$|^[A-Za-z0-9][A-Za-z0-9-]{0,62}$')]
+    [string]$VmName = '',
     [string]$VhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx',
     # AB#1585 — Proxy support. Format: http://host:port or http://user:pass@host:port
     # If omitted, reads $env:HTTPS_PROXY then $env:HTTP_PROXY.
@@ -76,6 +81,8 @@ if (-not [string]::IsNullOrEmpty($HttpProxy)) {
         $proxyArgs['ProxyPassword'] = $ProxyPassword
     }
 }
+
+$effectiveVmName = if ($VmName) { $VmName } elseif ($Engine -eq 'K3s') { 'cloudgrange-k3s' } else { 'cloudgrange-docker' }
 
 function Invoke-CloudGrangeInstall {
     Write-Host "`n  CloudGrange Installer — Mode: $Mode" -ForegroundColor Cyan
@@ -171,8 +178,13 @@ function Invoke-CloudGrangeInstall {
     # Hyper-V cmdlets are not available in PS7 — this check runs via powershell.exe (PS5.1).
     if (-not $useWsl2) {
         Write-Progress-Step "Validating VM IP $VmIp"
-        $switchJson = & powershell.exe -NonInteractive -NoProfile -Command "Import-Module Hyper-V -ErrorAction SilentlyContinue; Get-VMSwitch -ErrorAction SilentlyContinue | Select-Object Name | ConvertTo-Json -Compress" 2>$null
-        # Basic conflict check — a full subnet overlap check would require network math beyond installer scope
+        # AB#9171: refuse an IP another machine already answers on, unless it is the VM this run
+        # replaces (a re-run). Without this a second install on the host silently took over the
+        # first install's address. Hyper-V does not report guest IPs without KVP, so ping is the probe.
+        $ownVmExists = [bool](& powershell.exe -NonInteractive -NoProfile -Command "Import-Module Hyper-V -ErrorAction SilentlyContinue; [bool](Get-VM -Name '$effectiveVmName' -ErrorAction SilentlyContinue)" 2>$null | Select-String -SimpleMatch 'True')
+        if (-not $ownVmExists -and (Test-Connection -TargetName $VmIp -Count 1 -TimeoutSeconds 2 -Quiet -ErrorAction SilentlyContinue)) {
+            Write-Error "CG-INST-ERR-014: $VmIp already answers on the network and no VM named '$effectiveVmName' exists to replace. Pick a free -VmIp (and a -VmName for a second install on this host)."
+        }
         Write-Host "  IP validation passed" -ForegroundColor Green
     }
 
@@ -195,7 +207,7 @@ function Invoke-CloudGrangeInstall {
         # The private key is written to a temp file (mode 600) and deleted after install.
         # The public key is embedded in the VM's cloud-init authorized_keys.
         # Neither key is ever logged, committed, or persisted beyond this install run.
-        $sshKeyDir  = Join-Path $env:TEMP 'cloudgrange-install-key'
+        $sshKeyDir  = Join-Path $env:TEMP $(if ($VmName) { "cloudgrange-install-key-$VmName" } else { 'cloudgrange-install-key' })
         New-Item -ItemType Directory -Path $sshKeyDir -Force | Out-Null
         $sshKeyPath = Join-Path $sshKeyDir 'installer_ed25519'
         if (Test-Path $sshKeyPath) { Remove-Item $sshKeyPath, "$sshKeyPath.pub" -Force }
@@ -235,10 +247,9 @@ function Invoke-CloudGrangeInstall {
         # colliding with any existing Compose VM of that name. Give each engine its own VM
         # name and VHDX path; only override the VHDX default (never an explicit -VhdxPath
         # the caller supplied) so a user-specified path is still honored for either engine.
-        $effectiveVmName = if ($Engine -eq 'K3s') { 'cloudgrange-k3s' } else { 'cloudgrange-docker' }
         $effectiveVhdxPath = $VhdxPath
-        if ($Engine -eq 'K3s' -and $VhdxPath -eq 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx') {
-            $effectiveVhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-k3s.vhdx'
+        if ($VhdxPath -eq 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx') {
+            $effectiveVhdxPath = "C:\ProgramData\CloudGrange\$effectiveVmName.vhdx"
         }
         # New-CloudGrangeVm.ps1 uses Hyper-V cmdlets that require Windows PowerShell (PS5.1).
         # Invoke via powershell.exe so the Hyper-V module loads correctly while the main
@@ -283,7 +294,7 @@ function Invoke-CloudGrangeInstall {
     if ($Engine -eq 'K3s') {
         Write-Progress-Step "Deploying CloudGrange via K3s/Helm"
         . "$PSScriptRoot\scripts\Deploy-K3sHelm.ps1"
-        $k3sArgs = @{ VmName = 'cloudgrange-k3s'; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+        $k3sArgs = @{ VmName = $effectiveVmName; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
         if ($Mode -eq 'Bundled') {
             # AB#9171: the airgap/ directory of an extracted Install-CloudGrange-K3s-Bundled.zip.
             $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
@@ -302,7 +313,7 @@ function Invoke-CloudGrangeInstall {
     } else {
         Write-Progress-Step "Installing Docker CE"
         . "$PSScriptRoot\scripts\Install-DockerCe.ps1"
-        $dockerCeArgs = @{ VmName = 'cloudgrange-docker'; UseWsl2 = $useWsl2; VmIp = $VmIp }
+        $dockerCeArgs = @{ VmName = $effectiveVmName; UseWsl2 = $useWsl2; VmIp = $VmIp }
         if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
             $dockerCeArgs['SshKeyPath'] = $sshKeyPath
         } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
@@ -322,7 +333,7 @@ function Invoke-CloudGrangeInstall {
         Write-Progress-Step "Deploying CloudGrange Docker Compose stack"
         . "$PSScriptRoot\scripts\Deploy-DockerCompose.ps1"
         # Compose (legacy, unmigrated installs only) keeps its old default tag.
-        $composeArgs = @{ VmName = 'cloudgrange-docker'; VmIp = $VmIp; Version = $(if ($Version) { $Version } else { 'latest' }); UseWsl2 = $useWsl2 }
+        $composeArgs = @{ VmName = $effectiveVmName; VmIp = $VmIp; Version = $(if ($Version) { $Version } else { 'latest' }); UseWsl2 = $useWsl2 }
         if (-not $useWsl2 -and -not [string]::IsNullOrEmpty($sshKeyPath)) {
             $composeArgs['SshKeyPath'] = $sshKeyPath
         } elseif (-not $useWsl2 -and $null -ne $vmGuestCred) {
