@@ -373,10 +373,13 @@ function Invoke-CloudGrangeInstall {
 
     # Check setup state — print first-run URL if setup is still pending
     $setupPending = $false
+    $setupTokenRequired = $false
     try {
         # AB#8129: the API route is /api/v1/setup/status and returns { setupComplete, platformName, publicUrl }.
         $statusResp = Invoke-RestMethod -Uri "$apiHealthBase/api/v1/setup/status" -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
         $setupPending = -not [bool]$statusResp.setupComplete
+        # AB#9171: only look for the one-use token when the platform says it wants one.
+        $setupTokenRequired = [bool]($statusResp.PSObject.Properties['setupTokenRequired'] -and $statusResp.setupTokenRequired)
     } catch {
         # Non-fatal — setup-status endpoint may not yet be reachable; user navigates manually
     }
@@ -388,11 +391,14 @@ function Invoke-CloudGrangeInstall {
     $setupToken = ''
     $realmAdminPassword = ''
     if (-not [string]::IsNullOrEmpty($sshKeyPath) -and (Test-Path $sshKeyPath)) {
+      # AB#9171: these reads only DISPLAY credentials after a successful install. A hang or error here
+      # (seen live: CG-SSH-ERR-002 after "API health: OK") must never turn a working install into a failure.
+      try {
         $credSsh = Get-CloudGrangeSshOptions -KeyPath $sshKeyPath
         if ($Engine -eq 'K3s') {
             # AB#9185: the K3s engine's API pod and its bootstrap secrets Secret (AB#9178)
             # replace the Compose engine's docker-compose-exec and .env file reads above.
-            if ($setupPending) {
+            if ($setupPending -and $setupTokenRequired) {
                 # CLOUDGRANGE_REQUIRE_SETUP_TOKEN is off by default, so this file normally does not
                 # exist — 2>/dev/null keeps that expected, handled-below miss from printing a raw
                 # "cat: ... No such file or directory" to the console on every ordinary install.
@@ -407,6 +413,9 @@ function Invoke-CloudGrangeInstall {
             }
             $realmAdminPassword = ((Invoke-CloudGrangeSsh -ArgumentList ($credSsh + @("cloudgrange@$VmIp", "sudo grep '^CLOUDGRANGE_REALM_ADMIN_PASSWORD=' /opt/cloudgrange/.env | cut -d= -f2")) -CaptureOutput -TimeoutSeconds 120) -join '').Trim()
         }
+      } catch {
+        Write-Warning "CloudGrange is installed, but the installer could not read the first-run credentials from the VM ($($_.Exception.Message)). Open the portal to run the setup wizard."
+      }
     }
 
     # Clean up the ephemeral SSH key pair after successful install, unless an appliance build
