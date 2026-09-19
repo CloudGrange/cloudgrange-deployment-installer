@@ -25,6 +25,12 @@ spec:
       app.kubernetes.io/name: cloudgrange-api
   template:
     metadata:
+      annotations:
+        # AB#9171: roll the API when the global settings it runs with change. Workload identity is
+        # injected at pod creation, so `helm upgrade --set global.aks.managedIdentityClientId=…` left the
+        # running pod without it (seen live on AKS) until someone restarted it by hand. The umbrella's
+        # platform-env ConfigMap is rendered from these globals too.
+        checksum/global: {{ toJson .Values.global | sha256sum | trunc 16 | quote }}
       labels:
         app.kubernetes.io/name: cloudgrange-api
         {{- if $.Values.global.aks.enabled }}
