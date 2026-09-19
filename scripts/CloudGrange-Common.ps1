@@ -58,6 +58,55 @@ function Get-CloudGrangeSshOptions {
     return , $options.ToArray()
 }
 
+function ConvertTo-CloudGrangeCommandLineArgument {
+    # Quote one argument for a Windows command line (CommandLineToArgvW rules): backslashes are literal
+    # except before a double quote, where they and the quote are escaped.
+    param([AllowEmptyString()][string]$Argument)
+    if ($Argument -ne '' -and $Argument -notmatch '[\s"]') { return $Argument }
+    $sb = [System.Text.StringBuilder]::new('"')
+    $backslashes = 0
+    foreach ($ch in $Argument.ToCharArray()) {
+        if ($ch -eq '\') { $backslashes++; continue }
+        if ($ch -eq '"') { [void]$sb.Append('\', 2 * $backslashes + 1); $backslashes = 0; [void]$sb.Append('"'); continue }
+        if ($backslashes) { [void]$sb.Append('\', $backslashes); $backslashes = 0 }
+        [void]$sb.Append($ch)
+    }
+    if ($backslashes) { [void]$sb.Append('\', 2 * $backslashes) }
+    return $sb.Append('"').ToString()
+}
+
+function Invoke-CloudGrangeBoundedProcessToFile {
+    # Invoke-CloudGrangeBoundedProcess -CaptureOutput, with stdin and stdout on temporary files (see there).
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [Parameter(Mandatory)][int]$TimeoutSeconds,
+        [byte[]]$StandardInput,
+        [string]$Description = $FilePath
+    )
+    $inFile = [System.IO.Path]::GetTempFileName()
+    $outFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $bytes = [byte[]]::new(0)
+        if ($null -ne $StandardInput) { $bytes = $StandardInput }
+        [System.IO.File]::WriteAllBytes($inFile, $bytes)
+        $commandLine = ($ArgumentList | ForEach-Object { ConvertTo-CloudGrangeCommandLineArgument $_ }) -join ' '
+        $process = Start-Process -FilePath $FilePath -ArgumentList $commandLine -NoNewWindow -PassThru `
+            -RedirectStandardInput $inFile -RedirectStandardOutput $outFile
+        $null = $process.Handle   # keeps the handle so ExitCode is available after the wait
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch [System.InvalidOperationException] { }
+            $null = $process.WaitForExit(10000)
+            throw "CG-SSH-ERR-002: $Description did not finish within $TimeoutSeconds seconds and was stopped."
+        }
+        $process.WaitForExit()
+        $global:LASTEXITCODE = $process.ExitCode
+        return @([System.IO.File]::ReadAllText($outFile) -split "\r?\n" | Where-Object { $_ -ne '' })
+    } finally {
+        Remove-Item -LiteralPath $inFile, $outFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-CloudGrangeBoundedProcess {
     # Runs a process with stdin as a pipe (never the console), optional stdin bytes and captured stdout, and stops
     # the whole process tree when it runs longer than TimeoutSeconds. Sets $LASTEXITCODE.
@@ -70,6 +119,15 @@ function Invoke-CloudGrangeBoundedProcess {
         [switch]$CaptureOutput,
         [string]$Description = $FilePath
     )
+    if ($CaptureOutput) {
+        # AB#9171: capture through FILES, not pipes. Windows OpenSSH (ssh.exe 9.5) never exits, and prints
+        # nothing, when its stdout is a .NET anonymous pipe and the installer has no console of its own
+        # (run over SSH, from a scheduled task or a service): every captured call timed out with
+        # CG-SSH-ERR-002, even `ssh ... hostname`, which failed the first-run credential read and the
+        # appliance build. With a file for stdout the same call returns in under a second.
+        return Invoke-CloudGrangeBoundedProcessToFile -FilePath $FilePath -ArgumentList $ArgumentList `
+            -TimeoutSeconds $TimeoutSeconds -StandardInput $StandardInput -Description $Description
+    }
     $psi = [System.Diagnostics.ProcessStartInfo]::new($FilePath)
     foreach ($argument in $ArgumentList) { $psi.ArgumentList.Add($argument) }
     $psi.UseShellExecute = $false
