@@ -1,6 +1,14 @@
 image:
   repository: quay.io/keycloak/keycloak
   tag: 26.6.4
+# AB#9171: the path segment Keycloak serves its theme assets under (/resources/<this>/login/...,
+# used by the device-verification and login pages the CLI's `cg auth login` sends the operator
+# to). It is fixed per Keycloak release — 26.6.4 serves /resources/n5lwt/ (verified on a live
+# install, stable across restarts). The platform Ingress routes ONLY this segment to Keycloak,
+# because plain /resources is a portal route. When image.tag changes, read the new value from
+#   curl -sk https://<host>/realms/cloudgrange/device | grep -o '/resources/[a-z0-9]*/' | sort -u
+# and update it here; a stale value leaves those pages unstyled but still working.
+resourcesVersion: n5lwt
 resources:
   requests: { cpu: 200m, memory: 512Mi }
   limits: { memory: 1Gi }

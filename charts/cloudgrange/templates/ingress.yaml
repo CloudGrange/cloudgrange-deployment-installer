@@ -58,6 +58,27 @@ spec:
               service:
                 name: {{ .Release.Name }}-api
                 port: { number: 8080 }
+          {{- /* AB#9171 (UAT: `cg auth login` got the portal SPA from /realms): the platform realm's
+          OIDC endpoints (discovery, device authorization, token, the device-verification and
+          login pages) are served on the platform host over this Ingress's TLS, exactly like the
+          Compose edge nginx: ONLY /realms/cloudgrange — the master realm and /admin are never
+          published. Keycloak's static theme assets live under /resources/<resource version>/;
+          plain /resources is a portal route (Resources blade), so only the exact version
+          segment of the pinned Keycloak image is routed (keycloak.resourcesVersion). */}}
+          - path: /realms/cloudgrange
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-keycloak
+                port: { number: 8080 }
+          {{- with .Values.keycloak.resourcesVersion }}
+          - path: /resources/{{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}-keycloak
+                port: { number: 8080 }
+          {{- end }}
           - path: /
             pathType: Prefix
             backend:
