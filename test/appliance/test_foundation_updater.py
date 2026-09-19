@@ -350,6 +350,24 @@ class FoundationUpdaterTests(unittest.TestCase):
         self.assertIn({"name": "openssl", "version": "3.0.13-0ubuntu3.6", "security": True}, listed)
         self.assertEqual(len(listed), 3)
 
+    def test_check_reports_that_the_offered_release_restarts_the_host(self):
+        # AB#9171 (live): a release with requiresReboot, on a host with no reboot pending and no kernel
+        # updates. The status said rebootRequired=false, the card offered a plain "Start update", and the
+        # apply was refused ("needs the host to reboot"). The status must announce it before the click.
+        self.write(os.path.join(self.www, "channel.json"), json.dumps({"releases": [
+            {"version": "F2609.1.0", "k3sVersion": OLD_K3S, "requiresReboot": True,
+             "bundleUrl": "https://example.invalid/a.zip", "sha256": "a" * 64}]}))
+        self.request({"action": "foundation-check"})
+        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL=self.server.base + "/channel.json")
+        self.assertEqual(status["availableVersion"], "F2609.1.0")
+        self.assertTrue(status["rebootRequired"], "the offered release restarts the host")
+        self.write(os.path.join(self.www, "channel.json"), json.dumps({"releases": [
+            {"version": "F2609.1.0", "k3sVersion": OLD_K3S, "requiresReboot": False,
+             "bundleUrl": "https://example.invalid/a.zip", "sha256": "a" * 64}]}))
+        self.request({"action": "foundation-check"})
+        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL=self.server.base + "/channel.json")
+        self.assertFalse(status["rebootRequired"], "no restart: not the release, no kernel package, none pending")
+
     def test_check_offline_still_reports(self):
         open(os.path.join(self.fake, "offline"), "w").close()
         self.request({"action": "foundation-check"})
