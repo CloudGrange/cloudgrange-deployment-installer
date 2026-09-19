@@ -343,10 +343,21 @@ remove_stale_nodes() {
         [ "$(date +%s)" -lt "$deadline" ] || { log "WARNING: node $me not Ready after 180s; leaving other nodes alone"; return 0; }
         sleep 3
     done
+    # Ready alone is not enough: right after K3s starts here, the build VM's node still reads Ready=True until the
+    # node controller's grace period (~40s) runs out, so a first boot kept it (seen on the 2609.0.0-preview.22
+    # appliance: first boot failed and every later update failed its health gate on that node's DaemonSet pod).
+    # A live kubelet renews its node Lease every ~10s; the build VM's Lease was last renewed before it was
+    # generalized, minutes ago. So a node is stale if it is not Ready OR its Lease is older than 60s.
+    local now renew renewed age
+    now=$(date +%s)
     k3s kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status' 2>/dev/null \
         | while read -r name ready; do
-            if [ "$name" != "$me" ] && [ "$ready" != True ]; then
-                log "removing stale node $name (NotReady; this host is now $me)"
+            [ -n "$name" ] && [ "$name" != "$me" ] || continue
+            age=''
+            renew=$(k3s kubectl get lease -n kube-node-lease "$name" -o jsonpath='{.spec.renewTime}' 2>/dev/null || true)
+            if [ -n "$renew" ] && renewed=$(date -d "$renew" +%s 2>/dev/null); then age=$((now - renewed)); fi
+            if [ "$ready" != True ] || { [ -n "$age" ] && [ "$age" -gt 60 ]; }; then
+                log "removing stale node $name (Ready=${ready:-?}, lease renewed ${age:-?}s ago; this host is now $me)"
                 k3s kubectl delete node "$name" --wait=false >/dev/null 2>&1 || true
             fi
         done
