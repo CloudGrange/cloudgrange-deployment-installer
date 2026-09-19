@@ -2,13 +2,13 @@
 # Copyright 2026 CloudGrange Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# AB#9171 (plan 2026-09-18-foundation-platform-separation section 3) — build a signed Foundation
+# AB#9171 (plan 2026-09-18-foundation-platform-separation section 3) — build a Foundation
 # release: the zip the host Foundation updater (scripts/cloudgrange-updater-k3s.py) applies from
 # Platform -> Updates -> Foundation, either downloaded through the Foundation channel or uploaded to
 # an air-gapped host. Nothing is uploaded here; Publish-FoundationRelease.sh does that.
 #
-# The zip (format cg-foundation-release-v1, exactly what the updater's extract/verify_signature/
-# load_manifest accept):
+# The zip (format cg-foundation-release-v1, exactly what the updater's extract /
+# verify_signature_if_configured / load_manifest accept):
 #   foundation-release.json       the manifest: version, requiresReboot, supportedPlatformVersions,
 #                                 k3s{version, binary, installScript, airgapImages}, apt{packages,
 #                                 securityUpdates}, hostFiles[] and files{path: sha256} pinning EVERY
@@ -33,8 +33,8 @@
 # sign-blob (password in COSIGN_PASSWORD). The record (foundation-release-record.json) says which.
 #
 # Before it finishes, the builder runs the updater's OWN extract / load_manifest (and, when signed,
-# verify_signature) over the zip it produced, so a bundle the updater would refuse is never reported
-# as built.
+# verify_signature_if_configured) over the zip it produced, so a bundle the updater would refuse is
+# never reported as built.
 #
 # Usage:
 #   scripts/release/New-FoundationRelease.sh --version F2609.1.0 --out DIR [--signing-key FILE]
@@ -46,7 +46,7 @@
 #                     they are verified exactly as a download is
 #   --expect-pubkey   the public key installed hosts verify with (default: cloudgrange-signing-key.pub
 #                     at the repo root). A real key that does not match the signing key is an error;
-#                     the placeholder is a loud warning (no host can verify anything yet).
+#                     the placeholder is only noted (hosts then rely on the sha256).
 # Needs: bash, python3, openssl, curl (unless --k3s-source-dir), cosign (only for a cosign key).
 set -euo pipefail
 
@@ -335,7 +335,8 @@ u = m.FoundationUpdater()
 work = u.extract(sys.argv[2])
 try:
     if sys.argv[3] == "true":
-        u.verify_signature(work)
+        if not u.verify_signature_if_configured(work):
+            sys.exit("[foundation-release] ERROR: the signature was not checked (public key not usable)")
     manifest = u.load_manifest(work)
 except m.UpdateError as err:
     sys.exit("[foundation-release] ERROR: the updater refuses this bundle: %s" % err)

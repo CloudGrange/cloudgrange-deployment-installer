@@ -12,8 +12,10 @@
   `foundation/<v>/…zip(.sha256)` and adds `{version,bundleUrl,sha256,k3sVersion,…}` to
   `FOUNDATION_CHANNEL_URL`. **It has never been run with `--publish`.**
 - Test: `test/appliance/test_foundation_release_builder.py` (run as root in WSL).
-- Gotcha: r2.dev returns **HTTP 403 to Python-urllib's User-Agent**. The publisher reads with curl for
-  that reason.
+- Gotcha: r2.dev returns **HTTP 403 to Python-urllib's User-Agent**. The host updater's `https_open`
+  used urllib's default User-Agent, so every real `foundation-check` and channel download failed. It now sends
+  `cloudgrange-updater-k3s/2`, verified live against r2.dev (200 now; 403 before). The publisher
+  reads with curl.
 
 **Updated:** 2026-09-18
 **Branch:** `feat/k3s-airgap-bundle-retire-compose` (16 commits, **UNPUSHED**, no PR)

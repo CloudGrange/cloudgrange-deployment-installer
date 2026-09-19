@@ -111,6 +111,10 @@ class FoundationReleaseBuilderTests(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         return proc
 
+    def no_key(self):
+        """Updater env for a host with no Foundation signing key installed (owner decision 2026-09-18)."""
+        return {"CLOUDGRANGE_FOUNDATION_PUBKEY": os.path.join(self.keys, "absent.pub")}
+
     # ---- the signed build -----------------------------------------------------------------------
     def test_signed_build_is_the_updater_format_and_applies_end_to_end(self):
         proc = self.build()
@@ -197,6 +201,7 @@ class FoundationReleaseBuilderTests(unittest.TestCase):
     def test_unsigned_bundle_is_accepted_by_its_sha256_and_refused_when_tampered(self):
         # Owner decision 2026-09-18: trust is HTTPS + SHA-256 (the bundle digest the API/channel carries,
         # plus the manifest's per-file pins); a signature is optional. No key -> a normal, installable bundle.
+        NO_KEY = self.no_key()
         proc = self.build(key=False)
         self.assertNotIn("UNSIGNED", proc.stdout + proc.stderr)
         self.assertIn("not signed", proc.stdout)
@@ -209,7 +214,7 @@ class FoundationReleaseBuilderTests(unittest.TestCase):
         # A pinned file changed after the build: the manifest's per-file sha256 catches it.
         tampered = self.rewrite(data, lambda n, b: b"K3S v6.6.6+k3s1\n" if n == "k3s/k3s" else b)
         rid = self.apply(tampered)
-        self.run_updater()
+        self.run_updater(**NO_KEY)
         self.assertEqual(self.job(rid)["state"], "failed")
         self.assertIn("checksum mismatch for k3s/k3s", self.job(rid)["message"])
         self.assert_nothing_changed()
@@ -226,14 +231,14 @@ class FoundationReleaseBuilderTests(unittest.TestCase):
             return body
         rid = self.request({"action": "foundation-apply", "version": VERSION, "bundleId": self.upload(self.rewrite(data, forge)),
                             "sha256": sha256(data), "requestedBy": "admin@test"})
-        self.run_updater()
+        self.run_updater(**NO_KEY)
         self.assertEqual(self.job(rid)["state"], "failed")
         self.assertIn("sha256 mismatch", self.job(rid)["message"])
         self.assert_nothing_changed()
 
         # The genuine bundle, with its digest: applied end to end by the real updater.
         rid = self.apply(data, platformVersion="2609.0.0")
-        status = self.run_updater()
+        status = self.run_updater(**NO_KEY)
         self.assertEqual(self.job(rid)["state"], "succeeded", self.job(rid)["message"])
         self.assertEqual((status["installedVersion"], status["k3sVersion"]), (VERSION, NEW_K3S))
         self.assertEqual(self.running_k3s(), NEW_K3S)
@@ -274,50 +279,55 @@ class FoundationReleaseBuilderTests(unittest.TestCase):
 
     # ---- publish (dry run) -> channel -> the updater ----------------------------------------------
     def test_publish_dry_run_writes_the_channel_the_updater_reads_and_uploads_nothing(self):
+        # The channel and bundle are served by the harness's real https server (its own CA), exactly
+        # the way a host reads them: https only, the bundle on the channel host, sha256 from the channel.
         self.build(key=False)
-        public = os.path.join(self.tmp, "public")
-        channel = os.path.join(public, "channels", "foundation-preview.json")
+        www = self.www
+        channel = os.path.join(www, "channels", "foundation-preview.json")
+        channel_url = self.server.base + "/channels/foundation-preview.json"
         os.makedirs(os.path.dirname(channel))
         older = {"version": "F2609.0.0", "bundleUrl": "https://example.invalid/old.zip", "sha256": "a" * 64,
                  "k3sVersion": OLD_K3S}
         self.write(channel, json.dumps({"releases": [older]}))
         out = os.path.join(self.tmp, "channel.out.json")
+        tls = {"CURL_CA_BUNDLE": self.server.ca}
         proc = self.publish("--bundle", os.path.join(self.out, BUNDLE), "--pubkey", self.pub,
-                            "--channel-url", "file://" + channel, "--channel-out", out)
+                            "--channel-url", channel_url, "--channel-out", out, env_extra=tls)
         self.assertIn("DRY RUN", proc.stdout)
         self.assertEqual(json.loads(self.read(channel)), {"releases": [older]}, "a dry run changes nothing")
         doc = json.loads(self.read(out))
         self.assertEqual(doc["releases"][0], older, "other releases are kept")
         entry = doc["releases"][1]
         data = self.bundle_bytes()
-        bundle_url = "file://%s/foundation/%s/%s" % (public, VERSION, BUNDLE)
+        bundle_url = "%s/foundation/%s/%s" % (self.server.base, VERSION, BUNDLE)
         self.assertEqual({k: entry[k] for k in ("version", "bundleUrl", "sha256", "k3sVersion")},
                          {"version": VERSION, "bundleUrl": bundle_url, "sha256": sha256(data), "k3sVersion": NEW_K3S})
 
         # Stand the dry-run output up where --publish would put it, then drive the updater through it.
+        env = dict(self.no_key(), CLOUDGRANGE_FOUNDATION_CHANNEL_URL=channel_url)
         self.write(channel, self.read(out))
-        hosted = os.path.join(public, "foundation", VERSION, BUNDLE)
+        hosted = os.path.join(www, "foundation", VERSION, BUNDLE)
         os.makedirs(os.path.dirname(hosted))
         self.request({"action": "foundation-check"})
-        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL="file://" + channel)
+        status = self.run_updater(**env)
         self.assertEqual((status["availableVersion"], status["targetK3sVersion"]), (VERSION, NEW_K3S))
         # A different file at the bundle URL (a swapped or corrupted download) fails the channel sha256.
         self.write(hosted, self.rewrite(data, lambda n, b: b + b"# extra\n"
                                         if n == "hostfiles/cloudgrange-updater-k3s.service" else b))
         rid = self.request({"action": "foundation-apply", "version": VERSION, "confirmReboot": False})
-        self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL="file://" + channel)
+        self.run_updater(**env)
         self.assertIn("sha256 mismatch", self.job(rid)["message"])
         self.assert_nothing_changed()
         shutil.copy(os.path.join(self.out, BUNDLE), hosted)
         rid = self.request({"action": "foundation-apply", "version": VERSION, "confirmReboot": False})
-        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL="file://" + channel)
+        status = self.run_updater(**env)
         self.assertEqual(self.job(rid)["state"], "succeeded", self.job(rid)["message"])
         self.assertEqual((status["installedVersion"], status["k3sVersion"]), (VERSION, NEW_K3S))
 
         # Re-publishing different bytes under the same version is refused (immutability).
-        self.write(os.path.join(public, "foundation", VERSION, BUNDLE + ".sha256"), "%s  %s\n" % ("b" * 64, BUNDLE))
+        self.write(hosted + ".sha256", "%s  %s\n" % ("b" * 64, BUNDLE))
         proc = self.publish("--bundle", os.path.join(self.out, BUNDLE), "--pubkey", self.pub,
-                            "--channel-url", "file://" + channel, expect_ok=False)
+                            "--channel-url", channel_url, expect_ok=False, env_extra=tls)
         self.assertIn("already published", proc.stderr)
 
     def test_publish_refuses_a_bad_signature_and_needs_credentials_to_upload(self):
@@ -331,6 +341,27 @@ class FoundationReleaseBuilderTests(unittest.TestCase):
         self.assertIn("does not verify", proc.stderr)
         proc = self.publish("--bundle", bundle, "--pubkey", self.pub, "--publish", expect_ok=False)
         self.assertIn("CF_ACCOUNT_ID", proc.stderr)
+
+class UpdaterUserAgentTests(unittest.TestCase):
+    def test_downloads_do_not_use_python_urllibs_user_agent(self):
+        # Cloudflare's r2.dev (the download host) answers "Python-urllib/x" with HTTP 403, which made the
+        # channel and every bundle download fail on a real host. https_open must identify itself.
+        m = harness.load_module()
+        seen = []
+
+        class Opener:
+            def open(self, req, timeout=None):
+                seen.append(req)
+                return io.BytesIO(b"{}")
+        real = m.urllib.request.build_opener
+        m.urllib.request.build_opener = lambda *a: Opener()
+        try:
+            m.https_open("https://pub-example.r2.dev/channels/foundation-preview.json", 5)
+        finally:
+            m.urllib.request.build_opener = real
+        ua = seen[0].get_header("User-agent")
+        self.assertTrue(ua and not ua.startswith("Python-urllib"), ua)
+
 
 # The harness's helpers (stub apt/k3s/systemctl, fake host root, openssl key pair, upload/request/
 # run_updater/job/calls), borrowed rather than copied so the two suites cannot drift apart.
