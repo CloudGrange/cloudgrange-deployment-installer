@@ -191,10 +191,25 @@ backup_db() { # <dir>
     sha256sum "$1/cloudgrange.dump" > "$1/cloudgrange.dump.sha256"
 }
 
+# Restore into an EMPTY database, in one transaction. `pg_restore --clean` only drops the objects
+# that are IN the dump, so anything the newer release's migrations added (tables, and foreign keys
+# onto tables the dump does contain) survived and blocked the drops: a real 2609.0.0-preview.12 ->
+# preview.10 rollback failed with "cannot drop constraint secret_refs_pkey ... constraint
+# cluster_credentials_credential_ref_id_fkey depends on it" and left the old release on the new
+# schema. So every non-system schema (ours and Keycloak's `public`) is dropped, `public` is
+# re-created (pg_dump does not emit it), and the dump is replayed; any error rolls it all back.
 restore_db() { # <dir>
     (cd "$1" && sha256sum -c cloudgrange.dump.sha256 >/dev/null) || { log "backup checksum mismatch in $1"; return 1; }
-    pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error \
-        --dbname="$PGDATABASE" "$1/cloudgrange.dump"
+    pg_restore --list "$1/cloudgrange.dump" >/dev/null || { log "backup archive in $1 is unreadable"; return 1; }
+    {
+        echo 'BEGIN;'
+        echo 'SET client_min_messages = warning;'
+        echo "DO \$\$DECLARE s text; BEGIN FOR s IN SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' LOOP EXECUTE format('DROP SCHEMA %I CASCADE', s); END LOOP; END\$\$;"
+        echo 'CREATE SCHEMA public;'
+        # A failed render must never reach COMMIT: the division error aborts the transaction.
+        pg_restore --no-owner --file=- "$1/cloudgrange.dump" || echo 'SELECT 1/0 AS pg_restore_failed;'
+        echo 'COMMIT;'
+    } | psql --no-psqlrc -q -v ON_ERROR_STOP=1 --dbname="$PGDATABASE" >/dev/null
 }
 
 # Stop everything that writes to the database before a restore. The replica counts are saved
