@@ -20,6 +20,17 @@ spec:
   # relay dispatch is wired up (redis.enabled below) — otherwise a relay connected to one
   # pod is invisible to a job dispatched by another.
   replicas: {{ .Values.replicaCount }}
+  {{- if has .Values.persistence.accessMode (list "ReadWriteOnce" "ReadWriteOncePod") }}
+  # AB#9171: the API mounts ReadWriteOnce volumes. A RollingUpdate starts the new pod before the old
+  # one stops; on a multi-node cluster the scheduler may place it on another node, where the disk
+  # cannot attach while the old pod holds it ("Multi-Attach error"), so the rollout never completes:
+  # a live in-app update 2609.0.0-preview.15 -> .16 on a 2-node AKS cluster timed out and rolled back.
+  # Recreate stops the old pod first. rollingUpdate: null lets an upgrade switch an existing
+  # RollingUpdate Deployment (the API rejects Recreate with rollingUpdate still set).
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: cloudgrange-api
