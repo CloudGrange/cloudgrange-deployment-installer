@@ -87,7 +87,7 @@ spec:
       # fresh install it crash-looped until Postgres was up. Wait for it instead.
       initContainers:
         - name: wait-for-postgres
-          image: {{ .Values.waitForPostgres.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.waitForPostgres.image "global" .Values.global) | quote }}
           command: ["sh", "-c", "until nc -z -w 2 {{ .Release.Name }}-postgres 5432; do echo waiting for {{ .Release.Name }}-postgres; sleep 2; done"]
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 32Mi } }
@@ -157,8 +157,24 @@ spec:
               value: "false"
             - name: CLOUDGRANGE_IMAGE_TAG
               value: {{ include "cloudgrange.imageTag" . | quote }}
+            {{- with .Values.global.imageRegistry }}
+            # AB#9171 (E7): the customer's mirror (global.imageRegistry). The API deploys module
+            # workloads from it too, by the same mirror-path rule as the chart's images.
+            - name: CLOUDGRANGE_IMAGE_REGISTRY
+              value: {{ . | quote }}
+            {{- end }}
             - name: CLOUDGRANGE_UPDATES_DIR
               value: "/var/lib/cloudgrange/updates"
+            {{- if .Values.platformBundles.enabled }}
+            # AB#9171 (E7): offline Platform bundles — where the API stores an upload, the PVC the
+            # updater Job mounts at /bundles, and the upload size limit.
+            - name: CLOUDGRANGE_PLATFORM_BUNDLES_DIR
+              value: "/var/lib/cloudgrange/platform-bundles"
+            - name: CLOUDGRANGE_PLATFORM_BUNDLES_PVC
+              value: "{{ .Release.Name }}-platform-bundles"
+            - name: CLOUDGRANGE_PLATFORM_BUNDLE_MAX_BYTES
+              value: {{ .Values.platformBundles.maxBytes | int64 | toString | quote }}
+            {{- end }}
             - name: CLOUDGRANGE_UPDATE_CHANNEL_URL
               # Shared with the platform updater's trust ConfigMap, so both read the same channel.
               value: {{ include "cloudgrange.updateChannelUrl" (dict "ch" .Values.updateChannel "tag" (include "cloudgrange.imageTag" .)) | quote }}
@@ -179,7 +195,7 @@ spec:
             because only it can see foundation.*, platformUpdater.* and its own kubeVersion.
             optional: true keeps this subchart renderable on its own and lets the updater keys be
             absent when platformUpdater.enabled=false. */}}
-            {{- range list "CLOUDGRANGE_RELEASE_NAME" "CLOUDGRANGE_NAMESPACE" "CLOUDGRANGE_SUPPORTED_KUBE_RANGE" "CLOUDGRANGE_FOUNDATION_MANAGED" "CLOUDGRANGE_PLATFORM_VERSION" "CLOUDGRANGE_PLATFORM_UPDATER_ENABLED" "CLOUDGRANGE_PLATFORM_UPDATER_IMAGE" "CLOUDGRANGE_PLATFORM_UPDATER_SA" "CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC" "CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT" }}
+            {{- range list "CLOUDGRANGE_RELEASE_NAME" "CLOUDGRANGE_NAMESPACE" "CLOUDGRANGE_SUPPORTED_KUBE_RANGE" "CLOUDGRANGE_FOUNDATION_MANAGED" "CLOUDGRANGE_PLATFORM_VERSION" "CLOUDGRANGE_PLATFORM_UPDATER_ENABLED" "CLOUDGRANGE_PLATFORM_UPDATER_IMAGE" "CLOUDGRANGE_PLATFORM_UPDATER_SA" "CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC" "CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT" "CLOUDGRANGE_AIRGAP_REGISTRY" }}
             - name: {{ . }}
               valueFrom: { configMapKeyRef: { name: "{{ $.Release.Name }}-platform-env", key: {{ . }}, optional: true } }
             {{- end }}
@@ -195,6 +211,9 @@ spec:
           volumeMounts:
             - { name: api-secrets, mountPath: /etc/cloudgrange }
             - { name: platform-updates, mountPath: /var/lib/cloudgrange/updates }
+            {{- if .Values.platformBundles.enabled }}
+            - { name: platform-bundles, mountPath: /var/lib/cloudgrange/platform-bundles }
+            {{- end }}
             {{- if and .Values.global.aks.enabled .Values.global.aks.keyVaultSecrets }}
             # AB#9187: mounting the SecretProviderClass volume is what triggers the
             # Secrets Store CSI Driver to sync Key Vault values into the regular
@@ -226,6 +245,9 @@ spec:
         # AB#9171: no host updater and no PVC asked for — Platform updates run in-cluster (the
         # platform-updater Job), so the uploads directory only needs to exist.
         - { name: platform-updates, emptyDir: { sizeLimit: 1Gi } }
+        {{- end }}
+        {{- if .Values.platformBundles.enabled }}
+        - { name: platform-bundles, persistentVolumeClaim: { claimName: "{{ .Release.Name }}-platform-bundles" } }
         {{- end }}
         {{- if and .Values.global.aks.enabled .Values.global.aks.keyVaultSecrets }}
         - name: azure-kv

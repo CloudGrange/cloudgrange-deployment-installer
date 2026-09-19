@@ -14,6 +14,50 @@ No image ever defaults to `latest`:
   - <subchart>.image.digest set           -> repo:tag@sha256:..., pinned by digest
 */ -}}
 
+{{- /* AB#9171 (plan 2026-09-18 §6, E7) — air-gapped installs: every image the chart renders goes
+through this helper, first-party, third-party and digest-pinned alike, so a customer who mirrors
+our pinned images into their own registry sets ONE value, global.imageRegistry, and nothing is
+pulled from the internet.
+
+  global.imageRegistry empty (default)  -> the reference unchanged
+  global.imageRegistry set              -> <imageRegistry>/<path>[:tag][@sha256:...]
+
+<path> is the reference's repository path WITHOUT its registry host, with Docker Hub's implicit
+"library/" made explicit, so it is exactly the "mirror path" column the release publishes in
+images.txt (scripts/release/Get-PlatformImages.sh), the path the Platform updater pushes to the
+in-cluster registry, and the path containerd asks a registry mirror for:
+  ghcr.io/cloudgrange/cloudgrange-api:2609.0.0@sha256:..  -> <reg>/cloudgrange/cloudgrange-api:2609.0.0@sha256:..
+  quay.io/keycloak/keycloak:26.6.4                         -> <reg>/keycloak/keycloak:26.6.4
+  grafana/loki:3.7.7                                       -> <reg>/grafana/loki:3.7.7
+  busybox:1.36@sha256:..                                   -> <reg>/library/busybox:1.36@sha256:..
+The digest is kept, so a mirrored image is still verified by content.
+Call: include "cloudgrange.image" (dict "ref" <reference> "global" .Values.global) */ -}}
+{{- define "cloudgrange.image" -}}
+{{- $ref := toString .ref -}}
+{{- $reg := "" -}}
+{{- with .global -}}{{- $reg = trimSuffix "/" (toString (.imageRegistry | default "")) -}}{{- end -}}
+{{- if $reg -}}
+{{- $name := $ref -}}
+{{- $digest := "" -}}
+{{- if contains "@" $ref -}}
+{{- $name = first (splitList "@" $ref) -}}
+{{- $digest = printf "@%s" (last (splitList "@" $ref)) -}}
+{{- end -}}
+{{- $parts := splitList "/" $name -}}
+{{- $host := first $parts -}}
+{{- $path := $name -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $host) (contains ":" $host) (eq $host "localhost")) -}}
+{{- $path = join "/" (rest $parts) -}}
+{{- if and (eq $host "docker.io") (eq (len $parts) 2) -}}{{- $path = printf "library/%s" $path -}}{{- end -}}
+{{- else if eq (len $parts) 1 -}}
+{{- $path = printf "library/%s" $name -}}
+{{- end -}}
+{{- printf "%s/%s%s" $reg $path $digest -}}
+{{- else -}}
+{{- $ref -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "cloudgrange.imageTag" -}}
 {{- default .Chart.AppVersion .Values.global.image.tag -}}
 {{- end -}}
@@ -39,7 +83,7 @@ Args: dict "ch" <updateChannel values> "tag" <image tag>. */}}
 {{- end -}}
 {{- $ref = printf "%s@%s" $ref . -}}
 {{- end -}}
-{{- $ref -}}
+{{- include "cloudgrange.image" (dict "ref" $ref "global" .Values.global) -}}
 {{- end -}}
 
 {{- /* The name every in-cluster Platform-updater object shares (plan §4: "<fullname>-platform-updater").
@@ -58,7 +102,23 @@ release name is the fullname. */ -}}
 {{- end -}}
 {{- $ref = printf "%s@%s" $ref . -}}
 {{- end -}}
-{{- $ref -}}
+{{- /* The API puts this reference in the updater Job, so the Job pulls from the mirror too (E7). */ -}}
+{{- include "cloudgrange.image" (dict "ref" $ref "global" .Values.global) -}}
+{{- end -}}
+
+{{- /* AB#9171 (E7) — the chart-shipped in-cluster registry (airgap.registry.enabled). */ -}}
+{{- define "cloudgrange.airgapRegistryName" -}}
+{{- printf "%s-airgap-registry" .Release.Name -}}
+{{- end -}}
+
+{{- /* Where the Platform updater Job pushes a bundle's images: the registry's push-side Service (ClusterIP). */ -}}
+{{- define "cloudgrange.airgapRegistryPushAddress" -}}
+{{- printf "%s-push.%s.svc:%d" (include "cloudgrange.airgapRegistryName" .) .Release.Namespace (int .Values.airgap.registry.pushPort) -}}
+{{- end -}}
+
+{{- /* The PVC an uploaded offline Platform bundle is stored on (api mount + updater Job mount). */ -}}
+{{- define "cloudgrange.platformBundlesPvc" -}}
+{{- printf "%s-platform-bundles" .Release.Name -}}
 {{- end -}}
 
 {{- /* AB#9171 (C2 on kind v1.34, plan D1): every workload meets the Pod Security "restricted"

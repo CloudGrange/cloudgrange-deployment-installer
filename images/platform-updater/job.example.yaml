@@ -13,6 +13,16 @@
 #   backups claimName  CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC   (additive to §4; without this mount
 #                      an apply still restores on failure, but a later `rollback` has no backup)
 #   CLOUDGRANGE_HEALTH_TIMEOUT  CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT (additive)
+# AB#9171 (E7) — POST .../platform/apply {version, bundleId} (an uploaded offline bundle) differs in:
+#   args: ["apply", "--version", "<version>", "--bundle", "/bundles/<bundleId>.zip"]
+#   env:  CLOUDGRANGE_AIRGAP_REGISTRY = CLOUDGRANGE_AIRGAP_REGISTRY of the API (only when the chart runs
+#         airgap.registry; the updater then pushes the bundle's images there)
+#   volumeMounts: { name: bundles, mountPath: /bundles, subPath: bundles, readOnly: true }
+#   volumes:      { name: bundles, persistentVolumeClaim: { claimName: CLOUDGRANGE_PLATFORM_BUNDLES_PVC, readOnly: true } }
+#   affinity: required podAffinity to app.kubernetes.io/name=cloudgrange-api on kubernetes.io/hostname
+#             (the bundles PVC is ReadWriteOnce and the API has it mounted)
+#   pod label app.kubernetes.io/component: platform-updater — the in-cluster registry's NetworkPolicy
+#             admits pushes only from pods carrying it.
 apiVersion: batch/v1
 kind: Job
 metadata:

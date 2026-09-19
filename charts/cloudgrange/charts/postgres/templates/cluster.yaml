@@ -15,7 +15,7 @@ spec:
   # single-node StatefulSet above uses. Caught before ever testing this: reusing
   # .Values.image would have shipped a Cluster CR referencing an image CNPG can't
   # actually run. Verified this exact tag exists (docker manifest inspect) before using it.
-  imageName: "{{ .Values.highAvailability.image }}"
+  imageName: {{ include "cloudgrange.image" (dict "ref" .Values.highAvailability.image "global" .Values.global) | quote }}
   storage:
     size: {{ .Values.persistence.size }}
     {{- if .Values.persistence.storageClass }}

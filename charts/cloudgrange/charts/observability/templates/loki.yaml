@@ -23,7 +23,7 @@ spec:
       securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 10001) | nindent 8 }}
       containers:
         - name: loki
-          image: {{ .Values.loki.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.loki.image "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           args: ["-config.file=/etc/loki/local-config.yaml"]
           volumeMounts:

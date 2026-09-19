@@ -103,7 +103,7 @@ spec:
       {{- if .Values.promtail.raiseInotifyLimits }}
       initContainers:
         - name: raise-inotify-limits
-          image: {{ .Values.busybox.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.busybox.image "global" .Values.global) | quote }}
           command: ["sh", "-c", "sysctl -w fs.inotify.max_user_instances=8192"]
           securityContext:
             privileged: true
@@ -113,7 +113,7 @@ spec:
           # AB#9187-class bug, found via a real AKS install: 3.7.x was never published — the
           # highest real grafana/promtail tag is the 3.6.x line. Pinned to an exact, confirmed
           # (curl'd against Docker Hub) existing tag rather than `latest`.
-          image: {{ .Values.promtail.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.promtail.image "global" .Values.global) | quote }}
           args: ["-config.file=/etc/promtail/promtail.yaml"]
           # AB#9171 real bug, found on a kind install: Promtail's kubernetes_sd (role: pod) only
           # discovers pods on the node named by $HOSTNAME. Inside a container HOSTNAME is the POD

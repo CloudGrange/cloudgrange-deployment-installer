@@ -85,7 +85,10 @@ function Deploy-K3sHelm {
     # Install-CloudGrangeK3s.sh's own $(dirname .../..)/charts resolution.
     # AB#9171 (C1): --version only when the operator chose one; otherwise the chart's own pinned tag.
     $versionArg = if ([string]::IsNullOrEmpty($Version)) { '' } else { " --version $Version" }
-    $remoteCmd = "chmod +x $uploadDir/scripts/*.sh && sudo bash $uploadDir/scripts/Install-CloudGrangeK3s.sh --hostname $(if ($Hostname) { $Hostname } else { $VmIp })$versionArg"
+    # AB#9171 (E7): the offline payload means an air-gapped VM, so install in offline mode (the in-cluster
+    # registry offline Platform updates load, and K3s mirroring the public registries to it).
+    $offlineArg = if ([string]::IsNullOrEmpty($AirgapPath)) { '' } else { ' --offline' }
+    $remoteCmd = "chmod +x $uploadDir/scripts/*.sh && sudo bash $uploadDir/scripts/Install-CloudGrangeK3s.sh --hostname $(if ($Hostname) { $Hostname } else { $VmIp })$versionArg$offlineArg"
     Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, $remoteCmd)) -TimeoutSeconds 1800
     if ($LASTEXITCODE -ne 0) {
         throw "CG-K3S-ERR-002: Install-CloudGrangeK3s.sh exited $LASTEXITCODE on the VM. SSH in to inspect: ssh -i $SshKeyPath $sshTarget"

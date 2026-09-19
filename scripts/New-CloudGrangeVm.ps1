@@ -341,7 +341,11 @@ ethernets:
     $freeBytes = (Get-PSDrive -Name $vhdxDrive.TrimEnd(':') -ErrorAction SilentlyContinue).Free
     if ($freeBytes -and $freeBytes -lt 64GB) {
         $freeGB = [Math]::Round($freeBytes / 1GB, 1)
-        Write-Error "CG-INST-ERR-003: Insufficient disk space at $VhdxPath. Required: 60 GB free. Available: ${freeGB} GB."
+        # AB#9171: also on the host stream. This script runs as a child powershell.exe of the installer,
+        # and a live install on the e2e Hyper-V host showed only "CG-INST-ERR-010: VM provisioning
+        # failed (exit 1)": the child's error record never reached the operator's console.
+        Write-Host "  CG-INST-ERR-003: Insufficient disk space at $VhdxPath. Required: 64 GB free. Available: ${freeGB} GB." -ForegroundColor Red
+        Write-Error "CG-INST-ERR-003: Insufficient disk space at $VhdxPath. Required: 64 GB free. Available: ${freeGB} GB."
     }
 
     # Create VM — Generation 2, 8 GB RAM (static minimum), 4 vCPU, Secure Boot (AB#1582)

@@ -46,7 +46,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: postgres
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "cloudgrange.image" (dict "ref" (printf "%s:%s" .Values.image.repository (toString .Values.image.tag)) "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           ports:
             - containerPort: 5432

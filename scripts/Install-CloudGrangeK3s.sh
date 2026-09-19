@@ -56,8 +56,21 @@ FOUNDATION_VERSION="${CLOUDGRANGE_FOUNDATION_VERSION:-F2609.2.0}"
 # Copies kept in sync with release/pins.conf: FOUNDATION_VERSION, FOUNDATION_CHANNEL_URL.
 FOUNDATION_CHANNEL_URL="${CLOUDGRANGE_FOUNDATION_CHANNEL_URL:-https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/foundation-preview.json}"
 
+# AB#9171 (plan 2026-09-18 §6, E7) — offline mode (--offline, or CLOUDGRANGE_OFFLINE=1): an
+# air-gapped managed foundation. Platform updates then arrive as an uploaded, signed Platform bundle
+# whose images the in-cluster Platform updater pushes into the chart's in-cluster registry
+# (airgap.registry.enabled). As Foundation config, done ONCE here, K3s is told to mirror the public
+# registries to that registry (registries.yaml), so containerd finds the new images there under
+# their usual names and digests. The Windows script passes this when given the offline payload;
+# the VHDX appliance's first boot always does.
+OFFLINE="${CLOUDGRANGE_OFFLINE:-0}"
+# The in-cluster registry's node port. Copy kept in sync with release/pins.conf AIRGAP_REGISTRY_NODE_PORT
+# and charts/cloudgrange/values.yaml airgap.registry.nodePort (test/lint-pins.sh checks both).
+AIRGAP_REGISTRY_NODE_PORT="${CLOUDGRANGE_AIRGAP_REGISTRY_NODE_PORT:-30500}"
+
 # Host locations, overridable only so the qualification tests can run this script unprivileged
 # against a scratch tree. Production never sets these.
+K3S_CONFIG_DIR="${CLOUDGRANGE_K3S_CONFIG_DIR:-/etc/rancher/k3s}"
 ETC_DIR="${CLOUDGRANGE_ETC_DIR:-/etc/cloudgrange}"
 APT_CONF_DIR="${CLOUDGRANGE_APT_CONF_DIR:-/etc/apt/apt.conf.d}"
 SBIN_DIR="${CLOUDGRANGE_SBIN_DIR:-/usr/local/sbin}"
@@ -69,9 +82,17 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --hostname) HOSTNAME_VALUE=$2; shift 2 ;;
         --version)  VERSION_VALUE=$2; shift 2 ;;
+        --offline)  OFFLINE=1; shift ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+# AB#9171 (E7): an install from the offline bundle (it carries the Platform images) is offline mode
+# without a flag. An operator installing from the bundle on a host with no internet would otherwise
+# have to know to pass --offline, or later find that uploaded Platform updates cannot load their
+# images. Offline mode costs nothing online: containerd falls back to the public registries.
+if [ "$OFFLINE" != 1 ] && [ -f "$AIRGAP_DIR/cloudgrange-images-amd64.tar" ]; then
+    OFFLINE=1
+fi
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
@@ -346,6 +367,41 @@ do_k3s_installed() {
     import_bundled_service_images
 }
 
+# AB#9171 (E7) — offline mode only: K3s mirrors every public registry the Platform uses to the
+# chart's in-cluster registry (airgap.registry, a read-only NodePort on this node). Foundation
+# config, written once. containerd tries the mirror first and falls back to the public registry when
+# it is reachable, so this costs nothing online. Written before K3s first starts (it reads the file
+# at startup); when K3s is already running and the file changed, K3s is restarted to pick it up.
+# Idempotent: the appliance's first boot runs it again after generalize wiped /etc/rancher/k3s.
+configure_registry_mirror() {
+    [ "$OFFLINE" = 1 ] || return 0
+    local file="$K3S_CONFIG_DIR/registries.yaml" tmp endpoint="http://127.0.0.1:$AIRGAP_REGISTRY_NODE_PORT" reg
+    install -d -m 0755 "$K3S_CONFIG_DIR"
+    tmp=$(mktemp)
+    {
+        echo "# CloudGrange managed foundation, offline mode (AB#9171 E7). Written by Install-CloudGrangeK3s.sh --offline."
+        echo "# Every image is looked up first in the in-cluster registry an offline Platform update loads,"
+        echo "# then in the public registry. Do not edit: a Foundation update rewrites it."
+        echo "mirrors:"
+        for reg in ghcr.io docker.io quay.io registry.k8s.io; do
+            printf '  %s:\n    endpoint:\n      - "%s"\n' "$reg" "$endpoint"
+        done
+    } > "$tmp"
+    if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 0; fi
+    install -m 0600 "$tmp" "$file"; rm -f "$tmp"
+    log "offline mode: K3s mirrors ghcr.io, docker.io, quay.io and registry.k8s.io to $endpoint ($file)"
+    if systemctl is-active --quiet k3s 2>/dev/null; then
+        log "restarting K3s to load $file"
+        systemctl restart k3s
+        export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+        local deadline=$(($(date +%s) + 120))
+        until k3s kubectl get nodes 2>/dev/null | grep -q " Ready "; do
+            [ "$(date +%s)" -lt "$deadline" ] || { echo "k3s node not Ready after restarting it for $file" >&2; exit 1; }
+            sleep 2
+        done
+    fi
+}
+
 do_certmanager_installed() {
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
     # upgrade --install (not plain install): idempotent regardless of prior release
@@ -418,12 +474,14 @@ do_chart_installed() {
     # "the release doesn't exist at all" (a hard failure, fail loudly here instead of
     # silently continuing to a do_ready check that can't explain what's actually wrong).
     stamp_chart_version
-    local tag_args=()
+    local tag_args=() offline_args=()
     [ -z "$VERSION_VALUE" ] || tag_args=(--set "global.image.tag=$VERSION_VALUE")
+    # AB#9171 (E7): offline mode runs the in-cluster registry offline Platform updates load.
+    [ "$OFFLINE" != 1 ] || offline_args=(--set airgap.registry.enabled=true --set "airgap.registry.nodePort=$AIRGAP_REGISTRY_NODE_PORT")
     helm upgrade --install cloudgrange "$CHARTS_DIR/cloudgrange" \
         -f "$CHARTS_DIR/cloudgrange/values-single-node.yaml" \
         --set "global.hostname=$HOSTNAME_VALUE" \
-        "${tag_args[@]}" \
+        "${tag_args[@]}" "${offline_args[@]}" \
         --timeout 5m --wait || log "WARNING: 'helm upgrade --install --wait' did not succeed — continuing only far enough for the checks below to report exactly what is wrong; do_ready fails the install if any pod is not Ready"
     helm status cloudgrange >/dev/null 2>&1 || {
         echo "helm upgrade --install failed completely (no release exists) — see the error above" >&2
@@ -461,8 +519,45 @@ do_ready() {
     fi
 }
 
+# AB#9171 (E7) — offline bundles are uploaded through K3s's bundled Traefik, straight to the API, and
+# are several GB. Traefik v3 closes a request that takes longer than its entry point's readTimeout
+# (60 seconds by default) to arrive, so over an ordinary link a Platform bundle upload would be cut
+# off part-way. Foundation config (K3s's own documented way to configure its packaged Traefik): a
+# HelmChartConfig in K3s's auto-deploy manifests directory lifts the read timeout on the HTTPS entry
+# point. Idempotent; K3s applies it when it starts and whenever the file changes.
+K3S_MANIFESTS_DIR="${CLOUDGRANGE_K3S_MANIFESTS_DIR:-/var/lib/rancher/k3s/server/manifests}"
+configure_traefik_timeouts() {
+    local file="$K3S_MANIFESTS_DIR/cloudgrange-traefik-config.yaml" tmp
+    install -d -m 0700 "$K3S_MANIFESTS_DIR"
+    tmp=$(mktemp)
+    cat > "$tmp" <<'YAML'
+# CloudGrange managed foundation (AB#9171 E7). Written by Install-CloudGrangeK3s.sh. Do not edit:
+# a Foundation update rewrites it. Offline bundle uploads (several GB) must not hit Traefik's
+# default 60-second read timeout.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      websecure:
+        transport:
+          respondingTimeouts:
+            readTimeout: 0
+YAML
+    if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 0; fi
+    install -m 0600 "$tmp" "$file"; rm -f "$tmp"
+    log "Traefik: no read timeout on the HTTPS entry point, for multi-GB offline bundle uploads ($file)"
+}
+
 main() {
     state_init
+    # Not a checkpointed stage: idempotent, and it must also run on a resume and on the appliance's
+    # first boot, where K3s is already installed but generalize removed its config directory.
+    configure_registry_mirror
+    configure_traefik_timeouts
     run_stage prereqs-checked do_prereqs_checked
     run_stage k3s-installed do_k3s_installed
     run_stage certmanager-installed do_certmanager_installed

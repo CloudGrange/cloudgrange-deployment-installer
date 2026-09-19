@@ -1,0 +1,169 @@
+{{- /*
+AB#9171 (plan 2026-09-18-foundation-platform-separation §6, E7) — the in-cluster registry that
+air-gapped Platform updates push into. Only on managed foundations in offline mode
+(airgap.registry.enabled, set by Install-CloudGrangeK3s.sh --offline and the appliance first boot).
+
+Flow: admin uploads the signed Platform bundle -> the API stores it on <release>-platform-bundles ->
+the Platform updater Job verifies it and pushes its images here (http, in-cluster Service) -> helm
+upgrade. The kubelet's containerd reaches this registry on http://127.0.0.1:<nodePort>, because the
+wrapper configured /etc/rancher/k3s/registries.yaml once to mirror the public registries to it.
+
+Index validation is limited to linux/amd64: a bundle carries a multi-platform image's index (so the
+chart's digest pin still matches) but only the amd64 image under it. Two distribution processes
+share one volume: a read-only one the node pulls from (NodePort) and a writable one only the
+updater Job can reach (ClusterIP + NetworkPolicy). Non-root, Pod Security "restricted".
+*/ -}}
+{{- if .Values.airgap.registry.enabled }}
+{{- $name := include "cloudgrange.airgapRegistryName" . }}
+{{- $r := .Values.airgap.registry }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: airgap-registry }
+data:
+  {{- range $mode := list "pull" "push" }}
+  {{ $mode }}.yml: |
+    version: 0.1
+    log:
+      level: info
+      accesslog:
+        disabled: true
+    storage:
+      filesystem:
+        rootdirectory: /var/lib/registry
+      delete:
+        enabled: false
+      {{- if eq $mode "pull" }}
+      # The node-facing side never accepts a push (see the Service comment below).
+      maintenance:
+        readonly:
+          enabled: true
+      {{- end }}
+    http:
+      addr: :{{ if eq $mode "pull" }}{{ int $r.port }}{{ else }}{{ int $r.pushPort }}{{ end }}
+    health:
+      storagedriver:
+        enabled: true
+    validation:
+      manifests:
+        indexes:
+          platforms: list
+          platformlist:
+            - architecture: amd64
+              os: linux
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: airgap-registry }
+  annotations:
+    # The images of every update applied offline live here; an uninstall must not drop them.
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $r.storage.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $r.storage.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: airgap-registry, app.kubernetes.io/name: cloudgrange-airgap-registry }
+spec:
+  replicas: 1
+  # A new registry image is pulled THROUGH this registry (the node mirrors to it), so the old pod
+  # must keep serving until the new one is up.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app.kubernetes.io/name: cloudgrange-airgap-registry, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: airgap-registry, app.kubernetes.io/name: cloudgrange-airgap-registry, app.kubernetes.io/instance: {{ .Release.Name }} }
+      annotations:
+        checksum/config: {{ printf "%v" $r | sha256sum | trunc 16 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "cloudgrange.podSecurity" (dict "uid" 65532) | nindent 8 }}
+      containers:
+        {{- range $mode := list "pull" "push" }}
+        - name: {{ ternary "registry" "registry-push" (eq $mode "pull") }}
+          image: {{ include "cloudgrange.image" (dict "ref" $r.image "global" $.Values.global) | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["serve", "/etc/distribution/{{ $mode }}.yml"]
+          ports:
+            - { name: {{ $mode }}, containerPort: {{ if eq $mode "pull" }}{{ int $r.port }}{{ else }}{{ int $r.pushPort }}{{ end }} }
+          securityContext:
+            {{- include "cloudgrange.containerSecurity" $ | nindent 12 }}
+            readOnlyRootFilesystem: true
+          readinessProbe:
+            httpGet: { path: /v2/, port: {{ $mode }} }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v2/, port: {{ $mode }} }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{ toYaml $r.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/distribution, readOnly: true }
+            - { name: data, mountPath: /var/lib/registry }
+            - { name: tmp, mountPath: /tmp }
+        {{- end }}
+      volumes:
+        - { name: config, configMap: { name: {{ $name }} } }
+        - { name: data, persistentVolumeClaim: { claimName: {{ $name }} } }
+        - { name: tmp, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: airgap-registry }
+spec:
+  # PULL side, read-only. A NodePort so the node's containerd reaches it on http://127.0.0.1:<nodePort>
+  # (registries.yaml). A NodePort also answers on the node's LAN address, and the registry has no
+  # authentication, which is why this side runs distribution in read-only maintenance mode: nothing
+  # reachable from outside the cluster can put an image into the mirror.
+  type: NodePort
+  selector: { app.kubernetes.io/name: cloudgrange-airgap-registry, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+    - { name: pull, port: {{ int $r.port }}, targetPort: pull, nodePort: {{ int $r.nodePort }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-push
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: airgap-registry }
+spec:
+  # PUSH side: ClusterIP only, and the NetworkPolicy below admits only the Platform updater's pods.
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: cloudgrange-airgap-registry, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+    - { name: push, port: {{ int $r.pushPort }}, targetPort: push }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: airgap-registry }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: cloudgrange-airgap-registry, app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: ["Ingress"]
+  ingress:
+    # Pulls: from anywhere (the node's containerd arrives through the NodePort).
+    - ports: [{ port: {{ int $r.port }}, protocol: TCP }]
+    # Pushes: only the Platform updater Job (verified bundles).
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/component: platform-updater } }
+      ports: [{ port: {{ int $r.pushPort }}, protocol: TCP }]
+{{- end }}

@@ -12,7 +12,7 @@ spec:
       securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 10001) | nindent 8 }}
       containers:
         - name: otel-collector
-          image: {{ .Values.otelCollector.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.otelCollector.image "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           args: ["--config=/etc/otel/config.yaml"]
           volumeMounts:

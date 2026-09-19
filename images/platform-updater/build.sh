@@ -14,7 +14,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 PINS="$HERE/../../release/pins.conf"
 args=()
 for key in PLATFORM_UPDATER_BASE_IMAGE HELM_VERSION HELM_LINUX_AMD64_SHA256 KUBECTL_VERSION \
-           KUBECTL_LINUX_AMD64_SHA256 COSIGN_VERSION COSIGN_LINUX_AMD64_SHA256; do
+           KUBECTL_LINUX_AMD64_SHA256 COSIGN_VERSION COSIGN_LINUX_AMD64_SHA256 CRANE_VERSION CRANE_LINUX_AMD64_SHA256; do
     val=$(sed -n "s/^$key=//p" "$PINS")
     [ -n "$val" ] || { echo "$key missing from $PINS" >&2; exit 1; }
     args+=(--build-arg "$key=$val")

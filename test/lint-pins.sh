@@ -66,6 +66,10 @@ check_pin PLATFORM_UPDATER_BASE_IMAGE "$IMG_DIGEST"
 check_pin CHART_SECRETS_BOOTSTRAP_IMAGE "$IMG_DIGEST"
 check_pin CHART_BUSYBOX_IMAGE "$IMG_DIGEST"
 check_pin CHART_PROMTAIL_IMAGE "$IMG_DIGEST"
+check_pin CHART_AIRGAP_REGISTRY_IMAGE "$IMG_DIGEST"
+check_pin AIRGAP_REGISTRY_NODE_PORT '^3[0-2][0-9]{3}$'
+check_pin CRANE_VERSION '^v[0-9]+\.[0-9]+\.[0-9]+$'
+check_pin CRANE_LINUX_AMD64_SHA256 "$SHA"
 # Every other KEY= line, including pins other changes add (FOUNDATION_*, UBUNTU_BASE_VHDX_*): never
 # "latest"; EMPTY only when explicitly marked as not yet published — the word "unpublished" in a
 # trailing comment on that line or in the comment line directly above it, e.g.
@@ -116,7 +120,8 @@ check_ref() { # <profile> <image ref>
 }
 ALL_ON=(--set observability.promtail.enabled=true --set observability.promtail.raiseInotifyLimits=true
         --set metallb.enabled=true --set 'metallb.addressPool[0]=192.0.2.10/32' --set backup.enabled=true
-        --set certManager.installOperator=true --set platformUpdater.enabled=true --api-versions cert-manager.io/v1)
+        --set certManager.installOperator=true --set platformUpdater.enabled=true --api-versions cert-manager.io/v1
+        --set airgap.registry.enabled=true)
 render_check() { # <profile label> <helm args...>
     local label=$1; shift
     if ! helm template cg "$CHART" -n cloudgrange "$@" > "$WORK/render.yaml" 2> "$WORK/render.err"; then
@@ -181,6 +186,9 @@ drift scripts/CloudGrange-Prereqs.ps1 "$(sed -nE "s/^\\\$script:CloudGrangeQemuV
 drift "$CHART/values.yaml secretsBootstrap.image" "$(awk '/^secretsBootstrap:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/values.yaml")" CHART_SECRETS_BOOTSTRAP_IMAGE
 drift "$CHART/charts/observability/values.yaml busybox.image" "$(awk '/^busybox:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/charts/observability/values.yaml")" CHART_BUSYBOX_IMAGE
 drift "$CHART/charts/api/values.yaml waitForPostgres.image" "$(awk '/^waitForPostgres:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/charts/api/values.yaml")" CHART_BUSYBOX_IMAGE
+drift "$CHART/values.yaml airgap.registry.image" "$(awk '/^airgap:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^    image:/{print $2; exit}' "$CHART/values.yaml")" CHART_AIRGAP_REGISTRY_IMAGE
+drift "$CHART/values.yaml airgap.registry.nodePort" "$(awk '/^airgap:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^    nodePort:/{print $2; exit}' "$CHART/values.yaml")" AIRGAP_REGISTRY_NODE_PORT
+drift scripts/Install-CloudGrangeK3s.sh "$(sed -nE 's/^AIRGAP_REGISTRY_NODE_PORT="\$\{CLOUDGRANGE_AIRGAP_REGISTRY_NODE_PORT:-([^}]*)\}".*/\1/p' scripts/Install-CloudGrangeK3s.sh)" AIRGAP_REGISTRY_NODE_PORT
 drift "$CHART/charts/observability/values.yaml promtail.image" "$(awk '/^promtail:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^  image:/{print $2; exit}' "$CHART/charts/observability/values.yaml")" CHART_PROMTAIL_IMAGE
 
 # ---- 7. delivery-path wrappers -------------------------------------------------------------------

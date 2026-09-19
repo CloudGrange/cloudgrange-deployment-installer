@@ -18,6 +18,16 @@ global:
     # ImagePullBackOff three times. test/lint-pins.sh fails the build if `latest` comes back.
     tag: ""
     pullPolicy: IfNotPresent
+  # AB#9171 (plan 2026-09-18 §6, E7) — air-gapped bring-your-own Kubernetes / AKS. Empty (default):
+  # images come from where the chart pins them (ghcr.io, docker.io, quay.io). Set it to your own
+  # registry (e.g. registry.example.com or registry.example.com/cloudgrange) after mirroring the
+  # release's images.txt into it, and EVERY image the chart renders — first-party, third-party,
+  # digest-pinned, and the Platform updater Job's image — is pulled from there instead, at
+  # <imageRegistry>/<mirror path>. The mirror path is the image's repository without its registry
+  # host, with Docker Hub's "library/" made explicit (templates/_helpers.tpl cloudgrange.image).
+  # Digests are kept, so mirrored images are still verified by content. Managed foundations do not
+  # set this: their wrapper mirrors the public registries to airgap.registry at the containerd level.
+  imageRegistry: ""
   # This chart installs on ANY conformant Kubernetes, not just the bundled K3s. The
   # ingress controller differs per distribution, so never hardcode it:
   #   K3s (default here)    className: traefik
@@ -177,3 +187,35 @@ platformUpdater:
     publicKey: ""
   # How long the health gate waits for every Deployment/StatefulSet of the release to roll out.
   healthTimeout: 10m
+
+# AB#9171 (plan 2026-09-18 §6, E7) — air-gapped Platform updates on a MANAGED foundation (VHDX
+# appliance, Windows and Linux scripts in offline mode). OFF by default: a cluster CloudGrange did
+# not provision uses global.imageRegistry and its own registry instead.
+# When on, the chart runs a small OCI registry (CNCF distribution) in the release namespace. An
+# offline Platform update uploads a signed bundle; the Platform updater Job verifies it and pushes
+# its images here, then runs `helm upgrade`. The chart's image references do NOT change: the wrapper
+# configured K3s (/etc/rancher/k3s/registries.yaml, Install-CloudGrangeK3s.sh --offline) once, as
+# Foundation config, to mirror ghcr.io, docker.io, quay.io and registry.k8s.io to
+# http://127.0.0.1:<nodePort>, so containerd finds the new images here by their usual names and
+# digests, and falls back to the public registry when it is reachable.
+airgap:
+  registry:
+    enabled: false
+    # Pinned by digest (release/pins.conf CHART_AIRGAP_REGISTRY_IMAGE; test/lint-pins.sh checks the copy).
+    image: registry:3.1.1@sha256:fd374bae807c225661adfe2c0c1f9970a0b8fab1761fd7dfb91e0fd9a8748f9b
+    # Pull side (read-only; what the node mirrors to through nodePort below).
+    port: 5000
+    # Push side: ClusterIP Service <release>-airgap-registry-push, reachable only from the Platform
+    # updater Job's pods (NetworkPolicy). The updater pushes verified bundle images here.
+    pushPort: 5001
+    # The node port containerd pulls from (http://127.0.0.1:<nodePort>). Must match the K3s
+    # registries.yaml the wrapper writes (release/pins.conf AIRGAP_REGISTRY_NODE_PORT).
+    nodePort: 30500
+    storage:
+      # Holds the images of the updates applied offline (layers are shared between releases).
+      size: 30Gi
+      # Empty uses the cluster's default StorageClass.
+      storageClassName: ""
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }

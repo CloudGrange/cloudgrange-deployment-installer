@@ -31,4 +31,10 @@ data:
   CLOUDGRANGE_PLATFORM_UPDATER_BACKUP_PVC: {{ printf "%s-backups" (include "cloudgrange.platformUpdaterName" .) | quote }}
   # Additive to §4: pass to the Job as CLOUDGRANGE_HEALTH_TIMEOUT (platformUpdater.healthTimeout).
   CLOUDGRANGE_PLATFORM_UPDATER_HEALTH_TIMEOUT: {{ .Values.platformUpdater.healthTimeout | quote }}
+  {{- if .Values.airgap.registry.enabled }}
+  # AB#9171 (E7): the in-cluster registry an offline Platform bundle's images are pushed into. The
+  # API passes it to the updater Job as CLOUDGRANGE_AIRGAP_REGISTRY. Absent = no push; the images
+  # must then be reachable already (global.imageRegistry or the public registries).
+  CLOUDGRANGE_AIRGAP_REGISTRY: {{ include "cloudgrange.airgapRegistryPushAddress" . | quote }}
+  {{- end }}
   {{- end }}

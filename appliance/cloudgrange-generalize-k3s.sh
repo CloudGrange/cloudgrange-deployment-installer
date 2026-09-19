@@ -67,6 +67,19 @@ echo "[generalize-k3s] exporting every container image on this node for an offli
 # hand it back to K3s after the wipe. Images hold no install-time secrets: those live in the datastore.
 AIRGAP_DIR="$INSTALLER_DIR/airgap"
 mkdir -p "$AIRGAP_DIR"
+# AB#9171 (E7): first boot installs in offline mode, which runs the chart's in-cluster registry
+# (airgap.registry) that offline Platform updates load their images into. The build VM may have been
+# installed online, without it, so pull its pinned image now to bake it in with the rest.
+REGISTRY_IMAGE=$(awk '/^airgap:/{s=1;next} s&&/^[^ #]/{s=0} s&&/^    image:/{print $2; exit}' "$INSTALLER_DIR/charts/cloudgrange/values.yaml")
+[ -n "$REGISTRY_IMAGE" ] || { echo "[generalize-k3s] ERROR: no airgap.registry.image in the staged chart" >&2; exit 1; }
+k3s crictl inspecti "$REGISTRY_IMAGE" >/dev/null 2>&1 || k3s crictl pull "$REGISTRY_IMAGE" >/dev/null \
+    || { echo "[generalize-k3s] ERROR: cannot pull $REGISTRY_IMAGE for the offline registry" >&2; exit 1; }
+# The Platform updater Job's image is only pulled when an update runs, so no install has it on the
+# node yet. An offline appliance could never start its first Platform update without it.
+UPDATER_IMAGE=$(k3s kubectl get configmap cloudgrange-platform-env -o jsonpath='{.data.CLOUDGRANGE_PLATFORM_UPDATER_IMAGE}' 2>/dev/null || true)
+[ -n "$UPDATER_IMAGE" ] || { echo "[generalize-k3s] ERROR: the installed release names no Platform updater image (cloudgrange-platform-env)" >&2; exit 1; }
+k3s crictl inspecti "$UPDATER_IMAGE" >/dev/null 2>&1 || k3s crictl pull "$UPDATER_IMAGE" >/dev/null \
+    || { echo "[generalize-k3s] ERROR: cannot pull the Platform updater image $UPDATER_IMAGE" >&2; exit 1; }
 mapfile -t NODE_IMAGES < <(k3s ctr -n k8s.io images ls -q | grep -v '^sha256:' | sort -u)
 if [ "${#NODE_IMAGES[@]}" -eq 0 ]; then
     echo "[generalize-k3s] ERROR: containerd reports no images to export" >&2
