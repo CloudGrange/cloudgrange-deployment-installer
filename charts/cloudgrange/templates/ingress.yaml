@@ -45,7 +45,7 @@ spec:
   {{- end }}
   tls:
     - hosts: [{{ .Values.global.hostname | quote }}]
-      secretName: {{ tpl (.Values.global.ingress.tls.secretName | default "") . | default (printf "%s-tls" .Release.Name) | quote }}
+      secretName: {{ include "cloudgrange.tlsSecretName" . | quote }}
   rules:
     - {{- if not $isIp }}
       host: {{ .Values.global.hostname | quote }}

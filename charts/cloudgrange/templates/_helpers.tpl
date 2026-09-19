@@ -78,3 +78,11 @@ seccompProfile: { type: RuntimeDefault }
 allowPrivilegeEscalation: false
 capabilities: { drop: ["ALL"] }
 {{- end -}}
+
+{{- /* AB#9171: the ingress TLS Secret name — used by the Ingress and by the portal, which serves the
+Secret's PUBLIC certificate (ca.crt / tls.crt, never tls.key) at /downloads/platform-ca.crt for
+`cg auth login --ca-cert`. One definition so the two can never diverge. Works from the subcharts
+too (global values, same release). */ -}}
+{{- define "cloudgrange.tlsSecretName" -}}
+{{- tpl ((((.Values.global).ingress).tls).secretName | default "") . | default (printf "%s-tls" .Release.Name) -}}
+{{- end -}}

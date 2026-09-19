@@ -6,6 +6,7 @@
 # artifacts the in-cluster Platform updater consumes:
 #   1. tag the first-party images (api, portal, relay, platform-updater) with the platform version
 #      YYMM.MINOR.PATCH and resolve each one's registry digest;
+#   (the portal image must carry the matching cg CLI: New-CliRelease.sh + Build-PortalImage.sh)
 #   2. stamp the version into a copy of the chart (Set-ChartVersion.sh) and `helm package` it;
 #   3. write the release manifest (cg-release-manifest-v1, release-versioning.md) that pins the
 #      chart by SHA-256 and every first-party image by digest;
@@ -70,6 +71,22 @@ run() { case "$PUSH" in 1) "$@" ;; 2) echo "ALREADY-PUSHED, skipped: $*" ;; *) e
 if [ "$PUSH" = 1 ]; then
     bash "$REPO_ROOT/scripts/release/Test-ReleaseVersionFree.sh" --check "$VERSION" \
         || { echo "pick a free version: $(bash "$REPO_ROOT/scripts/release/Test-ReleaseVersionFree.sh" --next "${VERSION%.*}")" >&2; exit 1; }
+fi
+
+# AB#9171: every platform release ships the matching `cg` CLI, served by the platform at
+# /downloads/cli/. Refuse a portal image built without it (Build-PortalImage.sh bakes it in),
+# before anything is tagged or pushed.
+portal="$REGISTRY/cloudgrange-portal:$SOURCE_TAG"
+if [ "$PUSH" != 0 ]; then
+    cli_version=$(docker run --rm --entrypoint cat "$portal" /usr/share/nginx/html/downloads/cli/manifest.json 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' 2>/dev/null) || cli_version=''
+    [ "$cli_version" = "$VERSION" ] || {
+        echo "$portal does not carry the cg CLI for $VERSION (found '${cli_version:-none}'): build it with New-CliRelease.sh + Build-PortalImage.sh" >&2
+        exit 1
+    }
+    log "portal serves cg $cli_version at /downloads/cli/"
+else
+    echo "DRY-RUN: would check that $portal carries the cg CLI for $VERSION"
 fi
 
 # component name in the manifest -> image repository
