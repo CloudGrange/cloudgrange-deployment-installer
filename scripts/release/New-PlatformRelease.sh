@@ -25,6 +25,11 @@
 #       [--upgrade-from R]    SemVer range of installed versions this release can update (default ">=2609.0.0-0")
 #       [--cosign-key PATH]   optional: also sign manifest.json -> manifest.json.sig (cosign sign-blob --key)
 #       [--push]              really tag and push; needs `docker login ghcr.io` with write access
+#       [--already-pushed]    the images are ALREADY in the registry as <repo>:<version> (built and pushed,
+#                             or retagged by digest, by the release run): push nothing, resolve each
+#                             digest from the registry, and write a real (non-dry-run) manifest. The
+#                             version-free check is skipped because this step publishes nothing;
+#                             a missing tag is an error.
 # --chart-base-url is where the chart .tgz will be published, e.g. $R2_PUBLIC_BASE/releases/<version>
 set -euo pipefail
 
@@ -41,6 +46,7 @@ while [ $# -gt 0 ]; do
         --upgrade-from) UPGRADE_FROM=$2; shift 2 ;;
         --cosign-key) COSIGN_KEY=$2; shift 2 ;;
         --push) PUSH=1; shift ;;
+        --already-pushed) PUSH=2; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -56,7 +62,8 @@ OUT=$(cd "$OUT" && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 log() { echo "[platform-release] $*"; }
-run() { if [ "$PUSH" = 1 ]; then "$@"; else echo "DRY-RUN: $*"; fi; }
+run() { case "$PUSH" in 1) "$@" ;; 2) echo "ALREADY-PUSHED, skipped: $*" ;; *) echo "DRY-RUN: $*" ;; esac; }
+[ "$PUSH" != 2 ] || [ "$SOURCE_TAG" = "$VERSION" ] || { echo "--already-pushed cannot retag: drop --source-tag" >&2; exit 2; }
 
 # AB#9171: one version number per release, across every image AND the OCI chart. Refuse before
 # anything is pushed rather than overwriting or splitting a number between two builds.
@@ -82,7 +89,12 @@ for comp in $(printf '%s\n' "${!IMAGES[@]}" | sort); do
     fi
     run docker push -q "$dst"
     digest=''
-    if [ "$PUSH" = 1 ]; then
+    if [ "$PUSH" = 2 ]; then
+        digest=$(docker buildx imagetools inspect "$dst" --format '{{json .Manifest}}' 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null) \
+            || { echo "$dst is not in the registry (--already-pushed)" >&2; exit 1; }
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no registry digest for $dst" >&2; exit 1; }
+    elif [ "$PUSH" = 1 ]; then
         digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$dst" | grep -m1 "^$repo@sha256:" | cut -d@ -f2)
         [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no registry digest for $dst after push" >&2; exit 1; }
     else
@@ -121,7 +133,7 @@ manifest = {
     "chart": {"url": chart_url, "sha256": chart_sha},
     "components": components,
 }
-if push != "1":
+if push not in ("1", "2"):
     manifest["dryRun"] = True
 json.dump(manifest, open(out, "w"), indent=2, sort_keys=True)
 open(out, "a").write("\n")
@@ -146,4 +158,4 @@ sys.exit("images not pinned by digest: %s" % ", ".join(bad) if bad else 0)
 PY
 manifest_sha=$(sha256sum "$OUT/manifest.json" | cut -d' ' -f1)
 printf '%s  manifest.json\n' "$manifest_sha" > "$OUT/manifest.json.sha256"
-log "wrote $OUT/manifest.json (sha256 $manifest_sha) and $CHART_TGZ (sha256 $chart_sha)$([ "$PUSH" = 1 ] || echo ' — DRY RUN, nothing pushed')"
+log "wrote $OUT/manifest.json (sha256 $manifest_sha) and $CHART_TGZ (sha256 $chart_sha)$([ "$PUSH" != 0 ] || echo ' — DRY RUN, nothing pushed')"
