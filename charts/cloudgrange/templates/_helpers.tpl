@@ -18,6 +18,19 @@ No image ever defaults to `latest`:
 {{- default .Chart.AppVersion .Values.global.image.tag -}}
 {{- end -}}
 
+{{/* The update channel URL (api.updateChannel), shared by the API (which offers the release) and
+the platform updater (which pins the release manifest to the SHA-256 this channel lists).
+Args: dict "ch" <updateChannel values> "tag" <image tag>. */}}
+{{- define "cloudgrange.updateChannelUrl" -}}
+{{- $ch := .ch -}}
+{{- $name := $ch.name -}}
+{{- if not $name -}}
+{{- $name = ternary "preview" (ternary "rc" "stable" (contains "-rc." .tag)) (contains "-preview." .tag) -}}
+{{- end -}}
+{{- if not (has $name (list "preview" "rc" "stable")) }}{{ fail (printf "api.updateChannel.name must be preview, rc or stable, got %q" $name) }}{{ end -}}
+{{- $ch.url | default (printf "%s/channels/%s.json" (trimSuffix "/" $ch.baseUrl) $name) -}}
+{{- end -}}
+
 {{- define "cloudgrange.firstPartyImage" -}}
 {{- $ref := printf "%s/%s:%s" .Values.global.image.registry .Values.image.repository (include "cloudgrange.imageTag" .) -}}
 {{- with .Values.image.digest -}}

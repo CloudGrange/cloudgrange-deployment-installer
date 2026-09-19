@@ -198,10 +198,28 @@ spec:
     requests:
       storage: {{ .Values.platformUpdater.backup.size }}
 {{- end }}
+---
+# Update trust (owner decision 2026-09-18: HTTPS + digest pinning). The updater reads this with its
+# own ServiceAccount: the channel whose SHA-256 it pins the release manifest to (the same URL the
+# API reads), extra allowed download hosts, and an optional private-mirror CA.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-trust
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+data:
+  channelUrl: {{ include "cloudgrange.updateChannelUrl" (dict "ch" .Values.api.updateChannel "tag" (include "cloudgrange.imageTag" .)) | quote }}
+  {{- $trust := .Values.platformUpdater.trust | default dict }}
+  {{- range $h := $trust.allowedHosts | default list }}
+  {{- if not (regexMatch "^[A-Za-z0-9.-]+(:[0-9]+)?$" $h) }}{{ fail (printf "platformUpdater.trust.allowedHosts entries are host[:port], got %q" $h) }}{{ end }}
+  {{- end }}
+  allowedHosts: {{ join " " ($trust.allowedHosts | default list) | quote }}
+  {{- with $trust.caBundle }}
+  caBundle: {{ . | quote }}
+  {{- end }}
 {{- if .Values.platformUpdater.signing.publicKey }}
 ---
-# The cosign public key the updater verifies release manifests against. The updater reads it with
-# its own ServiceAccount, so the Job spec does not have to mount it.
+# OPTIONAL cosign public key: when set, the updater also verifies the release manifest's signature.
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -5,7 +5,11 @@
 # Driven end to end with stub apt/apt-get/k3s/systemctl/systemd-run on PATH, a fake K3s install.sh inside
 # the release, and a real openssl signing key, so the checks here exercise the shipped script:
 #   - foundation-check reports apt/security counts, reboot-required, the K3s version and the channel;
-#   - foundation-apply refuses unsigned, tampered, over-reaching or reboot-unconfirmed releases BEFORE
+#   - trust is HTTPS + digest pinning (owner decision 2026-09-18): an UNSIGNED release whose sha256
+#     matches the channel (or the admin's upload sha256) is accepted when no signing key is installed;
+#     a hash mismatch, an http:// source, another host and a tampered file are refused; a signature is
+#     verified only when a real key is installed. Channel downloads go to a real local https server;
+#   - foundation-apply refuses tampered, over-reaching or reboot-unconfirmed releases BEFORE
 #     changing anything, upgrades K3s through the pinned installer, installs host files, and puts K3s
 #     back automatically when the cluster does not come back healthy;
 #   - foundation-rollback restores K3s and host files and says plainly that apt is not rolled back;
@@ -15,18 +19,22 @@
 #     planted status directory).
 # Runs as root: sudo python3 -m unittest discover -s test/appliance -p 'test_foundation_updater.py'
 import base64
+import functools
 import hashlib
+import http.server
 import importlib.util
 import io
 import json
 import os
 import re
 import shutil
+import ssl
 import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
 import uuid
 import zipfile
@@ -114,6 +122,50 @@ class VersionRangeTests(unittest.TestCase):
             ok("1.30.0", "between 1.30 and 1.31")
 
 
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
+class LocalHttpsServer:
+    """A real https server on 127.0.0.1 with its own CA, reachable as https://localhost:<port> (the
+    certificate also covers 127.0.0.1, which the tests use as a DIFFERENT host) and a plain http
+    listener on the same directory, so an http:// refusal is the updater's policy, not a dead port."""
+
+    def __init__(self, root, workdir):
+        self.root = root
+        ca_key, ca_crt = os.path.join(workdir, "ca.key"), os.path.join(workdir, "ca.crt")
+        key, csr, crt = (os.path.join(workdir, n) for n in ("srv.key", "srv.csr", "srv.crt"))
+        ext = os.path.join(workdir, "srv.ext")
+        run = functools.partial(subprocess.run, check=True, capture_output=True)
+        run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=cg-test-ca",
+             "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+             "-keyout", ca_key, "-out", ca_crt])
+        run(["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost", "-keyout", key, "-out", csr])
+        with open(ext, "w") as f:
+            f.write("subjectAltName=DNS:localhost,IP:127.0.0.1\n")
+        run(["openssl", "x509", "-req", "-in", csr, "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial", "-days", "2",
+             "-extfile", ext, "-out", crt])
+        self.ca = ca_crt
+        handler = functools.partial(_QuietHandler, directory=root)
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(crt, key)
+        self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
+        self.plain = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        for srv in (self.httpd, self.plain):
+            srv.handle_error = lambda request, client_address: None  # a client refusing our cert is expected
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.base = "https://localhost:%d" % self.httpd.server_address[1]
+        self.other_host_base = "https://127.0.0.1:%d" % self.httpd.server_address[1]
+        self.http_base = "http://localhost:%d" % self.plain.server_address[1]
+
+    def close(self):
+        for srv in (self.httpd, self.plain):
+            srv.shutdown()
+            srv.server_close()
+
+
 class FoundationUpdaterTests(unittest.TestCase):
     def setUp(self):
         if os.geteuid() != 0:
@@ -133,6 +185,10 @@ class FoundationUpdaterTests(unittest.TestCase):
         os.makedirs(os.path.dirname(self.k3s_bin))
         self.write(self.k3s_bin, "K3S %s\n" % OLD_K3S, 0o755)
         self.write(os.path.join(self.fake, "running_k3s"), OLD_K3S + "\n")
+        self.www = os.path.join(self.tmp, "www")
+        os.makedirs(self.www)
+        self.server = LocalHttpsServer(self.www, self.tmp)
+        self.addCleanup(self.server.close)
         self.version_file = os.path.join(self.host, "etc", "cloudgrange", "foundation-version")
         self.write(self.version_file, "F2609.0.0\n")
         self.reboot_file = os.path.join(self.fake, "reboot-required")
@@ -229,7 +285,7 @@ class FoundationUpdaterTests(unittest.TestCase):
                    CLOUDGRANGE_K3S_BIN=self.k3s_bin,
                    CLOUDGRANGE_K3S_IMAGES_DIR=os.path.join(self.host, "var/lib/rancher/k3s/agent/images"),
                    CLOUDGRANGE_UPDATE_HEALTH_TIMEOUT="1", CLOUDGRANGE_UPDATE_HEALTH_INTERVAL="0.1",
-                   CLOUDGRANGE_FOUNDATION_HEADROOM_BYTES="0")
+                   CLOUDGRANGE_FOUNDATION_HEADROOM_BYTES="0", SSL_CERT_FILE=self.server.ca)
         env.update(env_extra)
         proc = subprocess.run([sys.executable, UPDATER, "--once"], env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -274,12 +330,12 @@ class FoundationUpdaterTests(unittest.TestCase):
                    "curl/noble-updates 8.5.0-2ubuntu10.7 amd64 [upgradable from: 8.5.0-2ubuntu10.6]\n"
                    "libc6/noble-security 2.39-0ubuntu8.6 amd64 [upgradable from: 2.39-0ubuntu8.5]\n")
         open(self.reboot_file, "w").close()
-        self.write(self.channel, json.dumps({"releases": [
+        self.write(os.path.join(self.www, "channel.json"), json.dumps({"releases": [
             {"version": "F2609.1.0", "k3sVersion": NEW_K3S, "bundleUrl": "https://example.invalid/a.zip", "sha256": "a" * 64},
             {"version": "F2609.10.0", "k3sVersion": NEXT_MINOR_K3S, "bundleUrl": "https://example.invalid/b.zip", "sha256": "b" * 64},
             {"version": "F2609.2.0", "k3sVersion": NEW_K3S, "bundleUrl": "https://example.invalid/c.zip", "sha256": "c" * 64}]}))
         rid = self.request({"action": "foundation-check"})
-        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL="file://" + self.channel)
+        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL=self.server.base + "/channel.json")
         self.assertEqual(self.job(rid)["state"], "idle")
         self.assertEqual(status["osUpdatesAvailable"], 3)
         self.assertIsInstance(status["osUpdatesAvailable"], int)
@@ -349,21 +405,97 @@ class FoundationUpdaterTests(unittest.TestCase):
         self.assertIn("signature verification FAILED", job["message"])
         self.assert_nothing_changed()
 
-    def test_unsigned_release_is_refused(self):
+    def test_unsigned_release_is_refused_when_a_signing_key_is_installed(self):
         rid = self.apply(self.release(drop_signature=True))
         self.run_updater()
-        self.assertIn("not a signed Foundation release", self.job(rid)["message"])
+        self.assertIn("has no foundation-release.json.sig", self.job(rid)["message"])
         self.assert_nothing_changed()
 
-    def test_placeholder_or_missing_key_fails_closed(self):
+    # ---- trust: HTTPS + digest pinning, no signing key required (owner decision 2026-09-18) --------
+    def test_unsigned_upload_with_matching_sha256_is_accepted_without_a_key(self):
+        rid = self.apply(self.release(drop_signature=True))
+        status = self.run_updater(CLOUDGRANGE_FOUNDATION_PUBKEY=os.path.join(self.keys, "absent.pub"))
+        self.assertEqual(self.job(rid)["state"], "succeeded", self.job(rid)["message"])
+        self.assertEqual(status["k3sVersion"], NEW_K3S)
+
+    def test_placeholder_key_means_no_key_and_does_not_block(self):
         placeholder = os.path.join(self.keys, "placeholder.pub")
         self.write(placeholder, "-----BEGIN PUBLIC KEY-----\nPLACEHOLDER\n-----END PUBLIC KEY-----\n")
-        rid = self.apply(self.release())
+        rid = self.apply(self.release(drop_signature=True))
         self.run_updater(CLOUDGRANGE_FOUNDATION_PUBKEY=placeholder)
-        self.assertIn("placeholder", self.job(rid)["message"])
-        rid = self.apply(self.release())
+        self.assertEqual(self.job(rid)["state"], "succeeded", self.job(rid)["message"])
+
+    def test_the_shipped_placeholder_key_does_not_block(self):
+        rid = self.apply(self.release(drop_signature=True))
+        self.run_updater(CLOUDGRANGE_FOUNDATION_PUBKEY=os.path.join(REPO, "cloudgrange-signing-key.pub"))
+        self.assertEqual(self.job(rid)["state"], "succeeded", self.job(rid)["message"])
+
+    def test_upload_whose_sha256_does_not_match_is_refused(self):
+        data = self.release(drop_signature=True)
+        rid = self.request({"action": "foundation-apply", "version": "F2609.1.0", "bundleId": self.upload(data),
+                            "sha256": "0" * 64})
         self.run_updater(CLOUDGRANGE_FOUNDATION_PUBKEY=os.path.join(self.keys, "absent.pub"))
-        self.assertIn("no Foundation release signing key", self.job(rid)["message"])
+        self.assertIn("sha256 mismatch", self.job(rid)["message"])
+        self.assert_nothing_changed()
+
+    def publish(self, data, bundle_url=None, sha=None, version="F2609.1.0"):
+        """Put a release on the local https server and list it in an https channel; returns the channel URL."""
+        self.write(os.path.join(self.www, "release.zip"), data)
+        self.write(os.path.join(self.www, "channel.json"), json.dumps({"releases": [
+            {"version": version, "k3sVersion": NEW_K3S, "sha256": sha or sha256(data),
+             "bundleUrl": bundle_url or self.server.base + "/release.zip"}]}))
+        return self.server.base + "/channel.json"
+
+    def download_apply(self, channel_url, **env):
+        rid = self.request({"action": "foundation-apply", "version": "F2609.1.0", "requestedBy": "admin@test"})
+        env.setdefault("CLOUDGRANGE_FOUNDATION_PUBKEY", os.path.join(self.keys, "absent.pub"))
+        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL=channel_url, **env)
+        return self.job(rid), status
+
+    def test_unsigned_https_channel_release_with_matching_sha256_is_accepted(self):
+        job, status = self.download_apply(self.publish(self.release(drop_signature=True)))
+        self.assertEqual(job["state"], "succeeded", job["message"])
+        self.assertEqual((status["installedVersion"], status["k3sVersion"]), ("F2609.1.0", NEW_K3S))
+
+    def test_https_channel_release_whose_sha256_does_not_match_is_refused(self):
+        job, _ = self.download_apply(self.publish(self.release(drop_signature=True), sha="f" * 64))
+        self.assertEqual(job["state"], "failed")
+        self.assertIn("sha256 mismatch", job["message"])
+        self.assert_nothing_changed()
+
+    def test_http_bundle_url_is_refused(self):
+        data = self.release(drop_signature=True)
+        job, _ = self.download_apply(self.publish(data, bundle_url=self.server.http_base + "/release.zip"))
+        self.assertEqual(job["state"], "failed")
+        self.assertIn("https://", job["message"])
+        self.assert_nothing_changed()
+
+    def test_http_channel_is_refused(self):
+        self.publish(self.release(drop_signature=True))
+        job, _ = self.download_apply(self.server.http_base + "/channel.json")
+        self.assertEqual(job["state"], "failed")
+        self.assertIn("must be https://", job["message"])
+        self.assert_nothing_changed()
+
+    def test_file_channel_is_refused(self):
+        self.publish(self.release(drop_signature=True))
+        job, _ = self.download_apply("file://" + os.path.join(self.www, "channel.json"))
+        self.assertIn("must be https://", job["message"])
+        self.assert_nothing_changed()
+
+    def test_bundle_from_another_host_is_refused_unless_allowed(self):
+        data = self.release(drop_signature=True)
+        other = self.server.other_host_base + "/release.zip"
+        job, _ = self.download_apply(self.publish(data, bundle_url=other))
+        self.assertIn("neither the channel host", job["message"])
+        self.assert_nothing_changed()
+        job, _ = self.download_apply(self.publish(data, bundle_url=other),
+                                     CLOUDGRANGE_FOUNDATION_ALLOWED_HOSTS=other.split("/")[2])
+        self.assertEqual(job["state"], "succeeded", job["message"])
+
+    def test_untrusted_tls_certificate_is_refused(self):
+        job, _ = self.download_apply(self.publish(self.release(drop_signature=True)), SSL_CERT_FILE="/nonexistent")
+        self.assertEqual(job["state"], "failed")
         self.assert_nothing_changed()
 
     def test_file_altered_after_signing_is_refused(self):

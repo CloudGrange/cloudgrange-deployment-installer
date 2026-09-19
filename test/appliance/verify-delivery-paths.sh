@@ -22,6 +22,18 @@ check "AKS"                            -f charts/cloudgrange/values-azure.yaml
 check "multi-node"                     -f charts/cloudgrange/values-multi-node.yaml
 
 echo
+echo "=== update trust per delivery path: HTTPS + digest pinning, no signing key (2026-09-18) ==="
+for f in "" charts/cloudgrange/values-single-node.yaml charts/cloudgrange/values-azure.yaml charts/cloudgrange/values-multi-node.yaml; do
+  args=(); [ -n "$f" ] && args=(-f "$f")
+  out=$(helm template cg charts/cloudgrange "${args[@]}" 2>/dev/null)
+  ch=$(printf '%s' "$out" | sed -n 's/^  channelUrl: "\(.*\)"$/\1/p' | head -1)
+  key=$(printf '%s' "$out" | grep -c 'name: cg-platform-updater-signing')
+  label=${f:-chart defaults}
+  if [[ "$ch" == https://* ]] && [ "$key" = 0 ]; then echo "trust OK  : $label  channel=$ch  signing key required=no"
+  else echo "trust FAIL: $label  channel=${ch:-none}  signingConfigMap=$key"; fi
+done
+
+echo
 echo "=== every profile must render and lint ==="
 for f in "" charts/cloudgrange/values-single-node.yaml charts/cloudgrange/values-azure.yaml charts/cloudgrange/values-multi-node.yaml; do
   if [ -z "$f" ]; then

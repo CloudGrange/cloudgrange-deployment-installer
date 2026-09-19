@@ -35,7 +35,8 @@ CloudGrange {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}
    (relay.service.type) or your own Ingress/route{{ end }}.
 
 6. Updates: Platform -> Updates in the portal. Platform updates run in-cluster as a Job under
-   ServiceAccount {{ .Release.Name }}-platform-updater{{ if not .Values.platformUpdater.signing.publicKey }}.
-   NOTE: platformUpdater.signing.publicKey is empty, so every Platform update is REFUSED until the
-   release signing key is configured{{ end }}.
+   ServiceAccount {{ .Release.Name }}-platform-updater. A release is applied only when it comes over
+   https from the update channel host, its manifest matches the SHA-256 the channel lists, and every
+   image is pinned by @sha256 digest{{ if .Values.platformUpdater.signing.publicKey }}; its signature is
+   also verified against platformUpdater.signing.publicKey{{ end }}.
    Supported Kubernetes: {{ .Chart.KubeVersion }}.

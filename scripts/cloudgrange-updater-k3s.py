@@ -29,12 +29,21 @@
 #       osUpdatesAvailable is an INTEGER (number of upgradable OS packages; the security subset is in
 #       message). state is one of idle|running|succeeded|failed|rolled-back.
 #
-# A Foundation release is a zip holding foundation-release.json, its signature
+# A Foundation release is a zip holding foundation-release.json, optionally its signature
 # foundation-release.json.sig, and the files the manifest names (the K3s binary, K3s's own install.sh,
-# optionally the K3s air-gap image tarball, and host files). The manifest is signed with the release
-# key (ECDSA/RSA, verified with `openssl dgst -sha256 -verify`, which also accepts a base64 cosign
-# sign-blob signature) and pins the SHA-256 of every other file, so the signature covers the whole
-# release. With no usable public key installed the apply is REFUSED — never "unsigned is fine".
+# optionally the K3s air-gap image tarball, and host files). The manifest pins the SHA-256 of every
+# other file.
+#
+# Trust (owner decision 2026-09-18: HTTPS + digest pinning, no signing key required). A release is
+# accepted when
+#   - it was downloaded over https:// (redirects included) from the Foundation channel host, or a
+#     host listed in CLOUDGRANGE_FOUNDATION_ALLOWED_HOSTS, and the channel itself is https://;
+#   - the zip's SHA-256 equals the channel entry's sha256 (an uploaded, air-gapped bundle: the
+#     sha256 the admin saw in the portal, carried in the request);
+#   - every file in it matches its SHA-256 in foundation-release.json, and nothing unpinned is present.
+# A signature is OPTIONAL: when a real public key is installed at CLOUDGRANGE_FOUNDATION_PUBKEY the
+# signature must be present and verify (ECDSA/RSA via `openssl dgst -sha256 -verify`, which also
+# accepts a base64 cosign sign-blob signature); with no key, or the placeholder key, it is not checked.
 #
 # Trust boundary (unchanged from the Compose-era updater). The API pod is non-root and can only drop
 # requests and uploaded bundles into the shared updates directory (requests/, incoming/). Everything
@@ -51,6 +60,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
@@ -107,6 +117,29 @@ def sha256_file(path):
         for chunk in iter(lambda: f.read(CHUNK), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def url_host(url):
+    """Lower-case host[:port] of a URL, with a default :443 dropped."""
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.port and parsed.port != 443:
+        host = "%s:%d" % (host, parsed.port)
+    return host
+
+
+class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not str(newurl).startswith("https://"):
+            raise UpdateError("refusing a redirect away from https:// (%s)" % tail(str(newurl), 120))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def https_open(url, timeout):
+    """urlopen for https:// only, redirects included, with normal certificate verification."""
+    if not str(url).startswith("https://"):
+        raise UpdateError("only https:// downloads are accepted (got %s)" % tail(str(url), 120))
+    return urllib.request.build_opener(_HttpsOnlyRedirect()).open(url, timeout=timeout)
 
 
 def open_untrusted_file(dir_fd, name, limit):
@@ -198,6 +231,10 @@ class FoundationUpdater:
         self.version_file = e("CLOUDGRANGE_FOUNDATION_VERSION_FILE", "/etc/cloudgrange/foundation-version")
         self.channel_file = e("CLOUDGRANGE_FOUNDATION_CHANNEL_FILE", "/etc/cloudgrange/foundation-channel-url")
         self.channel_url = e("CLOUDGRANGE_FOUNDATION_CHANNEL_URL", "")
+        # Extra hosts a Foundation bundle may be downloaded from besides the channel host (https only).
+        self.allowed_hosts = [h.strip().lower() for h in re.split(r"[\s,]+", e("CLOUDGRANGE_FOUNDATION_ALLOWED_HOSTS", ""))
+                              if h.strip()]
+        self.channel_host = None
         self.reboot_file = e("CLOUDGRANGE_REBOOT_REQUIRED_FILE", "/var/run/reboot-required")
         # Tests point this at a scratch directory; on a host it is "/".
         self.host_root = e("CLOUDGRANGE_HOST_ROOT", "/")
@@ -402,9 +439,10 @@ class FoundationUpdater:
                 url = ""
         if not url:
             return None
-        if not url.startswith("https://") and not url.startswith("file://"):
-            raise UpdateError("the Foundation channel URL must be https://")
-        with urllib.request.urlopen(url, timeout=30) as resp:
+        if not url.startswith("https://"):
+            raise UpdateError("the Foundation channel URL must be https:// (got %s)" % tail(url, 120))
+        self.channel_host = url_host(url)
+        with https_open(url, timeout=30) as resp:
             body = resp.read(MAX_MANIFEST_BYTES + 1)
         if len(body) > MAX_MANIFEST_BYTES:
             raise UpdateError("the Foundation channel document is too large")
@@ -515,13 +553,17 @@ class FoundationUpdater:
         if entry is None:
             raise UpdateError("Foundation release %s is not in the channel" % version)
         url, expected = str(entry.get("bundleUrl") or ""), str(entry.get("sha256") or "").lower()
-        if not url.startswith("https://") and not url.startswith("file://"):
-            raise UpdateError("the Foundation release URL must be https://")
+        if not url.startswith("https://"):
+            raise UpdateError("the Foundation release must be downloaded over https:// (got %s)" % tail(url, 120))
+        host = url_host(url)
+        if host != self.channel_host and host not in [url_host("https://" + h) for h in self.allowed_hosts]:
+            raise UpdateError("the Foundation release comes from %s, which is neither the channel host (%s) nor in "
+                              "CLOUDGRANGE_FOUNDATION_ALLOWED_HOSTS" % (host, self.channel_host))
         if not SHA_RE.match(expected):
             raise UpdateError("the channel entry for %s has no valid sha256" % version)
         staged = os.path.join(self.state_dir, "staged.zip")
         digest, total = hashlib.sha256(), 0
-        with urllib.request.urlopen(url, timeout=60) as resp, open(staged, "wb") as dst:
+        with https_open(url, timeout=60) as resp, open(staged, "wb") as dst:
             for chunk in iter(lambda: resp.read(CHUNK), b""):
                 total += len(chunk)
                 if total > MAX_BUNDLE_BYTES:
@@ -551,18 +593,27 @@ class FoundationUpdater:
             z.extractall(work)
         return work
 
-    def verify_signature(self, work):
-        manifest = os.path.join(work, MANIFEST_NAME)
-        signature = os.path.join(work, SIGNATURE_NAME)
-        if not os.path.isfile(manifest) or not os.path.isfile(signature):
-            raise UpdateError("bundle is not a signed Foundation release (%s and %s required)" % (MANIFEST_NAME, SIGNATURE_NAME))
+    def signing_key_configured(self):
+        """A real public key is installed. Absent, empty or the committed placeholder = not configured."""
         try:
             with open(self.pubkey, "rb") as f:
                 key = f.read()
         except OSError:
-            raise UpdateError("no Foundation release signing key installed at %s — refusing an unverifiable release" % self.pubkey)
-        if b"PLACEHOLDER" in key or b"-----BEGIN PUBLIC KEY-----" not in key:
-            raise UpdateError("the Foundation release signing key at %s is a placeholder — refusing an unverifiable release" % self.pubkey)
+            return False
+        return b"-----BEGIN PUBLIC KEY-----" in key and b"PLACEHOLDER" not in key.upper()
+
+    def verify_signature_if_configured(self, work):
+        """Optional signature check. Returns True when a signature was verified, False when no key is
+        configured (trust is then HTTPS + SHA-256 pinning). Raises when a configured key does not verify."""
+        manifest = os.path.join(work, MANIFEST_NAME)
+        signature = os.path.join(work, SIGNATURE_NAME)
+        if not os.path.isfile(manifest):
+            raise UpdateError("bundle is not a Foundation release (%s is missing)" % MANIFEST_NAME)
+        if not self.signing_key_configured():
+            return False
+        if not os.path.isfile(signature):
+            raise UpdateError("a Foundation release signing key is installed at %s but the release has no %s"
+                              % (self.pubkey, SIGNATURE_NAME))
         with open(signature, "rb") as f:
             sig = f.read()
         # cosign sign-blob writes base64; openssl wants the raw DER. Accept both.
@@ -580,6 +631,7 @@ class FoundationUpdater:
         os.unlink(der)
         if proc.returncode != 0 or b"Verified OK" not in (proc.stdout or b""):
             raise UpdateError("Foundation release signature verification FAILED — the release was not applied")
+        return True
 
     def load_manifest(self, work):
         with open(os.path.join(work, MANIFEST_NAME), "rb") as f:
@@ -768,7 +820,7 @@ class FoundationUpdater:
         try:
             job["step"] = "verifying"
             work = self.extract(staged)
-            self.verify_signature(work)
+            self.verify_signature_if_configured(work)
             manifest = self.load_manifest(work)
             if version and manifest["version"] != version:
                 raise UpdateError("the release is %s, not the requested %s" % (manifest["version"], version))

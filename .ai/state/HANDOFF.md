@@ -9,6 +9,17 @@
 **read its "Live implementation status" section first.** That section is the authoritative
 list of what is fixed, what is built but never run, and what is still open.
 
+## Update trust: no signing key (2026-09-18, branch `feat/https-digest-update-trust`, AB#9171)
+
+Owner decision: updates are trusted through HTTPS + digest pinning, signatures optional. The Platform
+updater pins the manifest to the channel's `latest.manifestSha256` (channel URL from ConfigMap
+`<release>-platform-updater-trust`); the Foundation updater accepts unsigned bundles whose sha256 matches.
+`Publish-Release.sh` now publishes `manifestSha256` and accepts `--channel rc`. **Any release published
+before this change has no `manifestSha256` in its channel and is refused by the new updater — republish
+the channel with `Publish-Release.sh`.** Tests: `test/appliance/test_platform_updater_trust.py`,
+`test_foundation_updater.py`, `test/e2e/platform-updater-kind.sh` (unsigned rc.90 → rc.91).
+See `.ai/memory/DECISIONS.md`.
+
 ## Headline
 
 **The VHDX appliance now passes its secret scan** — `findings=0`, 3.10 GB VHDX exported,

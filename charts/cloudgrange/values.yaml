@@ -134,7 +134,7 @@ foundation:
 # AB#9171 (plan §3/§4, E1) — the in-cluster Platform updater. A Platform update (this chart's
 # version, its images, the schema) runs as a Kubernetes Job the API creates on an admin's request,
 # so it works the same on every delivery path: K3s, BYO Kubernetes and AKS. The Job verifies the
-# signed release manifest, backs up the database, runs `helm upgrade --reuse-values` to the pinned
+# release manifest (HTTPS + the channel's SHA-256 + @sha256 image digests), backs up the database, runs `helm upgrade --reuse-values` to the pinned
 # versions, runs the health gate, and on failure runs `helm rollback` and restores the database.
 # Image source: images/platform-updater/. The chart renders only its ServiceAccount, RBAC, backup
 # volume and status ConfigMap; the API creates the Job (images/platform-updater/job.example.yaml).
@@ -152,11 +152,23 @@ platformUpdater:
     size: 10Gi
     # Empty uses the cluster's default StorageClass.
     storageClassName: ""
+  # Update trust (owner decision 2026-09-18): HTTPS + digest pinning, no signing key required.
+  # The updater reads the update channel (api.updateChannel — the same URL the API reads) over
+  # https, downloads the release manifest the channel lists, and applies it only if its SHA-256
+  # matches the channel's latest.manifestSha256 and every image in it is pinned by @sha256 digest.
+  # http:// sources and hosts other than the channel host are refused. Rendered into ConfigMap
+  # <release>-platform-updater-trust, which the updater reads itself.
+  trust:
+    # Extra hosts the manifest and chart may be downloaded from besides the channel host, e.g. a
+    # CDN in front of an internal mirror. Still https only.
+    allowedHosts: []
+    # Optional PEM CA bundle for an https mirror signed by a private CA. Added to the system CAs.
+    caBundle: ""
   signing:
-    # PEM cosign public key the updater verifies the release manifest against. EMPTY MEANS EVERY
-    # PLATFORM UPDATE IS REFUSED (fail closed): the committed cloudgrange-signing-key.pub is still a
-    # placeholder, so there is no real key to default to yet. Rendered into ConfigMap
-    # <release>-platform-updater-signing, which the updater reads itself.
+    # OPTIONAL PEM cosign public key. Set, the updater also verifies <manifest url>.sig against it
+    # and refuses a missing or bad signature. Empty (the default), signatures are not checked and
+    # trust is HTTPS + SHA-256/digest pinning. Rendered into ConfigMap
+    # <release>-platform-updater-signing.
     publicKey: ""
   # How long the health gate waits for every Deployment/StatefulSet of the release to roll out.
   healthTimeout: 10m
