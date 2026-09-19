@@ -134,13 +134,14 @@ preflight_dedicated_host() {
         done
     fi
 
-    # 4. Minimum resources.
+    # 4. Recommended resources. These only WARN: undersized hosts install and run (the appliance
+    # itself ships with 2 vCPU), they are just slower. Only real conflicts above refuse.
     cpus=$(nproc 2>/dev/null || echo 0)
-    [ "$cpus" -ge "$MIN_CPUS" ] || failures+=("$cpus CPUs: at least $MIN_CPUS are required")
+    [ "$cpus" -ge "$MIN_CPUS" ] || echo "  WARNING: $cpus CPUs; $MIN_CPUS or more recommended (install continues)." >&2
     mem_kb=$(awk '/^MemTotal:/ {print $2}' "$MEMINFO" 2>/dev/null)
-    [ "${mem_kb:-0}" -ge "$MIN_MEM_KB" ] || failures+=("$(( ${mem_kb:-0} / 1024 )) MiB RAM: at least $(( MIN_MEM_KB / 1024 )) MiB is required")
+    [ "${mem_kb:-0}" -ge "$MIN_MEM_KB" ] || echo "  WARNING: $(( ${mem_kb:-0} / 1024 )) MiB RAM; $(( MIN_MEM_KB / 1024 )) MiB or more recommended (install continues)." >&2
     disk_kb=$(df -Pk "$PF_ROOT/var/lib" 2>/dev/null | awk 'NR==2 {print $4}')
-    [ "${disk_kb:-0}" -ge "$MIN_DISK_KB" ] || failures+=("$(( ${disk_kb:-0} / 1048576 )) GiB free under /var/lib: at least $(( MIN_DISK_KB / 1048576 )) GiB is required")
+    [ "${disk_kb:-0}" -ge "$MIN_DISK_KB" ] || echo "  WARNING: $(( ${disk_kb:-0} / 1048576 )) GiB free under /var/lib; $(( MIN_DISK_KB / 1048576 )) GiB or more recommended (install continues)." >&2
 
     if [ "${#failures[@]}" -gt 0 ]; then
         echo "" >&2
@@ -152,7 +153,7 @@ preflight_dedicated_host() {
         echo "server. To install onto a Kubernetes cluster you already run, use the Helm chart directly instead." >&2
         exit 1
     fi
-    echo "  Preflight OK: Ubuntu $ver, ${cpus} CPUs, $(( mem_kb / 1024 )) MiB RAM, $(( disk_kb / 1048576 )) GiB free, no conflicting runtime."
+    echo "  Preflight OK: Ubuntu $ver, ${cpus} CPUs, $(( ${mem_kb:-0} / 1024 )) MiB RAM, $(( ${disk_kb:-0} / 1048576 )) GiB free, no conflicting runtime."
 }
 
 # AB#9183: --engine k3s delegates entirely to Install-CloudGrangeK3s.sh, which has its
