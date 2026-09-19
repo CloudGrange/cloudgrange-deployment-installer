@@ -41,9 +41,10 @@ class PlatformUpdaterTrustTests(unittest.TestCase):
 
     def put(self, name, data):
         path = os.path.join(self.www, name)
+        data = data if isinstance(data, bytes) else data.encode()
         with open(path, "wb") as f:
-            f.write(data if isinstance(data, bytes) else data.encode())
-        return hashlib.sha256(open(path, "rb").read()).hexdigest()
+            f.write(data)
+        return hashlib.sha256(data).hexdigest()
 
     def publish(self, images=None, chart_url=None, chart_sha=None, manifest_url=None, manifest_sha=None,
                 with_manifest_sha=True):
