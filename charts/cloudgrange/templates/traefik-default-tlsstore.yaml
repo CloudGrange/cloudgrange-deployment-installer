@@ -1,0 +1,19 @@
+{{- /* AB#9171: on the managed K3s foundation, make the platform certificate Traefik's DEFAULT
+certificate. Browsers and the cg CLI reach an on-prem install by IP address, and a TLS client sends
+no SNI for an IP, so Traefik could not match the Ingress's certificate and served its own
+"TRAEFIK DEFAULT CERT" instead. The platform certificate (which carries the IP SAN) was never
+presented, so `cg auth login --ca-cert <platform CA>` failed with an SSL error on a live preview.12
+install. A TLSStore named "default" is Traefik's fallback for connections without a matching SNI.
+Only rendered when asked (values-single-node.yaml: our wrappers own that cluster) and when the
+Traefik CRD exists, so a bring-your-own cluster's Traefik is never reconfigured. */ -}}
+{{- if and .Values.global.ingress.traefikDefaultCertificate (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/TLSStore") }}
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: {{ .Release.Namespace }}
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: ingress }
+spec:
+  defaultCertificate:
+    secretName: {{ include "cloudgrange.tlsSecretName" . | quote }}
+{{- end }}

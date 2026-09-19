@@ -65,6 +65,10 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # AB#9171: the Traefik default-certificate store on managed K3s (templates/traefik-default-tlsstore.yaml).
+  - apiGroups: ["traefik.io"]
+    resources: ["tlsstores"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # The release's own Roles/RoleBindings (module runtime, secrets bootstrap, API update rights).
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]

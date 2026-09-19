@@ -13,6 +13,7 @@ global:
     className: traefik
     annotations:
       traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefikDefaultCertificate: true
   deployment:
     profile: multi-node
 
