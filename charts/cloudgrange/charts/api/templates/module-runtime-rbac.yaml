@@ -5,9 +5,16 @@
 #
 # Deliberately narrow, because this is what lets the platform start third-party container images:
 #   - a Role, not a ClusterRole: this namespace only, never cluster-wide.
-#   - only deployments and services, and only the verbs needed to create, update and remove them.
-#   - no secrets, no configmaps, no pod/exec, no RBAC-editing verbs, so a compromised module
-#     workload cannot escalate through the API's own service account.
+#   - only deployments, services and secrets, and only the verbs needed to create, update and
+#     remove them.
+#   - AB#9171 AB#9167: secrets because each installed module gets its platform credential (the
+#     per-module service-account token the module lifecycle provisions) in its own Secret,
+#     cg-module-<id>-cred, mounted as CLOUDGRANGE_API_TOKEN. The API could only put that token in
+#     the Deployment spec otherwise, readable by anyone who can read Deployments. No list/watch on
+#     secrets: the API reads and writes them by name and cannot enumerate the namespace's secrets.
+#   - no configmaps, no pod/exec, no RBAC-editing verbs; module pods run with
+#     automountServiceAccountToken: false, so a module has no Kubernetes credential at all and a
+#     compromised module workload cannot escalate through the API's own service account.
 # AB#9171: the ServiceAccount is created unconditionally now. Besides the module-runtime Role below it
 # holds the Platform-update Role (umbrella templates/platform-updater.yaml), which must bind to a real
 # ServiceAccount even when moduleRuntime is off; before, the pod fell back to `default` then.
@@ -34,6 +41,9 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch", "delete"]
   # Read-only: the Health tab reports whether a module's pods are actually up. No write verbs —
   # the platform never needs to mutate pods directly.
   - apiGroups: [""]

@@ -30,6 +30,8 @@ PACKAGES=(
     cloudgrange-relay
     cloudgrange-platform-updater
     cloudgrange-module-hello
+    # AB#9171: the shared module package; its tags are <module>-<version>, matched below.
+    cloudgrange-modules
     charts/cloudgrange
 )
 
@@ -45,7 +47,11 @@ all_tags() {
                 && { echo "cannot list tags of $pkg" >&2; exit 3; }
             continue
         fi
-        printf '%s\n' "$out" | sed "s|^|ghcr:$pkg\t|"
+        # cloudgrange-modules tags are <module>-<version> (hello-2609.0.0-preview.12): compare the version.
+        [ "$pkg" = cloudgrange-modules ] && out=$(printf '%s
+' "$out" | sed -E 's/^[a-z][a-z0-9-]*-([0-9]+.)//')
+        printf '%s
+' "$out" | sed "s|^|ghcr:$pkg	|"
     done
     # GitHub Releases (drafts included: a draft still reserves its tag name) and git tags.
     out=$(gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[].tag_name') \

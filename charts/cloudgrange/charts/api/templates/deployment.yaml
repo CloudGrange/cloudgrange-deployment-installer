@@ -126,6 +126,10 @@ spec:
               value: "http://{{ .Release.Name }}-otel-collector:4317"
             - name: CLOUDGRANGE_PORTAL_URL
               value: "http://{{ .Release.Name }}-portal:8080"
+            # AB#9171 AB#9167: the address installed modules call the platform API at (CLOUDGRANGE_API_URL
+            # in each module pod, with the per-module token the module lifecycle provisions).
+            - name: CLOUDGRANGE_API_INTERNAL_URL
+              value: "http://{{ .Release.Name }}-api:{{ .Values.port }}"
             - name: Keycloak__Authority
               value: "http://{{ .Release.Name }}-keycloak:8080/realms/cloudgrange"
             - name: Keycloak__ClientId
