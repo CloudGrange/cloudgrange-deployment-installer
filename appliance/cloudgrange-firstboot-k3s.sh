@@ -87,7 +87,11 @@ if [ -z "$VERSION" ] || [ "$VERSION" = latest ]; then
     exit 1
 fi
 rm -f /opt/cloudgrange/.install-state.json
-bash "$INSTALLER_DIR/scripts/Install-CloudGrangeK3s.sh" --hostname "$IP" --version "$VERSION"
+# AB#9171 (E7): an appliance is updated only from Platform -> Updates and may sit on an isolated
+# network, so it always runs in offline mode: the in-cluster registry an uploaded Platform bundle is
+# loaded into, and K3s mirroring the public registries to it (online updates still work: containerd
+# falls back to the public registry).
+bash "$INSTALLER_DIR/scripts/Install-CloudGrangeK3s.sh" --hostname "$IP" --version "$VERSION" --offline
 
 rm -f "$MARKER"
 echo "[firstboot-k3s] complete $(date -u +%FT%TZ)"

@@ -62,8 +62,10 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # networkpolicies: the in-cluster air-gap registry's push-side policy (E7, templates/airgap-registry.yaml).
+  # Found by the offline kind e2e: without it every upgrade AND its rollback were forbidden.
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
+    resources: ["ingresses", "networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # AB#9171: the Traefik default-certificate store on managed K3s (templates/traefik-default-tlsstore.yaml).
   - apiGroups: ["traefik.io"]
@@ -243,7 +245,7 @@ spec:
       securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 65534) | nindent 8 }}
       containers:
         - name: backups-init
-          image: {{ .Values.secretsBootstrap.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.secretsBootstrap.image "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           command: ["/bin/sh", "-c"]
           args:
@@ -343,7 +345,9 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["configmaps"]
-    resourceNames: ["cloudgrange-platform-update-status"]
+    # E7: cloudgrange-module-import-status is written by the updater Job that loads an offline module
+    # bundle (load-images); the API only reads it.
+    resourceNames: ["cloudgrange-platform-update-status", "cloudgrange-module-import-status"]
     verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

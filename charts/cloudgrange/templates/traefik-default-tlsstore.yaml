@@ -75,7 +75,7 @@ spec:
       securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 65534) | nindent 8 }}
       containers:
         - name: tlsstore
-          image: {{ .Values.secretsBootstrap.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.secretsBootstrap.image "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           command: ["/bin/sh", "-c"]
           args:

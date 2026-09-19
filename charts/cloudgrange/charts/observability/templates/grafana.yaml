@@ -24,7 +24,7 @@ spec:
       # Prometheus and Loki are healthy (same fix as the Compose stack's depends_on chain).
       initContainers:
         - name: wait-for-datasources
-          image: {{ .Values.busybox.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.busybox.image "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           command:
             - sh
@@ -34,7 +34,7 @@ spec:
                     wget -q -O /dev/null http://{{ .Release.Name }}-loki:3100/ready; do sleep 2; done
       containers:
         - name: grafana
-          image: {{ .Values.grafana.image }}
+          image: {{ include "cloudgrange.image" (dict "ref" .Values.grafana.image "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           ports:
             - { containerPort: 3000 }

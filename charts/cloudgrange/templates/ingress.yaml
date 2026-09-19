@@ -52,6 +52,18 @@ spec:
       {{- end }}
       http:
         paths:
+          {{- /* AB#9171 (E7): the offline bundle uploads (Platform, Foundation, modules; up to
+          several GB), straight to the API, never buffered by the portal's proxy. The legacy
+          /api/v1/platform/update/upload route now answers 410 from the API; it keeps its direct
+          route so the 410 is not turned into a portal proxy error. */}}
+          {{- range list "/api/v1/platform/updates/platform/upload" "/api/v1/platform/updates/foundation/upload" "/api/v1/modules/offline/upload" }}
+          - path: {{ . }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $.Release.Name }}-api
+                port: { number: 8080 }
+          {{- end }}
           - path: /api/v1/platform/update/upload
             pathType: Exact
             backend:

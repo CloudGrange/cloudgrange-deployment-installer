@@ -24,6 +24,17 @@ persistence:
     size: 256Mi
   updates:
     size: 8Gi
+# AB#9171 (plan 2026-09-18 §6, E7) — offline Platform updates. An administrator uploads a signed
+# Platform bundle (cloudgrange-platform-<version>.zip, scripts/release/New-PlatformRelease.sh
+# --offline-bundle) on the Platform card; the API streams it onto this PVC, and the in-cluster
+# Platform updater Job mounts the same PVC read-only at /bundles and applies it with
+# `apply --version <v> --bundle /bundles/<id>.zip`. One bundle is kept at a time.
+# ReadWriteOnce (persistence.accessMode): the updater Job is scheduled next to an API pod.
+platformBundles:
+  enabled: true
+  size: 10Gi
+  # The largest upload the API accepts, in bytes (8 GiB). Keep it below size.
+  maxBytes: 8589934592
 moduleRuntime:
   # AB#9197 — lets the API create a Deployment + Service per installed module, which is what makes
   # an installed module actually run and be routable. Turning this off leaves modules installable

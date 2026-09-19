@@ -109,6 +109,20 @@ PY
   if [ -f "$PLATFORM_DIR/manifest.json.sig" ]; then
     put "$PLATFORM_DIR/manifest.json.sig" "releases/$VERSION/manifest.json.sig" text/plain
   fi
+  # AB#9171 (E7): images.txt (what a bring-your-own-Kubernetes customer mirrors for an air-gapped
+  # install; pinned by the manifest) and the offline Platform bundle with its .sha256 (what an
+  # air-gapped managed install uploads; the administrator compares the portal's SHA-256 with it).
+  if [ -f "$PLATFORM_DIR/images.txt" ]; then
+    put "$PLATFORM_DIR/images.txt" "releases/$VERSION/images.txt" text/plain
+  fi
+  PZIP="cloudgrange-platform-$VERSION.zip"
+  if [ -f "$PLATFORM_DIR/$PZIP" ]; then
+    psize=$(stat -c %s "$PLATFORM_DIR/$PZIP")
+    [ "$psize" -lt $((5 * 1024 * 1024 * 1024)) ] || { echo "$PZIP is over 5 GiB: multipart upload is not implemented" >&2; exit 1; }
+    (cd "$PLATFORM_DIR" && sha256sum -c "$PZIP.sha256" >/dev/null) || { echo "$PZIP does not match its .sha256" >&2; exit 1; }
+    put "$PLATFORM_DIR/$PZIP.sha256" "releases/$VERSION/$PZIP.sha256" text/plain
+    put "$PLATFORM_DIR/$PZIP" "releases/$VERSION/$PZIP" application/zip
+  fi
   put "$PLATFORM_DIR/manifest.json" "releases/$VERSION/manifest.json" application/json
   MANIFEST_URL="$PUBLIC/releases/$VERSION/manifest.json"
   # What the updater will download must be byte-identical to what the channel pins.

@@ -14,6 +14,23 @@
 #      latest.manifestSha256, which is what the Platform updater pins the manifest to;
 #   5. OPTIONALLY sign the manifest with cosign when a key is given (manifest.json.sig). No key is
 #      required: update trust is HTTPS + SHA-256/digest pinning (owner decision 2026-09-18).
+#   6. (AB#9171 E7) write images.txt — every image the release can run (scripts/release/
+#      Get-PlatformImages.sh), plus the module images when --modules-catalog is given, one
+#      "<repository> <tag> <digest>" line each, pinned by digest — and pin it in the manifest
+#      (images.sha256). Customers mirror these images for an air-gapped bring-your-own-Kubernetes
+#      or AKS install (global.imageRegistry).
+#   7. (E7, --offline-bundle) build cloudgrange-platform-<version>.zip and its .sha256: the offline
+#      Platform bundle an administrator uploads on the Platform card of an air-gapped managed install.
+#        manifest.json, [manifest.json.sig], cloudgrange-<version>.tgz, images.txt, SHA256SUMS,
+#        images/<digest hex>/oci/                  OCI layout of the image (linux/amd64)
+#        images/<digest hex>/index-manifest.json   the exact index bytes, when the pin is a
+#                                                  multi-platform index (only amd64 is carried)
+#        modules/catalog.json, modules/manifests/  (with --modules-catalog) the module catalog
+#                                                  snapshot, offered by the API with no internet
+#      Trust: the zip's SHA-256, published beside it, which the administrator confirms in the portal;
+#      inside, the same pins as online. The in-cluster Platform updater verifies it and pushes the
+#      images into the in-cluster registry (images/platform-updater/entrypoint.sh apply --bundle).
+#      Needs crane (release/pins.conf CRANE_VERSION) and --push or --already-pushed.
 #
 # DRY RUN BY DEFAULT: without --push nothing is tagged or pushed; the commands are printed and the
 # manifest is written with "dryRun": true, which the Platform updater refuses to apply.
@@ -31,11 +48,15 @@
 #                             digest from the registry, and write a real (non-dry-run) manifest. The
 #                             version-free check is skipped because this step publishes nothing;
 #                             a missing tag is an error.
+#       [--modules-catalog U] E7: include the module catalog at U (https URL or file,
+#                             cg-module-catalog-v1; the newest version of each module) in images.txt
+#                             and in the offline bundle (scripts/release/Get-ModuleCatalogSnapshot.sh)
+#       [--offline-bundle]    E7: also build the offline Platform bundle (needs --push or --already-pushed)
 # --chart-base-url is where the chart .tgz will be published, e.g. $R2_PUBLIC_BASE/releases/<version>
 set -euo pipefail
 
 VERSION='' OUT='' CHART_BASE_URL='' SOURCE_TAG='' REGISTRY='ghcr.io/cloudgrange' CHANNEL='preview'
-UPGRADE_FROM='>=2609.0.0-0' COSIGN_KEY='' PUSH=0
+UPGRADE_FROM='>=2609.0.0-0' COSIGN_KEY='' PUSH=0 OFFLINE_BUNDLE=0 MODULES_CATALOG=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) VERSION=$2; shift 2 ;;
@@ -48,6 +69,8 @@ while [ $# -gt 0 ]; do
         --cosign-key) COSIGN_KEY=$2; shift 2 ;;
         --push) PUSH=1; shift ;;
         --already-pushed) PUSH=2; shift ;;
+        --offline-bundle) OFFLINE_BUNDLE=1; shift ;;
+        --modules-catalog) MODULES_CATALOG=$2; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -132,10 +155,66 @@ chart_sha=$(sha256sum "$CHART_TGZ" | cut -d' ' -f1)
 kube_range=$(sed -n 's/^kubeVersion:[[:space:]]*//p' "$WORK/cloudgrange/Chart.yaml" | tr -d '"')
 [ -n "$kube_range" ] || { echo "chart has no kubeVersion" >&2; exit 1; }
 
+# 5. images.txt (E7): every image this release can run, as the stamped chart renders it with the
+# first-party digests pinned, each resolved to a digest. "<repository> <tag> <digest>", repository
+# fully qualified (docker.io/library/... for Docker Hub short names), sorted.
+command -v crane >/dev/null || { echo "crane is required (release/pins.conf CRANE_VERSION) to resolve image digests" >&2; exit 1; }
+CHART_REGISTRY=$(awk '/^  image:/{s=1;next} s&&/^    registry:/{print $2; exit}' "$WORK/cloudgrange/values.yaml")
+[ -n "$CHART_REGISTRY" ] || { echo "cannot read global.image.registry from the chart" >&2; exit 1; }
+fq_repo() { # <ref> -> fully qualified repository, no tag or digest
+    local name=${1%%@*} first
+    [[ "${name##*/}" == *:* ]] && name=${name%:*}
+    first=${name%%/*}
+    if [[ "$name" != */* ]]; then echo "docker.io/library/$name"
+    elif [[ "$first" == *.* || "$first" == *:* || "$first" == localhost ]]; then echo "$name"
+    else echo "docker.io/$name"; fi
+}
+# Where to read an image from: first-party images from --registry (which may differ from the name
+# the chart renders, for example a staging registry), everything else from where the chart pins it.
+# Only this release's own images (the IMAGES map above); other images under the same registry, such
+# as the module package, are read from where they are pinned.
+first_party() { local r=$1 c; for c in "${IMAGES[@]}"; do [ "$r" = "$CHART_REGISTRY/$c" ] && return 0; done; return 1; }
+pull_repo() { local r=$1; if [ "$REGISTRY" != "$CHART_REGISTRY" ] && first_party "$r"; then echo "$REGISTRY/${r#"$CHART_REGISTRY/"}"; else echo "$r"; fi; }
+pin_sets=()
+while IFS=$'\t' read -r comp _image digest; do
+    case "$comp" in
+        cloudgrange-platform-updater) pin_sets+=(--set "platformUpdater.image.digest=$digest") ;;
+        *) pin_sets+=(--set "${comp#cloudgrange-}.image.digest=$digest") ;;
+    esac
+done < "$WORK/components.tsv"
+bash "$REPO_ROOT/scripts/release/Get-PlatformImages.sh" "$WORK/cloudgrange" "${pin_sets[@]}" > "$WORK/refs.txt"
+# E7: the module catalog snapshot (newest version of each module). Its images join images.txt, so
+# a BYO customer mirrors them too and an offline bundle carries them.
+if [ -n "$MODULES_CATALOG" ]; then
+    bash "$REPO_ROOT/scripts/release/Get-ModuleCatalogSnapshot.sh" "$MODULES_CATALOG" "$WORK/modules" >> "$WORK/refs.txt"
+    log "modules: $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["modules"]))' "$WORK/modules/catalog.json") module(s) from $MODULES_CATALOG"
+fi
+{
+    echo "# CloudGrange Platform $VERSION: every container image this release can run (AB#9171 E7)."
+    echo "# <repository> <tag> <digest>. Mirror each as <your registry>/<repository without its host>:<tag>"
+    echo "# (keep the digest), then install or upgrade with --set global.imageRegistry=<your registry>."
+    while read -r ref; do
+        [ -n "$ref" ] || continue
+        repo=$(fq_repo "$ref"); name=${ref%%@*}; tag=''
+        [[ "${name##*/}" == *:* ]] && tag=${name##*:}
+        [ -n "$tag" ] || { echo "image without a tag: $ref" >&2; exit 1; }
+        if [[ "$ref" == *@sha256:* ]]; then digest=${ref##*@}
+        elif [ "$PUSH" != 1 ] && [[ "$repo" == "$CHART_REGISTRY/"* ]]; then digest="sha256:$(printf '0%.0s' $(seq 64))"
+        else digest=$(crane digest "$(pull_repo "$repo"):$tag") || { echo "cannot resolve the digest of $repo:$tag" >&2; exit 1; }
+        fi
+        printf '%s %s %s\n' "$repo" "$tag" "$digest"
+    done < "$WORK/refs.txt" | sort -u
+} > "$OUT/images.txt"
+# One mirror path per repository: the in-cluster registry and global.imageRegistry drop the host.
+dupes=$(grep -v '^#' "$OUT/images.txt" | awk '{r=$1; sub(/^[^\/]*\//, "", r); print r, $1}' | sort -u | awk '{print $1}' | uniq -d)
+[ -z "$dupes" ] || { echo "two registries carry the same repository path; they would collide in a mirror: $dupes" >&2; exit 1; }
+images_sha=$(sha256sum "$OUT/images.txt" | cut -d' ' -f1)
+log "images.txt: $(grep -vc '^#' "$OUT/images.txt") images (sha256 $images_sha)"
+
 python3 - "$OUT/manifest.json" "$VERSION" "$CHANNEL" "$UPGRADE_FROM" "$kube_range" \
-    "${CHART_BASE_URL%/}/cloudgrange-$VERSION.tgz" "$chart_sha" "$PUSH" "$WORK/components.tsv" <<'PY'
+    "${CHART_BASE_URL%/}/cloudgrange-$VERSION.tgz" "$chart_sha" "$PUSH" "$WORK/components.tsv" "$images_sha" <<'PY'
 import json, sys, time
-out, version, channel, upgrade_from, kube_range, chart_url, chart_sha, push, tsv = sys.argv[1:10]
+out, version, channel, upgrade_from, kube_range, chart_url, chart_sha, push, tsv, images_sha = sys.argv[1:11]
 components = {}
 for line in open(tsv):
     name, image, digest = line.rstrip("\n").split("\t")
@@ -149,6 +228,8 @@ manifest = {
     "kubeVersion": kube_range,
     "chart": {"url": chart_url, "sha256": chart_sha},
     "components": components,
+    # AB#9171 (E7): pins images.txt, so the manifest signature covers every third-party image too.
+    "images": {"file": "images.txt", "sha256": images_sha},
 }
 if push not in ("1", "2"):
     manifest["dryRun"] = True
@@ -175,4 +256,22 @@ sys.exit("images not pinned by digest: %s" % ", ".join(bad) if bad else 0)
 PY
 manifest_sha=$(sha256sum "$OUT/manifest.json" | cut -d' ' -f1)
 printf '%s  manifest.json\n' "$manifest_sha" > "$OUT/manifest.json.sha256"
+
+# 7. the offline Platform bundle (E7).
+if [ "$OFFLINE_BUNDLE" = 1 ]; then
+    [ "$PUSH" != 0 ] || { echo "--offline-bundle needs --push or --already-pushed: a dry-run manifest cannot be applied" >&2; exit 2; }
+    B="$WORK/bundle"; mkdir -p "$B"
+    cp "$OUT/manifest.json" "$CHART_TGZ" "$OUT/images.txt" "$B/"
+    [ ! -f "$OUT/manifest.json.sig" ] || cp "$OUT/manifest.json.sig" "$B/"
+    [ -z "$MODULES_CATALOG" ] || cp -r "$WORK/modules" "$B/modules"
+    # First-party images come from --registry (possibly a staging registry), the rest from where they are pinned.
+    rewrite=()
+    if [ "$REGISTRY" != "$CHART_REGISTRY" ]; then
+        for c in "${IMAGES[@]}"; do rewrite+=(--rewrite "$CHART_REGISTRY/$c=$REGISTRY/$c"); done
+    fi
+    bash "$REPO_ROOT/scripts/release/Add-BundleImages.sh" "$OUT/images.txt" "$B" "${rewrite[@]}"
+    ZIP="$OUT/cloudgrange-platform-$VERSION.zip"
+    bash "$REPO_ROOT/scripts/release/Write-OfflineBundleZip.sh" "$B" "$ZIP"
+    log "offline Platform bundle: $ZIP ($(du -m "$ZIP" | cut -f1) MiB, sha256 $(cut -d' ' -f1 "$ZIP.sha256"))"
+fi
 log "wrote $OUT/manifest.json (sha256 $manifest_sha) and $CHART_TGZ (sha256 $chart_sha)$([ "$PUSH" != 0 ] || echo ' — DRY RUN, nothing pushed')"

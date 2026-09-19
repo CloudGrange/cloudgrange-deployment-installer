@@ -15,7 +15,7 @@ spec:
   securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 65534) | nindent 4 }}
   containers:
     - name: check
-      image: {{ .Values.observability.busybox.image }}
+      image: {{ include "cloudgrange.image" (dict "ref" .Values.observability.busybox.image "global" .Values.global) | quote }}
       securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 8 }}
       command:
         - sh

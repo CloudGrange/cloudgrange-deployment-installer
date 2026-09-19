@@ -30,3 +30,21 @@ spec:
     requests:
       storage: {{ .Values.persistence.updates.size }}
 {{- end }}
+{{- if .Values.platformBundles.enabled }}
+---
+# AB#9171 (E7): uploaded offline Platform bundles. The API writes it; the Platform updater Job reads
+# it (mounted read-only at /bundles). See platformBundles in values.yaml.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-platform-bundles
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+spec:
+  accessModes: [{{ .Values.persistence.accessMode }}]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.platformBundles.size }}
+{{- end }}

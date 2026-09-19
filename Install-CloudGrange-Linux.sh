@@ -39,6 +39,9 @@ set -euo pipefail
 HOSTNAME_ARG=""
 VERSION=""
 PREFLIGHT_ONLY=false
+# AB#9171 (E7): --offline -> Install-CloudGrangeK3s.sh --offline (air-gapped host: in-cluster registry
+# for offline Platform updates, K3s mirroring the public registries to it).
+OFFLINE_ARGS=()
 COMPOSE_DIR="/opt/cloudgrange"
 # K3s/Helm is THE deployment model for this product — that was the whole point of the
 # platform restructure. AB#9189 retired the Compose bundle; --engine compose remains
@@ -48,7 +51,7 @@ ENGINE="k3s"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange] [--engine compose|k3s] [--preflight-only]
+    echo "Usage: sudo $0 --hostname <fqdn-or-ip> [--version X.Y.Z] [--compose-dir /opt/cloudgrange] [--engine compose|k3s] [--offline] [--preflight-only]
        sudo $0 --uninstall [--yes] [--remove-docker]" >&2
     exit 2
 }
@@ -63,6 +66,7 @@ while [ $# -gt 0 ]; do
         # AB#9171: remove this install (K3s or legacy Compose) so the host is clean for a reinstall.
         # Delegates to the bundled Uninstall-CloudGrange-Linux.sh; remaining args go to it.
         --uninstall)   shift; exec "${BASH:-/bin/bash}" "$SCRIPT_DIR/Uninstall-CloudGrange-Linux.sh" "$@" ;;
+        --offline)     OFFLINE_ARGS=(--offline); shift ;;
         -h|--help)     usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
@@ -171,9 +175,9 @@ if [ "$ENGINE" = "k3s" ]; then
     [ "$PREFLIGHT_ONLY" = true ] && { echo "Preflight passed."; exit 0; }
     # AB#9171 (C1): no --version means the release the chart pins, not a wrapper-chosen `latest`.
     if [ -n "$VERSION" ]; then
-        exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG" --version "$VERSION"
+        exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG" --version "$VERSION" "${OFFLINE_ARGS[@]}"
     fi
-    exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG"
+    exec "$K3S_INSTALLER" --hostname "$HOSTNAME_ARG" "${OFFLINE_ARGS[@]}"
 fi
 [ "$VERSION" != "" ] || VERSION=latest   # --engine compose (legacy) keeps its old default tag
 

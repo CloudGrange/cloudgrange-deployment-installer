@@ -19,13 +19,16 @@ ARG KUBECTL_VERSION
 ARG KUBECTL_LINUX_AMD64_SHA256
 ARG COSIGN_VERSION
 ARG COSIGN_LINUX_AMD64_SHA256
+ARG CRANE_VERSION
+ARG CRANE_LINUX_AMD64_SHA256
 
-# bash/jq/curl for the entrypoint; coreutils for `date -d`/`sort -V`. These come from the Alpine
-# release the pinned base image ships; the base digest fixes which Alpine that is.
-RUN apk add --no-cache bash curl jq coreutils ca-certificates
+# bash/jq/curl for the entrypoint; coreutils for `date -d`/`sort -V`; unzip (Info-ZIP, zip64) for
+# offline Platform bundles (AB#9171 E7). These come from the Alpine release the pinned base image
+# ships; the base digest fixes which Alpine that is.
+RUN apk add --no-cache bash curl jq coreutils ca-certificates unzip
 
 RUN set -eux; \
-    for v in HELM_VERSION HELM_LINUX_AMD64_SHA256 KUBECTL_VERSION KUBECTL_LINUX_AMD64_SHA256 COSIGN_VERSION COSIGN_LINUX_AMD64_SHA256; do \
+    for v in HELM_VERSION HELM_LINUX_AMD64_SHA256 KUBECTL_VERSION KUBECTL_LINUX_AMD64_SHA256 COSIGN_VERSION COSIGN_LINUX_AMD64_SHA256 CRANE_VERSION CRANE_LINUX_AMD64_SHA256; do \
         eval "val=\${$v:-}"; [ -n "$val" ] || { echo "build-arg $v is required (use images/platform-updater/build.sh)" >&2; exit 1; }; \
     done; \
     cd /tmp; \
@@ -38,8 +41,11 @@ RUN set -eux; \
     curl -fsSLo cosign "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"; \
     echo "${COSIGN_LINUX_AMD64_SHA256}  cosign" | sha256sum -c -; \
     install -m 0755 cosign /usr/local/bin/cosign; \
+    curl -fsSLo crane.tgz "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"; \
+    echo "${CRANE_LINUX_AMD64_SHA256}  crane.tgz" | sha256sum -c -; \
+    tar -xzf crane.tgz crane; install -m 0755 crane /usr/local/bin/crane; \
     rm -rf /tmp/*; \
-    helm version --short; kubectl version --client; cosign version; pg_dump --version
+    helm version --short; kubectl version --client; cosign version; crane version; pg_dump --version
 
 COPY entrypoint.sh /usr/local/bin/cloudgrange-platform-updater
 RUN chmod 0755 /usr/local/bin/cloudgrange-platform-updater \

@@ -123,12 +123,17 @@ if [ "$IMAGES" = registry ]; then
     # Derive the image list from the rendered chart -- never a hand-maintained list, which
     # would silently drift the moment a subchart changes an image. cert-manager is rendered
     # separately because Install-CloudGrangeK3s.sh installs it as its own release first.
+    # AB#9171 (E7): rendered in offline mode (airgap.registry.enabled), so the in-cluster registry's
+    # image is bundled too, and the Platform updater's image (set in a ConfigMap, not an image: line,
+    # because the API creates its Job) is added explicitly — an air-gapped install could otherwise
+    # never start its first Platform update.
     helm template cloudgrange "$B/charts/cloudgrange" -f "$B/charts/cloudgrange/values-single-node.yaml" \
-        > "$WORK/rendered.yaml"
+        --set airgap.registry.enabled=true > "$WORK/rendered.yaml"
     helm template cert-manager "$B/charts/vendor/cert-manager-v1.21.2.tgz" --set crds.enabled=true \
         >> "$WORK/rendered.yaml"
-    grep -hoE '^\s+image:\s*"?[^"'"'"' ]+' "$WORK/rendered.yaml" \
-        | sed -E 's/^\s+image:\s*"?//' | sort -u > "$WORK/images.txt"
+    { grep -hoE '^\s+image:\s*"?[^"'"'"' ]+' "$WORK/rendered.yaml" | sed -E 's/^\s+image:\s*"?//'
+      sed -n 's/^[[:space:]]*CLOUDGRANGE_PLATFORM_UPDATER_IMAGE:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$WORK/rendered.yaml"
+    } | sort -u > "$WORK/images.txt"
     [ -s "$WORK/images.txt" ] || { echo "no images found in rendered chart" >&2; exit 1; }
     log "$(wc -l < "$WORK/images.txt") images to bundle"
     # AB#9171: the image payload is fetched and exported by the PINNED K3s's own containerd, in a
@@ -147,7 +152,16 @@ if [ "$IMAGES" = registry ]; then
     CTR_NAME="cg-release-images-$$-$RANDOM"
     docker image inspect "$K3S_IMAGE" >/dev/null 2>&1 || docker pull -q "$K3S_IMAGE" >/dev/null
     trap 'docker rm -f "$CTR_NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
-    docker run -d --name "$CTR_NAME" --privileged --entrypoint /bin/containerd "$K3S_IMAGE" \
+    # CLOUDGRANGE_RELEASE_HOSTS_DIR (optional, test and staging builds only): a containerd hosts
+    # directory (<registry>/hosts.toml) the fetch resolves through, e.g. to take first-party images
+    # from a staging registry before they are published. Digests pin the content either way.
+    hosts_mount=() hosts_arg=()
+    if [ -n "${CLOUDGRANGE_RELEASE_HOSTS_DIR:-}" ]; then
+        hosts_mount=(-v "$(cd "$CLOUDGRANGE_RELEASE_HOSTS_DIR" && pwd):/etc/cg-release-hosts:ro")
+        hosts_arg=(--hosts-dir /etc/cg-release-hosts)
+        log "resolving images through the hosts directory $CLOUDGRANGE_RELEASE_HOSTS_DIR"
+    fi
+    docker run -d --name "$CTR_NAME" --privileged "${hosts_mount[@]}" --entrypoint /bin/containerd "$K3S_IMAGE" \
         --address "$CTR_SOCK" --root /var/lib/rancher/k3s/agent/containerd --state /run/k3s/containerd >/dev/null
     kctr() { docker exec "$CTR_NAME" ctr --address "$CTR_SOCK" -n k8s.io "$@"; }
     for _ in $(seq 1 60); do kctr version >/dev/null 2>&1 && break; sleep 2; done
@@ -166,7 +180,7 @@ for ref in (l.strip() for l in open(sys.argv[2])):
 PY
     : > "$WORK/export-names.txt"
     while read -r ref names; do
-        kctr content fetch --platform linux/amd64 "$ref" >/dev/null
+        kctr content fetch "${hosts_arg[@]}" --platform linux/amd64 "$ref" >/dev/null
         # shellcheck disable=SC2086 # $names is a space-separated list by construction
         [ "$names" = "$ref" ] || kctr images tag --force "$ref" $names >/dev/null
         printf '%s\n' $names >> "$WORK/export-names.txt"

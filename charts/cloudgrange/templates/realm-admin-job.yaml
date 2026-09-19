@@ -38,7 +38,7 @@ spec:
       securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 10002 "gid" 0 "fsGroup" 0) | nindent 8 }}
       containers:
         - name: realm-admin
-          image: "{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          image: {{ include "cloudgrange.image" (dict "ref" (printf "%s:%s" .Values.keycloak.image.repository (toString .Values.keycloak.image.tag)) "global" .Values.global) | quote }}
           securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
           env:
             # Secrets reach the container as environment variables and are never placed on a

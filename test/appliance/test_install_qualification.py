@@ -69,6 +69,7 @@ class Harness:
                     get)
                       case "$3" in
                         ingress) exit 0 ;;
+                        nodes) echo "cg-node Ready control-plane 1m v1.36.4+k3s1"; exit 0 ;;
                         pods)
                           # one healthy pod and one completed Job: the shape do_ready accepts
                           if [[ "$*" == *"--no-headers"* ]]; then
@@ -98,13 +99,14 @@ class Harness:
         # AB#9171: the prereqs stage installs the Foundation updater and turns off automatic OS
         # updates; keep both inside the sandbox instead of the machine running the tests.
         for var, sub in (("CLOUDGRANGE_ETC_DIR", "etc-cloudgrange"), ("CLOUDGRANGE_APT_CONF_DIR", "apt.conf.d"),
-                         ("CLOUDGRANGE_SBIN_DIR", "sbin"), ("CLOUDGRANGE_SYSTEMD_DIR", "systemd")):
+                         ("CLOUDGRANGE_SBIN_DIR", "sbin"), ("CLOUDGRANGE_SYSTEMD_DIR", "systemd"),
+                         ("CLOUDGRANGE_K3S_CONFIG_DIR", "etc-rancher-k3s")):
             env[var] = os.path.join(self.tmp, sub)
             os.makedirs(env[var], exist_ok=True)
         return env
 
-    def run(self, fail_on=None):
-        return subprocess.run(["bash", INSTALLER, "--hostname", "cg.test"],
+    def run(self, fail_on=None, extra_args=()):
+        return subprocess.run(["bash", INSTALLER, "--hostname", "cg.test", *extra_args],
                               capture_output=True, text=True, env=self.env(fail_on), timeout=300)
 
     def stages(self):
@@ -217,6 +219,34 @@ class ManagedFoundationTests(unittest.TestCase):
         for unit in ("unattended-upgrades.service", "apt-daily-upgrade.timer"):
             self.assertIn("systemctl disable --now %s" % unit, calls)
             self.assertIn("systemctl mask %s" % unit, calls)
+
+    # AB#9171 (E7): offline mode is Foundation config for air-gapped Platform updates.
+    def _registries(self):
+        path = os.path.join(self.tmp, "etc-rancher-k3s", "registries.yaml")
+        return open(path).read() if os.path.exists(path) else None
+
+    def test_offline_mode_mirrors_the_public_registries_to_the_in_cluster_registry(self):
+        proc = self.h.run(extra_args=["--offline"])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        text = self._registries()
+        self.assertIsNotNone(text, "offline mode must write K3s registries.yaml")
+        for reg in ("ghcr.io", "docker.io", "quay.io", "registry.k8s.io"):
+            self.assertRegex(text, r"(?m)^  %s:\n    endpoint:\n      - \"http://127\.0\.0\.1:30500\"$" % re.escape(reg))
+        calls = open(self.h.log).read()
+        self.assertIn("--set airgap.registry.enabled=true", calls)
+        self.assertIn("--set airgap.registry.nodePort=30500", calls)
+
+    def test_online_mode_leaves_registries_and_the_in_cluster_registry_alone(self):
+        proc = self.h.run()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIsNone(self._registries())
+        self.assertNotIn("airgap.registry", open(self.h.log).read())
+
+    def test_offline_rerun_restarts_k3s_only_when_registries_yaml_changes(self):
+        for _ in range(2):
+            proc = self.h.run(extra_args=["--offline"])
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(open(self.h.log).read().count("systemctl restart k3s"), 1)
 
     def test_a_rerun_keeps_a_foundation_version_an_update_already_advanced(self):
         path = os.path.join(self.tmp, "etc-cloudgrange", "foundation-version")
