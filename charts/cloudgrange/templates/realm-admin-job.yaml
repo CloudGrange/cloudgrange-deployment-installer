@@ -97,6 +97,14 @@ spec:
               CLIENT
               fi
 
+              # AB#9171: the API provisions the setup wizard's administrator in this realm (so the CLI's
+              # device-code login and the portal's SSO accept the credentials the admin chose). It does
+              # that as its own confidential client, whose service account needs user management here.
+              # Idempotent, and BEFORE the admin-exists early exit so an upgraded platform gets it too.
+              kc add-roles -r "$REALM" --uusername service-account-cloudgrange-api --cclientid realm-management \
+                --rolename manage-users --rolename view-users --rolename query-users --rolename view-realm
+              echo "[realm-admin] service-account-cloudgrange-api may manage realm users"
+
               # AB#9171: Keycloak 26's user profile requires first and last name — without them the
               # administrator's first sign-in (portal or `cg auth login`) stops at an "Update Account
               # Information" form. Provision them; backfill an existing admin that lacks them.
