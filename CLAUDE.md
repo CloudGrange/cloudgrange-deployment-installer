@@ -10,6 +10,7 @@
 
 ## Claude Code notes
 
+- **Before merging, run `sudo -E scripts/test-all.sh` and require exit 0.** All tests must pass; there is no "pre-existing failure" exemption (see AGENTS.md → Merge gate).
 - Subagents, skills, and hooks for this repo live in `.claude/`. The repo-level MCP config is `.mcp.json`.
 - Use **plan mode** before broad, repo-wide changes.
 - Follow the `.ai/` session protocol: read `.ai/state/*` at session start, and update `.ai/state/HANDOFF.md` before ending a session.

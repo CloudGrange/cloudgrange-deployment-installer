@@ -354,8 +354,8 @@ if ($kvpItems['CloudGrange.State'] -eq 'setup-pending') {
     Write-Host "  These are shown once. The appliance removes the token, the temporary password and the SSH" -ForegroundColor Yellow
     Write-Host "  private key from KVP and its console banner as soon as setup completes." -ForegroundColor Yellow
     if ($PassThru) {
-        if ($kvpItems['CloudGrange.SetupToken']) { $result.SetupToken = ConvertTo-SecureString -String $kvpItems['CloudGrange.SetupToken'] -AsPlainText -Force }
-        if ($kvpItems['CloudGrange.RealmAdminPassword']) { $result.RealmAdminPassword = ConvertTo-SecureString -String $kvpItems['CloudGrange.RealmAdminPassword'] -AsPlainText -Force }
+        if ($kvpItems['CloudGrange.SetupToken']) { $result.SetupToken = ConvertTo-CloudGrangeSecureString -Text $kvpItems['CloudGrange.SetupToken'] }
+        if ($kvpItems['CloudGrange.RealmAdminPassword']) { $result.RealmAdminPassword = ConvertTo-CloudGrangeSecureString -Text $kvpItems['CloudGrange.RealmAdminPassword'] }
     }
 } elseif ($kvpItems['CloudGrange.State'] -eq 'setup-stale') {
     Write-Host "  Setup was not completed in time, so the appliance stopped publishing its one-use credentials" -ForegroundColor Yellow

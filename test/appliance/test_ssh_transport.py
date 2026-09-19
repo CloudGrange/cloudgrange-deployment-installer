@@ -6,6 +6,7 @@
 # -o ServerAliveCountMax=4 and an overall -TimeoutSeconds. The committed scripts pass; each test plants one
 # regression in a temporary copy of the repository and asserts the gate fails.
 #   python3 -m unittest discover -s test/appliance -p 'test_ssh_transport.py'
+import re
 import os
 import shutil
 import subprocess
@@ -139,8 +140,18 @@ class SshTransportGateTests(unittest.TestCase):
         self.assert_fails("Invoke-CloudGrangeSsh does not refuse a call without them")
 
     def test_helper_that_does_not_stop_a_timed_out_process_is_caught(self):
-        self.replace(HELPER, ".Kill($true)", ".Refresh()")
-        self.assert_fails("Invoke-CloudGrangeBoundedProcess does not stop the process tree on timeout")
+        # AB#9171: both bounded-process paths must stop the tree — the pipe path and the
+        # capture-to-file path that every captured ssh call takes. Each is planted on its own,
+        # because a plant in one must not be excused by the other still being correct.
+        original = self.read(HELPER)
+        for function in ("Invoke-CloudGrangeBoundedProcess", "Invoke-CloudGrangeBoundedProcessToFile"):
+            with self.subTest(function=function):
+                start = re.search(r"(?mi)^function\s+%s\s*\{" % re.escape(function), original)
+                self.assertIsNotNone(start, "plant anchor missing: function %s" % function)
+                at = original.index(".Kill($true)", start.end())
+                self.write(HELPER, original[:at] + ".Refresh()" + original[at + len(".Kill($true)"):])
+                self.assert_fails("%s does not stop the process tree on timeout" % function)
+        self.write(HELPER, original)
 
     def test_optional_timeout_is_caught(self):
         self.replace(HELPER, "[Parameter(Mandatory)][ValidateRange(1, 86400)][int]$TimeoutSeconds,\n        [byte[]]$StandardInput,\n        [switch]$CaptureOutput\n    )\n    $required",
