@@ -326,10 +326,34 @@ UNIT
     ip -4 route show default | grep -q . || { echo "could not add a default route; K3s cannot start without one" >&2; exit 1; }
 }
 
+# AB#9171: a VHDX appliance boots with a NEW hostname (generalize resets it), so K3s registers a second
+# node while the build VM's node object stays behind NotReady, holding Terminating pods and a DaemonSet
+# pod that can never schedule. The chart's `helm --wait` then timed out on first boot and skipped the
+# post-install hooks. Wait for THIS node to be Ready, then delete other nodes that are NotReady (a healthy
+# node of a real multi-node cluster is never touched).
+remove_stale_nodes() {
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    local me deadline name ready
+    me=$(hostname | tr '[:upper:]' '[:lower:]')
+    deadline=$(($(date +%s) + 180))
+    until k3s kubectl get node "$me" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q True; do
+        [ "$(date +%s)" -lt "$deadline" ] || { log "WARNING: node $me not Ready after 180s; leaving other nodes alone"; return 0; }
+        sleep 3
+    done
+    k3s kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status' 2>/dev/null \
+        | while read -r name ready; do
+            if [ "$name" != "$me" ] && [ "$ready" != True ]; then
+                log "removing stale node $name (NotReady; this host is now $me)"
+                k3s kubectl delete node "$name" --wait=false >/dev/null 2>&1 || true
+            fi
+        done
+}
+
 do_k3s_installed() {
     ensure_default_route
     if command -v k3s >/dev/null 2>&1; then
         log "k3s already present on this host"
+        remove_stale_nodes
         import_bundled_service_images
         return 0
     fi
@@ -364,6 +388,7 @@ do_k3s_installed() {
         [ "$(date +%s)" -lt "$deadline" ] || { echo "k3s node never reached Ready" >&2; exit 1; }
         sleep 2
     done
+    remove_stale_nodes
     import_bundled_service_images
 }
 
@@ -478,11 +503,21 @@ do_chart_installed() {
     [ -z "$VERSION_VALUE" ] || tag_args=(--set "global.image.tag=$VERSION_VALUE")
     # AB#9171 (E7): offline mode runs the in-cluster registry offline Platform updates load.
     [ "$OFFLINE" != 1 ] || offline_args=(--set airgap.registry.enabled=true --set "airgap.registry.nodePort=$AIRGAP_REGISTRY_NODE_PORT")
-    helm upgrade --install cloudgrange "$CHARTS_DIR/cloudgrange" \
-        -f "$CHARTS_DIR/cloudgrange/values-single-node.yaml" \
-        --set "global.hostname=$HOSTNAME_VALUE" \
-        "${tag_args[@]}" "${offline_args[@]}" \
-        --timeout 5m --wait || log "WARNING: 'helm upgrade --install --wait' did not succeed — continuing only far enough for the checks below to report exactly what is wrong; do_ready fails the install if any pod is not Ready"
+    # AB#9171: one retry when the first attempt does not end "deployed". A timed-out --wait leaves the
+    # release "failed" and SKIPS the post-install hooks (the Traefik default-certificate store, the realm
+    # administrator) even when every pod becomes Ready a minute later, as on a VHDX appliance first boot.
+    local attempt
+    for attempt in 1 2; do
+        if helm upgrade --install cloudgrange "$CHARTS_DIR/cloudgrange" \
+            -f "$CHARTS_DIR/cloudgrange/values-single-node.yaml" \
+            --set "global.hostname=$HOSTNAME_VALUE" \
+            "${tag_args[@]}" "${offline_args[@]}" \
+            --timeout 5m --wait; then
+            break
+        fi
+        if [ "$attempt" = 1 ]; then log "helm upgrade --install did not complete; retrying once"; continue; fi
+        log "WARNING: 'helm upgrade --install --wait' did not succeed — continuing only far enough for the checks below to report exactly what is wrong; do_ready fails the install if any pod is not Ready"
+    done
     helm status cloudgrange >/dev/null 2>&1 || {
         echo "helm upgrade --install failed completely (no release exists) — see the error above" >&2
         exit 1
