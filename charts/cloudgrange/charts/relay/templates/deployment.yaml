@@ -6,6 +6,11 @@ metadata:
     app.kubernetes.io/name: cloudgrange-relay
 spec:
   replicas: {{ .Values.replicaCount }}
+  # AB#9171: a ReadWriteOnce PVC (the relay identity). RollingUpdate put the new pod on another node while
+  # the old one held the disk (Multi-Attach), and a live in-app update on 2-node AKS timed out. Stop first.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app.kubernetes.io/name: cloudgrange-relay
