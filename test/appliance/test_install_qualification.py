@@ -69,7 +69,14 @@ class Harness:
                     get)
                       case "$3" in
                         ingress) exit 0 ;;
-                        nodes) echo "cg-node Ready control-plane 1m v1.36.4+k3s1"; exit 0 ;;
+                        # remove_stale_nodes waits for THIS node to be Ready; without an answer every run
+                        # in this suite sat out its 180s timeout.
+                        node) echo True; exit 0 ;;
+                        lease) exit 0 ;;
+                        nodes)
+                          if [[ "$*" == *custom-columns* ]]; then echo "$(hostname | tr 'A-Z' 'a-z') True"
+                          else echo "cg-node Ready control-plane 1m v1.36.4+k3s1"; fi
+                          exit 0 ;;
                         pods)
                           # one healthy pod and one completed Job: the shape do_ready accepts
                           if [[ "$*" == *"--no-headers"* ]]; then
@@ -216,7 +223,8 @@ class ManagedFoundationTests(unittest.TestCase):
         with open(j("etc-cloudgrange", "foundation-channel-url")) as f:
             self.assertRegex(f.read().strip(), r"^https://\S+\.json$", "foundation-check needs a channel to report availableVersion")
         calls = open(self.h.log).read()
-        self.assertIn("systemctl enable --now cloudgrange-updater-k3s.service", calls)
+        self.assertIn("systemctl enable cloudgrange-updater-k3s.service", calls)
+        self.assertIn("systemctl restart cloudgrange-updater-k3s.service", calls)  # #104: a re-run runs the new script
         for unit in ("unattended-upgrades.service", "apt-daily-upgrade.timer"):
             self.assertIn("systemctl disable --now %s" % unit, calls)
             self.assertIn("systemctl mask %s" % unit, calls)
@@ -285,6 +293,70 @@ class ManagedFoundationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         with open(path) as f:
             self.assertEqual(f.read().strip(), "F2610.3.1")
+
+
+class ApplianceFirstBootStaleNodeTests(unittest.TestCase):
+    """AB#9171: an appliance boots under a new hostname; the build VM's node object must be deleted.
+
+    Seen live on the 2609.0.0-preview.22 appliance: at first boot the old node still read Ready=True (the
+    node controller only marks it Unknown after its grace period), so it was kept, first boot failed and
+    every later Platform update failed its health gate on that node's DaemonSet pod."""
+
+    OLD = "2026-09-19T21:09:00.000000Z"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.h = Harness(self.tmp)
+
+    def _stub_cluster(self, other_ready, other_lease):
+        with open(os.path.join(self.h.bin, "hostname"), "w", newline="\n") as f:
+            f.write("#!/bin/bash\necho cg-new\n")
+        k3s = textwrap.dedent(
+            """\
+            #!/bin/bash
+            echo "k3s $*" >> "$CG_CALL_LOG"
+            [ "$1" = kubectl ] || exit 0
+            case "$2 $3" in
+              "get node") echo True ;;
+              "get nodes")
+                if [[ "$*" == *custom-columns* ]]; then echo "cg-new True"; echo "cloudgrange-k3s %s"
+                else echo "cg-new Ready control-plane 1m v1.36.4+k3s1"; fi ;;
+              "get lease")
+                case "$6" in cloudgrange-k3s) printf '%%s' "%s" ;; *) date -u +%%Y-%%m-%%dT%%H:%%M:%%S.000000Z ;; esac ;;
+              "get pods")
+                if [[ "$*" == *"--no-headers"* ]]; then echo "cloudgrange-api-1 1/1 Running 0 1m"; fi ;;
+            esac
+            exit 0
+            """ % (other_ready, other_lease))
+        path = os.path.join(self.h.bin, "k3s")
+        with open(path, "w", newline="\n") as f:
+            f.write(k3s)
+        for p in (path, os.path.join(self.h.bin, "hostname")):
+            os.chmod(p, 0o755)
+
+    def _deleted(self):
+        return [l for l in open(self.h.log).read().splitlines() if l.startswith("k3s kubectl delete node")]
+
+    def test_the_build_node_is_removed_while_it_still_reads_ready(self):
+        self._stub_cluster("True", self.OLD)
+        proc = self.h.run()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._deleted(), ["k3s kubectl delete node cloudgrange-k3s --wait=false"], proc.stdout)
+
+    def test_a_not_ready_node_is_removed(self):
+        self._stub_cluster("Unknown", "")
+        self.assertEqual(self.h.run().returncode, 0)
+        self.assertEqual(self._deleted(), ["k3s kubectl delete node cloudgrange-k3s --wait=false"])
+
+    def test_a_live_node_of_a_multi_node_cluster_is_never_touched(self):
+        self._stub_cluster("True", "")  # empty lease stub -> the "*" branch answers with a fresh renewTime
+        with open(os.path.join(self.h.bin, "k3s")) as f:
+            body = f.read().replace('cloudgrange-k3s) printf \'%s\' ""', 'nobody) :')
+        with open(os.path.join(self.h.bin, "k3s"), "w", newline="\n") as f:
+            f.write(body)
+        self.assertEqual(self.h.run().returncode, 0)
+        self.assertEqual(self._deleted(), [])
 
 
 class UninstallRetentionTests(unittest.TestCase):
