@@ -113,11 +113,18 @@
       "clientAuthenticatorType": "client-secret",
       "secret": "${KEYCLOAK_API_CLIENT_SECRET}",
       "serviceAccountsEnabled": true,
-      "standardFlowEnabled": false,
+      "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "redirectUris": [],
-      "webOrigins": [],
+      "redirectUris": [
+        "https://${CLOUDGRANGE_HOSTNAME}/api/v1/auth/callback"
+      ],
+      "webOrigins": [
+        "https://${CLOUDGRANGE_HOSTNAME}"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://${CLOUDGRANGE_HOSTNAME}/*"
+      },
       "protocol": "openid-connect"
     }
   ]

@@ -55,6 +55,8 @@ spec:
                 secretKeyRef: { name: {{ .Release.Name }}-secrets, key: realm-admin-password }
             - name: KC_SERVER
               value: "http://{{ .Release.Name }}-keycloak:8080"
+            - name: CG_HOSTNAME
+              value: {{ .Values.global.hostname | quote }}
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -104,6 +106,20 @@ spec:
               kc add-roles -r "$REALM" --uusername service-account-cloudgrange-api --cclientid realm-management \
                 --rolename manage-users --rolename view-users --rolename query-users --rolename view-realm
               echo "[realm-admin] service-account-cloudgrange-api may manage realm users"
+
+              # AB#9171: the portal's "Sign in with your organization" runs the OIDC code flow as the API's
+              # confidential client, returning to /api/v1/auth/callback. That client had the standard
+              # flow disabled and no redirect URIs, so every SSO sign-in failed (Keycloak: invalid
+              # redirect_uri; the API answered 500). The realm import fixes fresh installs; this fixes
+              # existing ones, idempotently.
+              API_CLIENT=$(kc get clients -r "$REALM" -q clientId=cloudgrange-api --fields id --format csv --noquotes | head -n 1)
+              if [ -n "$API_CLIENT" ]; then
+                kc update "clients/$API_CLIENT" -r "$REALM" -s standardFlowEnabled=true \
+                  -s "redirectUris=[\"https://$CG_HOSTNAME/api/v1/auth/callback\"]" \
+                  -s "webOrigins=[\"https://$CG_HOSTNAME\"]" \
+                  -s "attributes.\"post.logout.redirect.uris\"=https://$CG_HOSTNAME/*"
+                echo "[realm-admin] cloudgrange-api: code flow to https://$CG_HOSTNAME/api/v1/auth/callback"
+              fi
 
               # AB#9171: Keycloak 26's user profile requires first and last name — without them the
               # administrator's first sign-in (portal or `cg auth login`) stops at an "Update Account
