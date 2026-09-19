@@ -22,6 +22,12 @@ param(
     # replaces an existing VM of this name, and the VHDX path defaults to <name>.vhdx.
     [ValidatePattern('^$|^[A-Za-z0-9][A-Za-z0-9-]{0,62}$')]
     [string]$VmName = '',
+    # AB#9171: the DNS name or IP address users browse to, when that is not the VM IP: for example the
+    # Windows host's own address, which forwards 443 and 8443 to the VM. It becomes the certificate
+    # SAN, the sign-in (SSO) host and the CLI server, so it must be the address clients really use.
+    # Empty = -VmIp (reachable from this host only).
+    [ValidatePattern('^$|^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$')]
+    [string]$Hostname = '',
     [string]$VhdxPath = 'C:\ProgramData\CloudGrange\cloudgrange-docker.vhdx',
     # AB#1585 — Proxy support. Format: http://host:port or http://user:pass@host:port
     # If omitted, reads $env:HTTPS_PROXY then $env:HTTP_PROXY.
@@ -295,6 +301,7 @@ function Invoke-CloudGrangeInstall {
         Write-Progress-Step "Deploying CloudGrange via K3s/Helm"
         . "$PSScriptRoot\scripts\Deploy-K3sHelm.ps1"
         $k3sArgs = @{ VmName = $effectiveVmName; VmIp = $VmIp; Version = $Version; UseWsl2 = $useWsl2 }
+        if ($Hostname) { $k3sArgs['Hostname'] = $Hostname }
         if ($Mode -eq 'Bundled') {
             # AB#9171: the airgap/ directory of an extracted Install-CloudGrange-K3s-Bundled.zip.
             $bundleRoot = if (-not [string]::IsNullOrEmpty($BundlePath)) { $BundlePath } else { $PSScriptRoot }
@@ -357,7 +364,7 @@ function Invoke-CloudGrangeInstall {
     # has no host port; /health/ and /api/ reach it through edge nginx -> portal proxy -> API.
     Write-Progress-Step "Waiting for CloudGrange API to become healthy"
     $apiHealthBase = "https://${VmIp}"
-    $portalBase    = "https://$VmIp"
+    $portalBase    = "https://$(if ($Hostname) { $Hostname } else { $VmIp })"
     $healthOk = Wait-ForHttpOk -Url "$apiHealthBase/health/ready" -TimeoutSeconds 600
     if (-not $healthOk) {
         # CG-INST-ERR-030: API did not become healthy within 10 minutes

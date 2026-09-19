@@ -21,7 +21,10 @@ function Deploy-K3sHelm {
         [string]$SshKeyPath = '',
         # AB#9171: the airgap/ directory of an extracted Install-CloudGrange-K3s-Bundled.zip (K3s binary,
         # K3s airgap images, every chart image, pinned Helm). When set, the VM installs with no registry.
-        [string]$AirgapPath = ''
+        [string]$AirgapPath = '',
+        # AB#9171: the name or address users browse to (certificate SAN, SSO redirects, CLI server).
+        # Empty = the VM IP.
+        [string]$Hostname = ''
     )
 
     if ($UseWsl2 -or [string]::IsNullOrEmpty($SshKeyPath)) {
@@ -82,7 +85,7 @@ function Deploy-K3sHelm {
     # Install-CloudGrangeK3s.sh's own $(dirname .../..)/charts resolution.
     # AB#9171 (C1): --version only when the operator chose one; otherwise the chart's own pinned tag.
     $versionArg = if ([string]::IsNullOrEmpty($Version)) { '' } else { " --version $Version" }
-    $remoteCmd = "chmod +x $uploadDir/scripts/*.sh && sudo bash $uploadDir/scripts/Install-CloudGrangeK3s.sh --hostname $VmIp$versionArg"
+    $remoteCmd = "chmod +x $uploadDir/scripts/*.sh && sudo bash $uploadDir/scripts/Install-CloudGrangeK3s.sh --hostname $(if ($Hostname) { $Hostname } else { $VmIp })$versionArg"
     Invoke-CloudGrangeSsh -ArgumentList ($sshOpts + @($sshTarget, $remoteCmd)) -TimeoutSeconds 1800
     if ($LASTEXITCODE -ne 0) {
         throw "CG-K3S-ERR-002: Install-CloudGrangeK3s.sh exited $LASTEXITCODE on the VM. SSH in to inspect: ssh -i $SshKeyPath $sshTarget"
