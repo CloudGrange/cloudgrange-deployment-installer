@@ -11,6 +11,8 @@ global:
     className: traefik
     annotations:
       traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # AB#9171: installs are reached by IP (no SNI); serve the platform certificate, not Traefik's own.
+    traefikDefaultCertificate: true
   deployment:
     profile: single-node
 api:

@@ -34,6 +34,10 @@ global:
     # and its websecure annotation are set by values-single-node.yaml / values-multi-node.yaml.
     className: ""
     annotations: {}
+    # AB#9171: make the platform certificate Traefik's default certificate (TLSStore "default"), so a
+    # client that connects by IP address (no SNI) is served it. Only for a cluster our wrappers own
+    # (values-single-node.yaml sets it); rendered only when the Traefik TLSStore CRD exists.
+    traefikDefaultCertificate: false
     tls:
       # AB#9171: the TLS Secret the Ingress serves. Empty = "<release>-tls", the Secret the chart's
       # cert-manager Certificate writes (certManager.installOperator). Set it to use a Secret you
