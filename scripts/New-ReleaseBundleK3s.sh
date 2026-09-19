@@ -57,6 +57,7 @@ mkdir -p "$B/scripts" "$B/charts"
 
 log "installer + charts from $SOURCE"
 cp "$SOURCE/Install-CloudGrange-Linux.sh" "$B/Install-CloudGrange-Linux.sh"
+cp "$SOURCE/Uninstall-CloudGrange-Linux.sh" "$B/Uninstall-CloudGrange-Linux.sh"
 cp "$SOURCE/scripts/Install-CloudGrangeK3s.sh" "$SOURCE/scripts/New-ArtifactManifest.sh" "$B/scripts/"
 # AB#9189 — the in-app updater must ship IN the bundle: Install-CloudGrangeK3s.sh installs it from
 # here, and without it a K3s install has no update path short of a reinstall.
@@ -219,7 +220,7 @@ mv "$WORK/SHA256SUMS" "$B/SHA256SUMS"
 
 log "normalize modes and timestamps (SOURCE_DATE_EPOCH=$EPOCH)"
 chmod -R u=rwX,go=rX "$B"
-chmod u+x "$B/Install-CloudGrange-Linux.sh" "$B/scripts/"*.sh
+chmod u+x "$B/Install-CloudGrange-Linux.sh" "$B/Uninstall-CloudGrange-Linux.sh" "$B/scripts/"*.sh
 find "$B" -exec touch -h -d "@$EPOCH" {} +
 
 mkdir -p "$OUT"

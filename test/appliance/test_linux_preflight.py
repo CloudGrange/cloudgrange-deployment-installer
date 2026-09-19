@@ -136,5 +136,20 @@ class LinuxPreflightTests(unittest.TestCase):
         self.assertFalse(os.path.exists(env_marker), "the K3s installer ran despite a failed preflight")
 
 
+    def test_uninstall_flag_delegates_to_the_bundled_uninstaller(self):
+        # AB#9171: `Install-CloudGrange-Linux.sh --uninstall` runs the sibling uninstaller with the
+        # remaining arguments, and needs no --hostname.
+        marker = os.path.join(self.tmp, "uninstall-args")
+        fake = os.path.join(self.tmp, "bundle")
+        os.makedirs(fake)
+        shutil.copy(SCRIPT, os.path.join(fake, "Install-CloudGrange-Linux.sh"))
+        self.write(os.path.join(fake, "Uninstall-CloudGrange-Linux.sh"), 'echo "$@" > "$MARKER"\n')
+        proc = subprocess.run(["/bin/bash", os.path.join(fake, "Install-CloudGrange-Linux.sh"), "--uninstall", "--yes"],
+                              env={"PATH": self.bin, "MARKER": marker}, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        with open(marker) as f:
+            self.assertEqual(f.read().strip(), "--yes")
+
+
 if __name__ == "__main__":
     unittest.main()
