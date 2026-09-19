@@ -321,6 +321,11 @@ class FoundationUpdater:
         m = re.search(r"k3s version (v\S+)", (proc.stdout or b"").decode("utf-8", "replace"))
         return m.group(1) if m else None
 
+    def update_requires_reboot(self, facts):
+        """AB#9171: the offered Foundation update (a version newer than the installed one) restarts the host."""
+        available, installed = facts.get("availableVersion"), self.installed_version()
+        return bool(available and available != installed and facts.get("availableRequiresReboot"))
+
     def reboot_required(self):
         return os.path.exists(self.reboot_file)
 
@@ -357,7 +362,7 @@ class FoundationUpdater:
             "k3sVersion": self.k3s_version(),
             "targetK3sVersion": facts.get("targetK3sVersion"),
             "osUpdatesAvailable": facts.get("osUpdatesAvailable"),
-            "rebootRequired": self.reboot_required(),
+            "rebootRequired": self.reboot_required() or self.update_requires_reboot(facts),
             "state": state if state in STATES else "idle",
             "message": facts.get("message"),
             "updatedAt": now(),
@@ -503,6 +508,11 @@ class FoundationUpdater:
             notes.append("Foundation channel unavailable: %s" % tail(str(err), 160))
         if latest:
             facts["availableVersion"] = latest["version"]
+            # AB#9171: whether APPLYING this release restarts the host (the release says so, or a kernel-class
+            # package is among the security updates it would install; the same rule apply uses). Without it the
+            # card offered a plain "Start update" for a restart-requiring release, and the apply was refused.
+            facts["availableRequiresReboot"] = bool(latest.get("requiresReboot")) or any(
+                sec and REBOOT_PACKAGE_RE.match(n) for n, _v, sec in packages)
             k3s = str(latest.get("k3sVersion") or "")
             facts["targetK3sVersion"] = k3s if K3S_VERSION_RE.match(k3s) else None
         if self.reboot_required():
