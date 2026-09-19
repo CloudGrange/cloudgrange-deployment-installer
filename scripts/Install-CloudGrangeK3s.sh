@@ -253,7 +253,10 @@ install_updater() {
     install -m 0755 "$src" "$SBIN_DIR/cloudgrange-updater-k3s.py"
     install -m 0644 "$unit_src" "$SYSTEMD_DIR/cloudgrange-updater-k3s.service"
     systemctl daemon-reload
-    systemctl enable --now cloudgrange-updater-k3s.service
+    systemctl enable cloudgrange-updater-k3s.service
+    # AB#9171: restart, not `enable --now`: on a re-run or reinstall the service may already be running the previous
+    # script, and --now leaves it running with the old code and its old in-memory status.
+    systemctl restart cloudgrange-updater-k3s.service
 }
 
 # AB#9184 — import the bundle's CloudGrange/vendor service images into containerd.
