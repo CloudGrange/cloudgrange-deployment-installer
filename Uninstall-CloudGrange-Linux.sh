@@ -38,9 +38,14 @@ log() { echo "  -> $*"; }
 # 1. Our systemd units (positive match on our unit names only).
 for unit in cloudgrange.service cloudgrange-updater.service cloudgrange-updater-k3s.service \
             cloudgrange-operator-access.service cloudgrange-firstboot.service cloudgrange-airgap-route.service; do
-    if systemctl list-unit-files "$unit" >/dev/null 2>&1 && systemctl list-unit-files "$unit" | grep -q "$unit"; then
+    # AB#9171: no pipe here. `systemctl list-unit-files X | grep -q X` under `set -o pipefail` fails whenever grep
+    # exits before systemctl finishes writing (SIGPIPE), so NO unit was ever stopped: the files were deleted but the
+    # services kept running, and a reinstall kept running the old Foundation updater with its old status.
+    # A unit that is still running but whose file is already gone counts too.
+    listed=$(systemctl list-unit-files --no-legend "$unit" 2>/dev/null || true)
+    if [ -n "$listed" ] || systemctl is-active --quiet "$unit"; then
         log "stopping and disabling $unit"
-        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        systemctl disable --now "$unit" >/dev/null 2>&1 || systemctl stop "$unit" >/dev/null 2>&1 || true
     fi
     rm -f "/etc/systemd/system/$unit" "/lib/systemd/system/$unit"
 done
