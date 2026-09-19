@@ -27,7 +27,7 @@ A first-party version tag is expected to be immutable once published. If a tag i
 
 ### What makes the zip deterministic
 
-- `docker save` writes content-addressed blobs with fixed (epoch) timestamps and root ownership, but it lists the images in `manifest.json` and `index.json` in a random order that changes between runs. That alone made two otherwise identical builds differ. The build sorts the entry *list* inside both files (sorting keys alone is not enough — the list order is what varies) and repacks `airgap/cloudgrange-images-amd64.tar` with GNU tar: sorted names, owner 0/0, fixed modes, and `SOURCE_DATE_EPOCH` mtimes.
+- The image export writes content-addressed blobs, but the order of the images in `manifest.json` and `index.json` isn't fixed between runs. That alone made two otherwise identical builds differ. The build sorts the entry *list* inside both files (sorting keys alone is not enough — the list order is what varies) and repacks `airgap/cloudgrange-images-amd64.tar` with GNU tar: sorted names, owner 0/0, fixed modes, and `SOURCE_DATE_EPOCH` mtimes.
 - Every file and directory in the bundle gets mode `u=rwX,go=rX` and mtime `SOURCE_DATE_EPOCH`, so the umask, checkout time and filesystem don't matter.
 - `SHA256SUMS` and `images.txt` are sorted in the C locale.
 - The zip is written with `TZ=UTC`, in sorted order, and with `zip -X -D`: no extra attributes (uid/gid, extended timestamps) and no directory entries.
@@ -48,7 +48,18 @@ sha256sum /tmp/out/Install-CloudGrange-K3s-Bundled.zip   # compare with the reco
 
 ### Offline install
 
-With `--images registry` the bundle carries an `airgap/` directory: the pinned `k3s` binary, `k3s-airgap-images-amd64.tar`, K3s's install script, and `cloudgrange-images-amd64.tar` holding every image the rendered chart references. `scripts/Install-CloudGrangeK3s.sh` verifies each against its `.sha256`, installs K3s with `INSTALL_K3S_SKIP_DOWNLOAD=true`, and imports the service images into containerd, so a host with no internet access completes the install. The chart uses `imagePullPolicy: IfNotPresent` and no `:latest` vendor tags, so pods use the imported images instead of trying to pull.
+With `--images registry` the bundle carries an `airgap/` directory: the pinned `k3s` binary, `k3s-airgap-images-amd64.tar`, K3s's install script, and `cloudgrange-images-amd64.tar` holding every image the rendered chart references. `scripts/Install-CloudGrangeK3s.sh` verifies each against its `.sha256`, installs K3s with `INSTALL_K3S_SKIP_DOWNLOAD=true`, and imports the service images into containerd, so a host with no internet access completes the install. The chart uses `imagePullPolicy: IfNotPresent` and no `:latest` vendor tags, so pods use the imported images instead of trying to pull. The installer imports with `ctr -n k8s.io images import --platform linux/amd64`. It then resolves every `images.txt` reference through CRI (`crictl inspecti`) and fails at that point if any image is missing, so a bad payload never ends in an `ImagePullBackOff`.
+
+### Image payload gates
+
+The build host's Docker image store isn't used for the payload. A Docker daemon that uses the containerd image store can keep an image record whose layer blobs are gone. `docker pull` doesn't restore them, because the unpacked snapshots still exist, and plain `docker save` exports the image anyway without the missing content and exits 0. That's how 2609.0.0-preview.10 shipped cert-manager images with no config or layers.
+
+Instead, the build starts the containerd from `rancher/k3s:<K3S_VERSION>` in a new throwaway container. It runs `ctr content fetch --platform linux/amd64` for every chart image, fully qualified, and tags each digest-pinned image as both `repo:tag` and `repo@sha256:<digest>`. It then runs `ctr images export --platform linux/amd64`. That export keeps each vendor image's multi-arch index as the top-level digest, so the chart's `@sha256` pins still resolve. It carries only linux/amd64 content, and it can't write an image it doesn't fully have. Every image has to be pullable from its registry. A local-only image can't be bundled. Docker is used only to run the `rancher/k3s` image.
+
+Two checks then run, and either one fails the build:
+
+1. **`scripts/release/Test-ImageTarComplete.py`** runs on the extracted layout before it's packed. It follows every named image down its linux/amd64 branch and requires the manifest, the config and every layer to be present at their recorded size. It also requires every chart image to be named, as `repo:tag` and, for a digest-pinned image, as `repo@sha256:<digest>`. Other platforms and attestation manifests are left out on purpose, because the import never reads them.
+2. **`scripts/release/Test-AirgapImageImport.sh`** runs on the finished tar, mounted read-only, so the bundle bytes don't change. It starts the containerd from `rancher/k3s:<K3S_VERSION>` in a throwaway container with `--network none` and runs the installer's import. `ctr images check` must report every image complete, and `crictl inspecti` must resolve every `images.txt` reference offline. The gate itself never touches the network.
 
 ### Known limits
 
