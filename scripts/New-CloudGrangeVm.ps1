@@ -171,7 +171,8 @@ function New-CloudGrangeVm {
     New-CloudGrangeBaseDisk @baseDiskArgs
 
     # Build cloud-init NoCloud seed ISO (user-data + meta-data)
-    $ciDir = Join-Path $env:TEMP 'cloudgrange-cloud-init'
+    # AB#9171: per VM, so a second install on the same host never collides with a running VM's seed.
+    $ciDir = Join-Path $env:TEMP "cloudgrange-cloud-init-$vmName"
     New-Item -ItemType Directory -Path $ciDir -Force | Out-Null
 
     # Build optional chpasswd block. When a VM user password is provided, cloud-init
@@ -325,7 +326,9 @@ ethernets:
     [System.IO.File]::WriteAllText((Join-Path $ciDir 'meta-data'),      $metaData,      $utf8NoBom)
     [System.IO.File]::WriteAllText((Join-Path $ciDir 'network-config'), $networkConfig, $utf8NoBom)
 
-    $seedIso = Join-Path $vhdxDir 'cloud-init-seed.iso'
+    # AB#9171: per VM. One shared file was held open by the first VM's DVD drive, so a second install
+    # on the same host (a -VmName install) failed to rebuild it ("being used by another process").
+    $seedIso = Join-Path $vhdxDir "$vmName-cloud-init-seed.iso"
     # Build the NoCloud seed ISO via IMAPI2 (built into Windows since Vista).
     # No Windows ADK / oscdimg dependency — operators are not expected to install
     # developer tools to deploy CloudGrange on-prem.
