@@ -237,7 +237,7 @@ kubectl get clusterrole -o name | grep -c "$REL-" | xargs -I{} log "cluster-scop
 kubectl -n $NS get configmap $REL-platform-updater-signing >/dev/null 2>&1 && bad "a signing ConfigMap exists; this test must run without a key" || ok "no signing key configured"
 [ "$(kubectl -n $NS get configmap $REL-platform-updater-trust -o jsonpath='{.data.channelUrl}')" = "$BASE/good/channel.json" ] \
     && ok "trust ConfigMap carries the channel URL" || bad "trust ConfigMap channelUrl: $(kubectl -n $NS get configmap $REL-platform-updater-trust -o jsonpath='{.data.channelUrl}')"
-psql_q "CREATE TABLE IF NOT EXISTS e2e_marker(v text); DELETE FROM e2e_marker; INSERT INTO e2e_marker VALUES ('before-$FROM');" \
+psql_q "CREATE TABLE IF NOT EXISTS e2e_marker(id int PRIMARY KEY DEFAULT 1, v text); DELETE FROM e2e_marker; INSERT INTO e2e_marker(v) VALUES ('before-$FROM');" \
     && ok "marker row written" || bad "could not write marker row"
 
 make_release good
@@ -253,12 +253,18 @@ run_job e2e-apply "" 10m apply --version "$TO" --manifest-url "$BASE/good/manife
 grep -q "no release signing key configured" "$W/e2e-apply.log" && ok "updater used HTTPS + digest pinning (no key)" || bad "updater log does not show the no-key trust path"
 [[ "$(api_image)" == *":$TO@sha256:"* ]] && ok "api runs $TO pinned by digest ($(api_image))" || bad "api image after apply: $(api_image)"
 psql_q "UPDATE e2e_marker SET v='after-$TO';" >/dev/null
+# What a newer release's migration does: a new table whose foreign key depends on an object IN the
+# backup (e2e_marker_pkey). `pg_restore --clean` could not drop that key, so a real preview.12 ->
+# preview.10 rollback failed ("manual recovery needed"); the restore must start from empty schemas.
+psql_q "CREATE TABLE e2e_newer(id int, marker_id int REFERENCES e2e_marker(id)); INSERT INTO e2e_newer VALUES (1, 1);" >/dev/null
 
 log "=== 3. rollback"
 run_job e2e-rollback "" 10m rollback
 [ "$(status_of state)" = rolled-back ] && ok "rollback state rolled-back" || bad "rollback state $(status_of state); see $W/e2e-rollback.log"
 [[ "$(api_image)" == *":$FROM"* ]] && ok "api back on $FROM" || bad "api image after rollback: $(api_image)"
 [ "$(psql_q 'SELECT v FROM e2e_marker')" = "before-$FROM" ] && ok "database restored to the pre-update backup" || bad "marker after rollback: $(psql_q 'SELECT v FROM e2e_marker')"
+[ "$(psql_q "SELECT to_regclass('public.e2e_newer') IS NULL")" = t ] \
+    && ok "objects the newer release added are gone after rollback" || bad "e2e_newer (added after the backup) survived the rollback"
 [ "$(kubectl -n $NS get deploy $REL-api -o jsonpath='{.status.readyReplicas}')" = 1 ] && ok "api ready after rollback" || bad "api not ready after rollback"
 
 refused() { # <case> <expected message fragment> <label>
