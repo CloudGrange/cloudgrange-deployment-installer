@@ -66,6 +66,7 @@ import uuid
 import zipfile
 
 UPDATER_VERSION = "2"
+USER_AGENT = "cloudgrange-updater-k3s/" + UPDATER_VERSION
 MANIFEST_SCHEMA = "cg-foundation-release-v1"
 MANIFEST_NAME = "foundation-release.json"
 SIGNATURE_NAME = "foundation-release.json.sig"
@@ -139,7 +140,10 @@ def https_open(url, timeout):
     """urlopen for https:// only, redirects included, with normal certificate verification."""
     if not str(url).startswith("https://"):
         raise UpdateError("only https:// downloads are accepted (got %s)" % tail(str(url), 120))
-    return urllib.request.build_opener(_HttpsOnlyRedirect()).open(url, timeout=timeout)
+    # Cloudflare (the r2.dev download host) answers Python-urllib's default User-Agent with HTTP 403, so
+    # the channel and every bundle download would fail on a real host. Identify as ourselves instead.
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    return urllib.request.build_opener(_HttpsOnlyRedirect()).open(req, timeout=timeout)
 
 
 def open_untrusted_file(dir_fd, name, limit):
