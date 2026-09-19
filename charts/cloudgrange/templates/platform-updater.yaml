@@ -176,32 +176,101 @@ subjects:
     namespace: {{ $.Release.Namespace }}
 {{- end }}
 {{- /* pg_dump backups (one directory per update) the updater restores from on failure or rollback.
-AB#9171 (found on kind v1.34): as a normal release resource this PVC blocked every `helm install
---wait` for its full timeout. Nothing mounts it until an update runs, so on a WaitForFirstConsumer
-StorageClass it never binds, and Helm waits for every release PVC to be Bound. It is therefore a
-hook resource (Helm does not wait on hook PVCs), created once: `lookup` skips it when it already
-exists, so no install or upgrade ever recreates it, and it has no delete policy — a backup must
-outlive a failed or uninstalled release, which is what it is for. */ -}}
-{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "%s-backups" $name)) }}
+Nothing mounts this PVC until an update runs, so on a WaitForFirstConsumer StorageClass it stays
+Pending. As a release resource it blocked every `helm install --wait` (kind v1.34); as a hook PVC it
+worked only because Helm 3 does not wait on hook resources, and Helm 4 does: a live `helm install`
+with Helm v4.2.1 hung on it until the timeout (AB#9171). So a hook JOB creates it when missing. Both
+Helm versions wait for a Job to complete; the PVC itself is never a Helm object, so no install,
+upgrade or uninstall recreates or deletes it: a backup outlives a failed or uninstalled release,
+which is what it is for. */ -}}
+{{- $pvc := printf "%s-backups" $name }}
 ---
 apiVersion: v1
-kind: PersistentVolumeClaim
+kind: ServiceAccount
 metadata:
-  name: {{ $name }}-backups
+  name: {{ $name }}-backups-init
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-25"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-backups-init
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-25"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-backups-init
+  labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-25"
+    "helm.sh/hook-delete-policy": before-hook-creation
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }}-backups-init }
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}-backups-init
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-backups-init
   labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-20"
-    "helm.sh/resource-policy": keep
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
-  accessModes: ["ReadWriteOnce"]
-  {{- with .Values.platformUpdater.backup.storageClassName }}
-  storageClassName: {{ . | quote }}
-  {{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.platformUpdater.backup.size }}
-{{- end }}
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: {{ $name }}-backups-init
+      restartPolicy: Never
+      securityContext: {{- include "cloudgrange.podSecurity" (dict "uid" 65534) | nindent 8 }}
+      containers:
+        - name: backups-init
+          image: {{ .Values.secretsBootstrap.image }}
+          securityContext: {{- include "cloudgrange.containerSecurity" . | nindent 12 }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if kubectl get pvc {{ $pvc }} -n {{ .Release.Namespace }} >/dev/null 2>&1; then
+                echo "PVC {{ $pvc }} exists; keeping it (and its backups)"; exit 0
+              fi
+              cat <<'PVC' | kubectl create -n {{ .Release.Namespace }} -f -
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: {{ $pvc }}
+                labels: { app.kubernetes.io/part-of: cloudgrange, app.kubernetes.io/component: platform-updater }
+              spec:
+                accessModes: ["ReadWriteOnce"]
+                {{- with .Values.platformUpdater.backup.storageClassName }}
+                storageClassName: {{ . | quote }}
+                {{- end }}
+                resources:
+                  requests:
+                    storage: {{ .Values.platformUpdater.backup.size }}
+              PVC
+              echo "created PVC {{ $pvc }}"
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
 ---
 # Update trust (owner decision 2026-09-18: HTTPS + digest pinning). The updater reads this with its
 # own ServiceAccount: the channel whose SHA-256 it pins the release manifest to (the same URL the

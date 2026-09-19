@@ -40,6 +40,9 @@ RNS=cg-e2e-release
 RHOST=cg-release.$RNS.svc
 BASE=https://$RHOST
 PASS=0 FAIL=0
+# AB#9171: run the whole test under another Helm (HELM=helm4): the chart must work with Helm 3 and 4.
+HELM=${HELM:-helm}
+helm() { command "$HELM" "$@"; }
 log() { echo "[e2e $(date -u +%H:%M:%S)] $*"; }
 ok() { log "PASS: $*"; PASS=$((PASS + 1)); }
 bad() { log "FAIL: $*"; FAIL=$((FAIL + 1)); }
