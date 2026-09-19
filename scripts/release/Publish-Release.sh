@@ -19,12 +19,21 @@
 #   R2_BUCKET        bucket name
 #   R2_PUBLIC_BASE   public base URL of the bucket (e.g. its r2.dev URL or custom download domain)
 #
+# AB#9171 — customers download installers from GitHub Releases (owner decision 2026-09-18), not
+# from R2: after the channel is live this also runs Publish-GitHubRelease.sh, which creates the
+# GitHub release at the release commit, uploads the Linux bundle, the Windows installer and the
+# chart under stable asset names, and makes it the repo's latest release, so the install docs'
+# version-free .../releases/latest/download/<asset> URLs resolve to it. R2 stays the in-app
+# updater's source.
+#
 # Usage:
 #   Publish-Release.sh --version 2609.0.0-preview.3 --bundle-dir <dir with Install-CloudGrange-K3s-Bundled.zip(.sha256)> \
-#     --channel preview|rc|stable --severity security|recommended|optional --summary "<one line>"
+#     --channel preview|rc|stable --severity security|recommended|optional --summary "<one line>" \
+#     --github-target <release commit sha> [--windows-dir <dir with Install-CloudGrange-Windows.zip>] \
+#     [--platform-release-dir <New-PlatformRelease.sh --out dir>] [--no-github-release]
 set -euo pipefail
 
-VERSION=""; DIR=""; CHANNEL=""; SEVERITY=""; SUMMARY=""; PLATFORM_DIR=""
+VERSION=""; DIR=""; CHANNEL=""; SEVERITY=""; SUMMARY=""; PLATFORM_DIR=""; GITHUB_TARGET=""; WINDOWS_DIR=""; GITHUB_RELEASE=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION=$2; shift 2 ;;
@@ -37,6 +46,9 @@ while [ $# -gt 0 ]; do
     # and latest.manifestSha256, which the in-cluster Platform updater pins, verifies and applies. Run New-PlatformRelease.sh with
     # --chart-base-url "$R2_PUBLIC_BASE/releases/<version>" so the manifest points at this upload.
     --platform-release-dir) PLATFORM_DIR=$2; shift 2 ;;
+    --github-target) GITHUB_TARGET=$2; shift 2 ;;
+    --windows-dir) WINDOWS_DIR=$2; shift 2 ;;
+    --no-github-release) GITHUB_RELEASE=0; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -49,6 +61,9 @@ case "$CHANNEL" in preview|rc|stable) ;; *) echo "--channel must be preview, rc 
 case "$SEVERITY" in security|recommended|optional) ;; *) echo "--severity must be security, recommended or optional" >&2; exit 2 ;; esac
 : "${CF_ACCOUNT_ID:?}" "${CF_TOKEN:?}" "${CF_TOKEN_ID:?}" "${R2_BUCKET:?}" "${R2_PUBLIC_BASE:?}"
 [ -f "$DIR/$BUNDLE" ] && [ -f "$DIR/$BUNDLE.sha256" ] || { echo "bundle not found in $DIR" >&2; exit 2; }
+# Checked before anything is uploaded, so a release never reaches the channel without its customer download.
+[ "$GITHUB_RELEASE" = 0 ] || [[ "$GITHUB_TARGET" =~ ^[0-9a-f]{7,40}$ ]] \
+  || { echo "--github-target <release commit sha> is required (or --no-github-release)" >&2; exit 2; }
 
 SECRET=$(printf '%s' "$CF_TOKEN" | sha256sum | cut -d' ' -f1)
 S3="https://$CF_ACCOUNT_ID.r2.cloudflarestorage.com/$R2_BUCKET"
@@ -116,3 +131,8 @@ put "$WORK/channel.json" "channels/$CHANNEL.json" application/json
 curl -sSf "$PUBLIC/channels/$CHANNEL.json"
 echo
 echo "RELEASE URL: $PUBLIC/releases/$VERSION/$ZIP"
+
+if [ "$GITHUB_RELEASE" = 1 ]; then
+  bash "$(dirname "$0")/Publish-GitHubRelease.sh" --version "$VERSION" --target "$GITHUB_TARGET" --bundle-dir "$DIR" \
+    ${WINDOWS_DIR:+--windows-dir "$WINDOWS_DIR"} ${PLATFORM_DIR:+--platform-release-dir "$PLATFORM_DIR"}
+fi

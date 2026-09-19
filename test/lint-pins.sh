@@ -223,6 +223,10 @@ grep -qi 'refusing an unverifiable' "$EP" scripts/cloudgrange-updater-k3s.py \
 grep -q '"manifestSha256"' scripts/release/Publish-Release.sh || fail "Publish-Release.sh does not publish latest.manifestSha256"
 grep -q '"manifestSha256"' scripts/release/Publish-ModuleCatalog.sh || fail "Publish-ModuleCatalog.sh does not publish manifestSha256"
 grep -q 'manifest.json.sig" \]' scripts/release/Publish-Release.sh || fail "Publish-Release.sh must treat manifest.json.sig as optional"
+# AB#9171: customers download from GitHub Releases' version-free latest/download URLs, so every
+# release must also publish there and become the latest release.
+grep -q 'Publish-GitHubRelease.sh' scripts/release/Publish-Release.sh || fail "Publish-Release.sh does not publish the GitHub release customers download from"
+grep -q -- '--latest' scripts/release/Publish-GitHubRelease.sh || fail "Publish-GitHubRelease.sh must mark the release latest (the docs use releases/latest/download)"
 
 if [ "$FAILS" -gt 0 ]; then echo "PIN-LINT: $FAILS failure(s)" >&2; exit 1; fi
 echo "PIN-LINT: OK — no latest and no unpinned versions in shipped artifacts"
