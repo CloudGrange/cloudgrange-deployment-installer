@@ -6,7 +6,12 @@ presented, so `cg auth login --ca-cert <platform CA>` failed with an SSL error o
 install. A TLSStore named "default" is Traefik's fallback for connections without a matching SNI.
 Only rendered when asked (values-single-node.yaml: our wrappers own that cluster) and when the
 Traefik CRD exists, so a bring-your-own cluster's Traefik is never reconfigured. */ -}}
-{{- if and .Values.global.ingress.traefikDefaultCertificate (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/TLSStore") }}
+{{- /* A wrapper-owned cluster is recognised by foundation.managed (set by the wrapper profiles) as well
+as the explicit flag: an in-app update runs `helm upgrade --reuse-values`, which carries the values an
+install STORED (foundation.managed is among them) but not a key a profile file gained later, so gating
+on the new flag alone would never reach an existing install. BYO (foundation.managed=false) is untouched. */ -}}
+{{- $wanted := or .Values.global.ingress.traefikDefaultCertificate .Values.foundation.managed }}
+{{- if and $wanted (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/TLSStore") }}
 apiVersion: traefik.io/v1alpha1
 kind: TLSStore
 metadata:
