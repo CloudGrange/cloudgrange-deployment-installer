@@ -130,23 +130,51 @@ if [ "$IMAGES" = registry ]; then
         | sed -E 's/^\s+image:\s*"?//' | sort -u > "$WORK/images.txt"
     [ -s "$WORK/images.txt" ] || { echo "no images found in rendered chart" >&2; exit 1; }
     log "$(wc -l < "$WORK/images.txt") images to bundle"
-    # AB#9171: images pinned as repo:tag@sha256:… are pulled by that exact digest, then saved under
-    # their plain repo:tag name. `docker save` of a tag@digest reference writes the image with NO
-    # name, which an air-gapped containerd import cannot match to anything; saved by name, the
-    # imported image keeps the same content digest, so the pod's digest reference still resolves.
-    : > "$WORK/save.txt"
-    while read -r img; do
-        docker image inspect "$img" >/dev/null 2>&1 || docker pull -q "$img" >/dev/null
-        if [[ "$img" == *@sha256:* && "${img%@*}" == *:* ]]; then
-            docker tag "$img" "${img%@*}"
-            echo "${img%@*}" >> "$WORK/save.txt"
-        else
-            echo "$img" >> "$WORK/save.txt"
-        fi
-    done < "$WORK/images.txt"
-    xargs -a "$WORK/save.txt" docker save -o "$WORK/images-raw.tar"
-    # docker save lists images in map (random) order and stamps live mtimes; repack sorted
-    # with fixed owners/modes/mtimes so the same inputs give a byte-identical bundle.
+    # AB#9171: the image payload is fetched and exported by the PINNED K3s's own containerd, in a
+    # fresh throwaway container, never taken from the build host's Docker. preview.10 shipped four
+    # cert-manager v1.21.2 images with their linux/amd64 manifest but without its config and most of
+    # its layers (the owner's install died at `k3s ctr images import`: "content digest
+    # sha256:6a68bd9d...: not found"). The build host's Docker (containerd image store) held image
+    # records whose layer blobs were gone; `docker pull` did not restore them (the unpacked
+    # snapshots already existed, so nothing was re-fetched), `docker save --platform linux/amd64`
+    # refused the image, and plain `docker save` exported it anyway -- two blobs, exit 0. A fresh
+    # containerd has no snapshots and no stale content: `content fetch` downloads every linux/amd64
+    # blob, and `images export` cannot write an image it does not fully have. It also keeps each
+    # vendor image's multi-arch index as the top-level digest, so the chart's @sha256 pins stay valid.
+    K3S_IMAGE="rancher/k3s:${K3S_VERSION/+/-}"
+    CTR_SOCK=/run/k3s/containerd/containerd.sock
+    CTR_NAME="cg-release-images-$$-$RANDOM"
+    docker image inspect "$K3S_IMAGE" >/dev/null 2>&1 || docker pull -q "$K3S_IMAGE" >/dev/null
+    trap 'docker rm -f "$CTR_NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
+    docker run -d --name "$CTR_NAME" --privileged --entrypoint /bin/containerd "$K3S_IMAGE" \
+        --address "$CTR_SOCK" --root /var/lib/rancher/k3s/agent/containerd --state /run/k3s/containerd >/dev/null
+    kctr() { docker exec "$CTR_NAME" ctr --address "$CTR_SOCK" -n k8s.io "$@"; }
+    for _ in $(seq 1 60); do kctr version >/dev/null 2>&1 && break; sleep 2; done
+    kctr version >/dev/null
+    # One line per chart image: the fully qualified reference to fetch, then every name the chart
+    # needs it under (repo:tag, plus repo@sha256:<digest> when pinned) -- the same rules the
+    # structural gate checks. ctr does not expand Docker short names, hence the qualification.
+    python3 - "$SOURCE/scripts/release/Test-ImageTarComplete.py" "$WORK/images.txt" > "$WORK/fetch.txt" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+for ref in (l.strip() for l in open(sys.argv[2])):
+    if ref:
+        print(gate.normalize(ref), *gate.expected_names(ref))
+PY
+    : > "$WORK/export-names.txt"
+    while read -r ref names; do
+        kctr content fetch --platform linux/amd64 "$ref" >/dev/null
+        # shellcheck disable=SC2086 # $names is a space-separated list by construction
+        [ "$names" = "$ref" ] || kctr images tag --force "$ref" $names >/dev/null
+        printf '%s\n' $names >> "$WORK/export-names.txt"
+    done < "$WORK/fetch.txt"
+    xargs -a "$WORK/export-names.txt" docker exec "$CTR_NAME" ctr --address "$CTR_SOCK" -n k8s.io \
+        images export --platform linux/amd64 - > "$WORK/images-raw.tar"
+    docker rm -f "$CTR_NAME" >/dev/null
+    # The export's entry order is not fixed; repack sorted with fixed owners/modes/mtimes so the
+    # same inputs give a byte-identical bundle.
     mkdir -p "$WORK/img" && tar -xf "$WORK/images-raw.tar" -C "$WORK/img"
     # AB#9171: give every digest-pinned image a repo@sha256 name too, or containerd cannot resolve
     # the chart's repo:tag@sha256 reference offline (proven on kind: ImagePullBackOff without it).
@@ -167,11 +195,19 @@ elif isinstance(data, dict) and isinstance(data.get("manifests"), list):
 json.dump(data, open(path, "w"), indent=None, sort_keys=True)
 PY
     done
+    # AB#9171: structural gate -- every named image's linux/amd64 manifest, config and layers are in
+    # the layout, and every chart image is named (repo:tag and, when pinned, repo@sha256).
+    python3 "$SOURCE/scripts/release/Test-ImageTarComplete.py" "$WORK/img" "$WORK/images.txt"
     tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$EPOCH" \
         -cf "$A/cloudgrange-images-amd64.tar" -C "$WORK/img" .
     (cd "$A" && sha256sum cloudgrange-images-amd64.tar > cloudgrange-images-amd64.tar.sha256)
     cp "$WORK/images.txt" "$A/images.txt"
     rm -rf "$WORK/img" "$WORK/images-raw.tar"
+    # AB#9171: release gate -- import the finished tarball into the pinned K3s's containerd with no
+    # network, as the installer does, and resolve every chart image through CRI. Read-only mount, so
+    # the bundle bytes (and reproducibility) are untouched. No skip switch: a bundle whose images
+    # have not been imported offline is not a releasable bundle.
+    bash "$SOURCE/scripts/release/Test-AirgapImageImport.sh" "$A/cloudgrange-images-amd64.tar" "$A/images.txt" "$K3S_VERSION"
 fi
 
 log "artifact manifest (AB#9182 — plain SHA-256, not signed)"

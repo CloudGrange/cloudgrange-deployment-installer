@@ -245,7 +245,24 @@ import_bundled_service_images() {
     [ -f "$tar" ] || return 0
     log "importing bundled service images into containerd"
     (cd "$AIRGAP_DIR" && sha256sum -c cloudgrange-images-amd64.tar.sha256)
-    k3s ctr images import "$tar"
+    # AB#9171: only the platform this installer supports. The tarball keeps each vendor image's
+    # multi-arch index (so the chart's @sha256 index digests stay valid) but carries only the
+    # linux/amd64 content; the platform filter keeps the import from ever asking for the others.
+    k3s ctr -n k8s.io images import --platform linux/amd64 "$tar"
+    # ...and prove it: every image the chart references must now resolve locally, through CRI (the
+    # lookup the kubelet does), or the install would stall later in ImagePullBackOff on an offline
+    # host with no hint why.
+    local refs="$AIRGAP_DIR/images.txt" ref missing=0
+    [ -f "$refs" ] || return 0
+    while read -r ref; do
+        [ -n "$ref" ] || continue
+        if ! k3s crictl inspecti -q "$ref" >/dev/null 2>&1; then
+            echo "bundled image not available in containerd after import: $ref" >&2
+            missing=1
+        fi
+    done < "$refs"
+    [ "$missing" -eq 0 ] || { echo "the bundle's image tarball is incomplete; this bundle cannot install offline" >&2; exit 1; }
+    log "all $(grep -c . "$refs") bundled images present in containerd"
 }
 
 do_k3s_installed() {
