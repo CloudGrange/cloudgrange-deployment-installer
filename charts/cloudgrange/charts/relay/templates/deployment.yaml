@@ -57,6 +57,10 @@ spec:
               value: {{ .Values.port | quote }}
             - name: RELAY_IDENTITY_DIR
               value: "/var/lib/cloudgrange-relay/identity"
+            # AB#9171: the relay reports this on connect and in every heartbeat, so Platform
+            # Health shows the running relay version instead of "unknown".
+            - name: CLOUDGRANGE_VERSION
+              value: {{ include "cloudgrange.imageTag" . | quote }}
           volumeMounts:
             - { name: identity, mountPath: /var/lib/cloudgrange-relay/identity }
           resources: {{ toYaml .Values.resources | nindent 12 }}

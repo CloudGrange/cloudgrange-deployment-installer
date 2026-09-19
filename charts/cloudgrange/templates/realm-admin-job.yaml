@@ -78,13 +78,40 @@ spec:
               done
               kc get "realms/$REALM" --fields realm >/dev/null
 
-              if kc get users -r "$REALM" -q "username=$ADMIN_USER" -q exact=true --fields id | grep -q '"id"'; then
+              # AB#9171: the CLI's public device-code client. The realm import creates it on a
+              # fresh install, but --import-realm skips a realm that already exists, so an
+              # upgraded platform would never get it. Create it here when missing (idempotent),
+              # BEFORE the admin-exists early exit below.
+              if ! kc get clients -r "$REALM" -q clientId=cloudgrange-cli --fields clientId | grep -q cloudgrange-cli; then
+                echo "[realm-admin] creating the cloudgrange-cli device-code client"
+                cat <<'CLIENT' | kc create clients -r "$REALM" -f - >/dev/null
+              {"clientId":"cloudgrange-cli","name":"CloudGrange CLI","enabled":true,"publicClient":true,
+               "standardFlowEnabled":false,"implicitFlowEnabled":false,"directAccessGrantsEnabled":false,
+               "serviceAccountsEnabled":false,"protocol":"openid-connect","redirectUris":[],"webOrigins":[],
+               "attributes":{"oauth2.device.authorization.grant.enabled":"true","oauth2.device.code.lifespan":"600","oauth2.device.polling.interval":"5","access.token.lifespan":"3600"},
+               "defaultClientScopes":["web-origins","acr","profile","roles","basic","email"],
+               "optionalClientScopes":["offline_access"],
+               "protocolMappers":[{"name":"realm_roles","protocol":"openid-connect","protocolMapper":"oidc-realm-role-mapper",
+                 "consentRequired":false,"config":{"multivalued":"true","userinfo.token.claim":"false","id.token.claim":"true",
+                 "access.token.claim":"true","claim.name":"realm_roles","jsonType.label":"String"}}]}
+              CLIENT
+              fi
+
+              # AB#9171: Keycloak 26's user profile requires first and last name — without them the
+              # administrator's first sign-in (portal or `cg auth login`) stops at an "Update Account
+              # Information" form. Provision them; backfill an existing admin that lacks them.
+              ADMIN_ID=$(kc get users -r "$REALM" -q "username=$ADMIN_USER" -q exact=true --fields id --format csv --noquotes | head -n 1)
+              if [ -n "$ADMIN_ID" ]; then
+                if [ -z "$(kc get "users/$ADMIN_ID" -r "$REALM" --fields firstName --format csv --noquotes)" ]; then
+                  kc update "users/$ADMIN_ID" -r "$REALM" -s firstName=CloudGrange -s lastName=Administrator
+                  echo "[realm-admin] $ADMIN_USER: set first/last name"
+                fi
                 echo "[realm-admin] $ADMIN_USER already exists; nothing to do"
                 exit 0
               fi
 
               echo "[realm-admin] creating $ADMIN_USER (PlatformAdmin, temporary random password)"
-              printf '{"username":"%s","email":"%s","enabled":true,"emailVerified":true,"attributes":{"org_id":["00000000-0000-0000-0000-000000000001"]},"credentials":[{"type":"password","value":"%s","temporary":true}]}' \
+              printf '{"username":"%s","email":"%s","firstName":"CloudGrange","lastName":"Administrator","enabled":true,"emailVerified":true,"attributes":{"org_id":["00000000-0000-0000-0000-000000000001"]},"credentials":[{"type":"password","value":"%s","temporary":true}]}' \
                 "$ADMIN_USER" "$ADMIN_USER" "$REALM_ADMIN_PASSWORD" | kc create users -r "$REALM" -f - >/dev/null
               kc add-roles -r "$REALM" --uusername "$ADMIN_USER" --rolename PlatformAdmin
               echo "[realm-admin] done"
