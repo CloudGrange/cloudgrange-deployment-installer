@@ -48,10 +48,8 @@ all_tags() {
             continue
         fi
         # cloudgrange-modules tags are <module>-<version> (hello-2609.0.0-preview.12): compare the version.
-        [ "$pkg" = cloudgrange-modules ] && out=$(printf '%s
-' "$out" | sed -E 's/^[a-z][a-z0-9-]*-([0-9]+.)//')
-        printf '%s
-' "$out" | sed "s|^|ghcr:$pkg	|"
+        [ "$pkg" = cloudgrange-modules ] && out=$(printf '%s\n' "$out" | sed -E 's/^[a-z][a-z0-9-]*-([0-9]+\.)/\1/')
+        printf '%s\n' "$out" | sed "s|^|ghcr:$pkg\t|"
     done
     # GitHub Releases (drafts included: a draft still reserves its tag name) and git tags.
     out=$(gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[].tag_name') \
