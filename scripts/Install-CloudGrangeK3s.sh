@@ -265,7 +265,48 @@ import_bundled_service_images() {
     log "all $(grep -c . "$refs") bundled images present in containerd"
 }
 
+# AB#9171: K3s will not start on a host with NO default route ("no default routes found in
+# /proc/net/route") -- exactly an air-gapped host, which the offline bundle exists for; a real
+# air-gapped install on a fresh Ubuntu 24.04 VM failed here. K3s's own air-gap guidance is to give
+# the host a default route anyway. We add a low-priority link-scope default route on the host's
+# primary interface (not a dummy interface: K3s picks the node IP from the default-route interface,
+# so it stays the host's real address). Persisted as a oneshot unit ordered before k3s.service; it
+# changes nothing on a host that has a default route, including one added later.
+ensure_default_route() {
+    if ip -4 route show default | grep -q . || ip -6 route show default | grep -q .; then return 0; fi
+    log "no default route (air-gapped host): adding a low-priority default route on the primary interface for K3s"
+    cat > "$SBIN_DIR/cloudgrange-airgap-route.sh" <<'SH'
+#!/bin/sh
+# CloudGrange (AB#9171): K3s needs a default route; give an air-gapped host a low-priority one on
+# its primary interface. Does nothing when the host already has a default route.
+ip -4 route show default | grep -q . && exit 0
+iface=$(ip -4 -o addr show scope global | head -n 1 | cut -d ' ' -f 2)
+[ -n "$iface" ] || { echo "no global IPv4 interface" >&2; exit 1; }
+exec ip route replace default dev "$iface" metric 10000
+SH
+    chmod 0755 "$SBIN_DIR/cloudgrange-airgap-route.sh"
+    cat > "$SYSTEMD_DIR/cloudgrange-airgap-route.service" <<'UNIT'
+[Unit]
+Description=CloudGrange: default route for K3s on a host without one (air-gapped)
+After=network-online.target
+Wants=network-online.target
+Before=k3s.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cloudgrange-airgap-route.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now cloudgrange-airgap-route.service
+    ip -4 route show default | grep -q . || { echo "could not add a default route; K3s cannot start without one" >&2; exit 1; }
+}
+
 do_k3s_installed() {
+    ensure_default_route
     if command -v k3s >/dev/null 2>&1; then
         log "k3s already present on this host"
         import_bundled_service_images
