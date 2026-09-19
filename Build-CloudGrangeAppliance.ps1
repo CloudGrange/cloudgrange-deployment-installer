@@ -34,7 +34,7 @@ param(
     [string]$CosignKeyPath = '',
 
     # Skip cosign signing — produces an unsigned appliance.
-    # Import-CloudGrangeAppliance.ps1 will require -AllowUnsigned to import it.
+    # Import-CloudGrangeAppliance.ps1 then trusts it through its SHA-256 (AB#9171: no signing key).
     [switch]$SkipSigning,
 
     # AB#8129: SSH access to the RUNNING source VM, used to generalize it before export
@@ -197,7 +197,7 @@ Write-Progress-Step "Signing appliance VHDX with cosign"
 
 if ($SkipSigning) {
     Write-Host "  [WARNING] -SkipSigning specified — no signature will be created." -ForegroundColor Yellow
-    Write-Host "  Import-CloudGrangeAppliance.ps1 will require -AllowUnsigned to import this appliance." -ForegroundColor Yellow
+    Write-Host "  Import-CloudGrangeAppliance.ps1 trusts it through its SHA-256." -ForegroundColor Yellow
 } else {
     $cosignAvailable = [bool](Get-Command cosign -ErrorAction SilentlyContinue)
     if (-not $cosignAvailable) {

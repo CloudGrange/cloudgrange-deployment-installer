@@ -24,9 +24,9 @@ param(
     # then falls back to the key bundled with the installer.
     [string]$SigningKeyPath = '',
 
-    # Allow import of an unsigned appliance (no .sig file present).
-    # When a .sig file IS present, cosign verification is always mandatory regardless of this switch.
-    # Do NOT use in production — unsigned appliances cannot be traced to a known-good build.
+    # AB#9171: kept for compatibility and no longer needed. Owner decision 2026-09-18: trust is HTTPS + SHA-256
+    # pinning, with no signing key, so the published appliance has no .sig and the SHA-256 check above is the
+    # trust root. When a .sig file IS present, cosign verification is still mandatory.
     [switch]$AllowUnsigned,
 
     # AB#8129/AB#9171: Hyper-V switch for the appliance NIC. An existing switch is used as-is. A missing
@@ -181,17 +181,10 @@ if ($sigFilePresent) {
         throw "Signature verification failed. Aborting import."
     }
 } else {
-    # No signature file present.
-    if (-not $AllowUnsigned) {
-        Write-Host ""
-        Write-Host "  [ERROR] No cosign signature file found alongside the VHDX." -ForegroundColor Red
-        Write-Host "  Expected: $resolvedSigPath" -ForegroundColor Gray
-        Write-Host "  Importing an unsigned appliance is not permitted without the -AllowUnsigned switch." -ForegroundColor Red
-        Write-Host "  WARNING: -AllowUnsigned bypasses provenance verification and is NOT safe for production." -ForegroundColor Yellow
-        throw "No signature file found and -AllowUnsigned was not specified. Aborting import."
-    }
-    Write-Host "  [WARNING] No signature file found. Proceeding because -AllowUnsigned was specified." -ForegroundColor Yellow
-    Write-Host "  This appliance has not had its provenance verified. Do not use in production." -ForegroundColor Yellow
+    # No signature file: the published appliance is trusted through the SHA-256 checked above (AB#9171, owner
+    # decision 2026-09-18: HTTPS + SHA-256 pinning, no signing key). A customer used to need -AllowUnsigned,
+    # a switch this script itself called unsafe for production, to import the only appliance we publish.
+    Write-Host "  No signature published: the appliance is trusted through its SHA-256 (verified above)." -ForegroundColor Green
 }
 
 # ---------------------------------------------------------------------------
