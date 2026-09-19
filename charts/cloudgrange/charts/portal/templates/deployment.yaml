@@ -36,8 +36,27 @@ spec:
               value: "http://{{ .Release.Name }}-api:8080"
             - name: CLOUDGRANGE_API_URL
               value: ""
+          # AB#9171: the platform's PUBLIC TLS certificate, served by the portal at
+          # /downloads/platform-ca.crt so `cg auth login --ca-cert` works on self-signed installs.
+          volumeMounts:
+            - name: platform-tls
+              mountPath: /etc/cloudgrange/platform-tls
+              readOnly: true
           readinessProbe:
             httpGet: { path: /, port: {{ .Values.port }} }
             initialDelaySeconds: 5
             periodSeconds: 10
           resources: {{ toYaml .Values.resources | nindent 12 }}
+      volumes:
+        # Only the public keys of the ingress TLS Secret are projected (ca.crt: the issuing CA —
+        # for the default self-signed issuer, the certificate itself; tls.crt: the served chain).
+        # tls.key is never mounted. optional: a cluster whose TLS Secret does not exist (yet), or
+        # has no ca.crt, still starts the portal; the endpoint then serves what exists, or 404.
+        - name: platform-tls
+          secret:
+            secretName: {{ include "cloudgrange.tlsSecretName" . | quote }}
+            optional: true
+            defaultMode: 0444
+            items:
+              - { key: ca.crt, path: ca.crt }
+              - { key: tls.crt, path: tls.crt }
