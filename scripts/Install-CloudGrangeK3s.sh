@@ -501,11 +501,45 @@ do_ready() {
     fi
 }
 
+# AB#9171 (E7) — offline bundles are uploaded through K3s's bundled Traefik, straight to the API, and
+# are several GB. Traefik v3 closes a request that takes longer than its entry point's readTimeout
+# (60 seconds by default) to arrive, so over an ordinary link a Platform bundle upload would be cut
+# off part-way. Foundation config (K3s's own documented way to configure its packaged Traefik): a
+# HelmChartConfig in K3s's auto-deploy manifests directory lifts the read timeout on the HTTPS entry
+# point. Idempotent; K3s applies it when it starts and whenever the file changes.
+K3S_MANIFESTS_DIR="${CLOUDGRANGE_K3S_MANIFESTS_DIR:-/var/lib/rancher/k3s/server/manifests}"
+configure_traefik_timeouts() {
+    local file="$K3S_MANIFESTS_DIR/cloudgrange-traefik-config.yaml" tmp
+    install -d -m 0700 "$K3S_MANIFESTS_DIR"
+    tmp=$(mktemp)
+    cat > "$tmp" <<'YAML'
+# CloudGrange managed foundation (AB#9171 E7). Written by Install-CloudGrangeK3s.sh. Do not edit:
+# a Foundation update rewrites it. Offline bundle uploads (several GB) must not hit Traefik's
+# default 60-second read timeout.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      websecure:
+        transport:
+          respondingTimeouts:
+            readTimeout: 0
+YAML
+    if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 0; fi
+    install -m 0600 "$tmp" "$file"; rm -f "$tmp"
+    log "Traefik: no read timeout on the HTTPS entry point, for multi-GB offline bundle uploads ($file)"
+}
+
 main() {
     state_init
     # Not a checkpointed stage: idempotent, and it must also run on a resume and on the appliance's
     # first boot, where K3s is already installed but generalize removed its config directory.
     configure_registry_mirror
+    configure_traefik_timeouts
     run_stage prereqs-checked do_prereqs_checked
     run_stage k3s-installed do_k3s_installed
     run_stage certmanager-installed do_certmanager_installed
