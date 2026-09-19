@@ -381,8 +381,26 @@ stamp_chart_version() {
     bash "$stamper" "$chart" "$VERSION_VALUE"
 }
 
+wait_for_traefik_crds() {
+    # AB#9171: K3s installs its bundled Traefik (and its CRDs) asynchronously after the node is Ready.
+    # The chart renders the Traefik default-certificate store only when `helm` sees the TLSStore CRD, so a
+    # chart install that raced ahead of Traefik served "TRAEFIK DEFAULT CERT" to every IP client (seen on
+    # a VHDX appliance first boot, where images are local and the install is fast). Wait for it, bounded.
+    local deadline=$(($(date +%s) + 300))
+    until k3s kubectl get crd tlsstores.traefik.io >/dev/null 2>&1 \
+          && k3s kubectl wait --for=condition=Established crd/tlsstores.traefik.io --timeout=10s >/dev/null 2>&1; do
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            log "WARNING: Traefik's CRDs did not appear within 5 minutes; continuing without the default-certificate store"
+            return 0
+        fi
+        sleep 5
+    done
+    log "Traefik CRDs present"
+}
+
 do_chart_installed() {
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+    wait_for_traefik_crds
     # There is NO tolerated "known failing pod" here any more. This previously carried a
     # deliberate allowance for the portal image predating AB#9172's non-root fix, paired
     # with a portal exemption in do_ready — so a broken portal passed both gates and the
