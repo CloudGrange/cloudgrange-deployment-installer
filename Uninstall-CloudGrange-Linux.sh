@@ -37,7 +37,7 @@ log() { echo "  -> $*"; }
 
 # 1. Our systemd units (positive match on our unit names only).
 for unit in cloudgrange.service cloudgrange-updater.service cloudgrange-updater-k3s.service \
-            cloudgrange-operator-access.service cloudgrange-firstboot.service; do
+            cloudgrange-operator-access.service cloudgrange-firstboot.service cloudgrange-airgap-route.service; do
     if systemctl list-unit-files "$unit" >/dev/null 2>&1 && systemctl list-unit-files "$unit" | grep -q "$unit"; then
         log "stopping and disabling $unit"
         systemctl disable --now "$unit" >/dev/null 2>&1 || true
@@ -83,6 +83,7 @@ fi
 
 # 5. Our files.
 log "removing CloudGrange files"
+rm -f /usr/local/sbin/cloudgrange-airgap-route.sh
 rm -rf /opt/cloudgrange /etc/cloudgrange /var/lib/cloudgrange /var/lib/cloudgrange-updater \
        /var/log/cloudgrange
 
