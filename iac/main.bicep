@@ -280,8 +280,6 @@ param realmAdminPassword string
 @description('Keycloak container image. Must match the tag the Helm chart pins.')
 param keycloakImage string = 'quay.io/keycloak/keycloak:26.6.4'
 
-@description('Keycloak theme asset path segment (/resources/<this>/...). Must match keycloak.resourcesVersion in the chart.')
-param keycloakResourcesVersion string = 'n5lwt'
 
 @description('Optional override for the relay image tag. Empty = use imageTag.')
 param relayImageTag string = ''
@@ -579,7 +577,6 @@ module resources 'resources.bicep' = {
     relayEnrollmentToken: relayEnrollmentToken
     realmAdminPassword: realmAdminPassword
     keycloakImage: keycloakImage
-    keycloakResourcesVersion: keycloakResourcesVersion
     relayImageTag: relayImageTag
     platformVersion: platformVersion
     updateChannelUrl: updateChannelUrl

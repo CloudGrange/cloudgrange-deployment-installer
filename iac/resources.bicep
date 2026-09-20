@@ -247,7 +247,7 @@ param apiCustomDomain string = ''
 // setup, SSO, `cg auth login` and cluster registration could never have worked here.
 //
 // The three additions below close that: a Keycloak Container App (internal ingress; the
-// portal proxies /realms/cloudgrange and /resources/<resourcesVersion> to it, exactly as
+// portal proxies /realms/cloudgrange and the Keycloak theme assets to it, exactly as
 // the chart's Traefik Ingress does, so auth lives on ONE origin on every path), a relay
 // Container App, and Azure Files persistence for the two directories that must survive a
 // revision roll (the API's data-protection keys and the relay's enrolment identity).
@@ -259,9 +259,6 @@ param apiCustomDomain string = ''
 
 @description('Keycloak container image. Must match the tag the Helm chart pins (charts/cloudgrange/charts/keycloak/values.yaml) so the realm import and theme paths line up.')
 param keycloakImage string = 'quay.io/keycloak/keycloak:26.6.4'
-
-@description('Keycloak theme asset path segment (/resources/<this>/...). Fixed per Keycloak release; must match keycloak.resourcesVersion in the chart or the login and device pages render unstyled.')
-param keycloakResourcesVersion string = 'n5lwt'
 
 @description('Realm definition imported into Keycloak on first start. Defaults to the same file the Helm chart ships, so ACA and Kubernetes get an identical realm.')
 param keycloakRealmJson string = loadTextContent('../charts/cloudgrange/charts/keycloak/files/cloudgrange-realm.json')
@@ -1310,13 +1307,21 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'CLOUDGRANGE_API_URL', value: '' }
             { name: 'CLOUDGRANGE_AUTH_URL', value: oidcPreseed ? entraAuthority : keycloakPublicAuthority }
             // AB#9171 (E9) — the portal is the single public origin, so it proxies Keycloak the
-            // same way the chart's Traefik Ingress does: only /realms/cloudgrange and the pinned
-            // /resources/<version> theme segment (plain /resources is a portal SPA route).
-            // Empty CLOUDGRANGE_KEYCLOAK_UPSTREAM = emit no proxy blocks, which is what every
-            // Kubernetes path does, so those paths are untouched.
-            { name: 'CLOUDGRANGE_KEYCLOAK_UPSTREAM', value: oidcPreseed ? '' : 'http://${keycloakInternalFqdn}' }
+            // same way the chart's Traefik Ingress does on Kubernetes.
+            //
+            // CLOUDGRANGE_KEYCLOAK_REALM_PROXY is what turns the /realms/cloudgrange block on,
+            // and it is deliberately a separate switch from the upstream: the Kubernetes paths
+            // already set CLOUDGRANGE_KEYCLOAK_UPSTREAM for Keycloak's theme assets, so keying
+            // the realm proxy off the upstream would make the portal claim /realms/cloudgrange
+            // on every K3s and AKS install and fight the chart's Ingress for it. Left unset
+            // everywhere but here.
+            //
+            // /admin is never proxied. The portal's own regex block already routes every
+            // Keycloak theme-resources version, so nothing here pins one — pinning would break
+            // the moment the Keycloak image changes.
+            { name: 'CLOUDGRANGE_KEYCLOAK_UPSTREAM', value: oidcPreseed ? '' : 'https://${keycloakInternalFqdn}' }
             { name: 'CLOUDGRANGE_KEYCLOAK_HOST', value: oidcPreseed ? '' : keycloakInternalFqdn }
-            { name: 'CLOUDGRANGE_KEYCLOAK_RESOURCES_VERSION', value: oidcPreseed ? '' : keycloakResourcesVersion }
+            { name: 'CLOUDGRANGE_KEYCLOAK_REALM_PROXY', value: oidcPreseed ? 'false' : 'true' }
             { name: 'CLOUDGRANGE_API_UPSTREAM', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
             { name: 'CLOUDGRANGE_API_HOST', value: apiApp.properties.configuration.ingress.fqdn }
             { name: 'CLOUDGRANGE_FWD_PROTO', value: 'https' }
@@ -1366,7 +1371,7 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
 // AB#9171 (E9) — Keycloak Container App (internal ingress)
 //
 // The identity tier the rest of the product assumes. It is NOT publicly exposed: the portal
-// proxies /realms/cloudgrange and /resources/<resourcesVersion> to it, which is exactly what
+// proxies /realms/cloudgrange and the Keycloak theme assets to it, which is exactly what
 // the chart's Traefik Ingress does on every Kubernetes path. KC_HOSTNAME is therefore the
 // portal's public URL and KC_PROXY_HEADERS=xforwarded makes Keycloak trust the proxy's
 // X-Forwarded-* headers, so issuer and redirect URLs come out as the browser sees them.
