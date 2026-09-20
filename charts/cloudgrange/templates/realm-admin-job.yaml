@@ -103,9 +103,13 @@ spec:
               # device-code login and the portal's SSO accept the credentials the admin chose). It does
               # that as its own confidential client, whose service account needs user management here.
               # Idempotent, and BEFORE the admin-exists early exit so an upgraded platform gets it too.
+              # AB#9171: manage-clients/view-clients too — the API's realm reconciler keeps the
+              # portal/api/cli clients pointing at the platform's public origin on every start,
+              # because `start --import-realm` freezes those redirect URIs at the FIRST import.
               kc add-roles -r "$REALM" --uusername service-account-cloudgrange-api --cclientid realm-management \
-                --rolename manage-users --rolename view-users --rolename query-users --rolename view-realm
-              echo "[realm-admin] service-account-cloudgrange-api may manage realm users"
+                --rolename manage-users --rolename view-users --rolename query-users --rolename view-realm \
+                --rolename manage-clients --rolename view-clients
+              echo "[realm-admin] service-account-cloudgrange-api may manage realm users and clients"
 
               # AB#9171: the portal's "Sign in with your organization" runs the OIDC code flow as the API's
               # confidential client, returning to /api/v1/auth/callback. That client had the standard

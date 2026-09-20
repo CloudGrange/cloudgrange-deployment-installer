@@ -155,6 +155,20 @@ spec:
               valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: keycloak-api-client-secret } }
             - name: Keycloak__RequireHttpsMetadata
               value: "false"
+            # AB#9171 — the browser-facing origin the realm's redirect URIs, web origins and root
+            # URL must name. Keycloak's `start --import-realm` imports the realm ONCE, so those
+            # values stay frozen at the hostname of the first install and a later move to a new
+            # hostname breaks SSO with an opaque 500. The API reconciles the realm's clients
+            # against this on every start. It is deliberately NOT CLOUDGRANGE_PORTAL_URL above:
+            # that one is the in-cluster Service address, which no browser can reach.
+            - name: Keycloak__PublicOrigin
+              value: "https://{{ .Values.global.hostname }}"
+            # Fallback credential for a realm whose cloudgrange-api service account predates the
+            # manage-clients grant. The post-install Job adds that grant, so this is normally unused.
+            - name: Keycloak__AdminUsername
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: keycloak-admin-user } }
+            - name: Keycloak__AdminPassword
+              valueFrom: { secretKeyRef: { name: "{{ .Release.Name }}-secrets", key: keycloak-admin-password } }
             - name: CLOUDGRANGE_IMAGE_TAG
               value: {{ include "cloudgrange.imageTag" . | quote }}
             {{- with .Values.global.imageRegistry }}

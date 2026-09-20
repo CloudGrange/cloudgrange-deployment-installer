@@ -489,6 +489,19 @@ var keycloakApiEnv = [
   { name: 'Keycloak__ClientId', value: 'cloudgrange-api' }
   { name: 'Keycloak__ClientSecret', secretRef: 'kc-api-client-secret' }
   { name: 'Keycloak__RequireHttpsMetadata', value: 'true' }
+  // AB#9171 — the browser-facing origin the realm's redirect URIs, web origins and root URL must
+  // name. `start --import-realm` imports the realm ONCE, so those values are frozen at the hostname
+  // of the FIRST deployment: a deployment that failed at the portal app left the realm pinned to a
+  // truncated app FQDN and no redeploy could fix it — Keycloak answered "Invalid parameter:
+  // redirect_uri" and the portal showed an opaque 500. The API's realm reconciler re-points those
+  // clients at this value on every start, and reports itself on Platform Health. Like KC_HOSTNAME
+  // this is re-rendered on every deployment, because portalPublicUrl is a computed var.
+  //
+  // Only on this branch: when the operator pre-seeds Entra (oidcApiEnv) CloudGrange does not own
+  // the realm and the reconciler must stay out of it.
+  { name: 'Keycloak__PublicOrigin', value: portalPublicUrl }
+  { name: 'Keycloak__AdminUsername', secretRef: 'kc-admin-user' }
+  { name: 'Keycloak__AdminPassword', secretRef: 'kc-admin-password' }
 ]
 
 // AB#1600 — PgBouncer host: when enabled, API connects to localhost (sidecar), else PG FQDN directly.
@@ -1156,6 +1169,22 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
           {
             name: 'relay-enrollment-token'
             keyVaultUrl: relayEnrollmentTokenSecretUri
+            identity: miId
+          }
+          // AB#9171 — the Keycloak bootstrap admin, for the realm reconciler's fallback path only.
+          // A platform first deployed before the realm import granted `realm-management:
+          // manage-clients` to the cloudgrange-api service account cannot repair its own realm with
+          // client credentials, and ACA has no job primitive to do it out of band — so the API
+          // borrows the bootstrap admin once, fixes the clients, and grants the service account the
+          // missing roles so every later run uses the least-privileged path.
+          {
+            name: 'kc-admin-user'
+            keyVaultUrl: keycloakAdminUserSecretUri
+            identity: miId
+          }
+          {
+            name: 'kc-admin-password'
+            keyVaultUrl: keycloakAdminPasswordSecretUri
             identity: miId
           }
         ],
