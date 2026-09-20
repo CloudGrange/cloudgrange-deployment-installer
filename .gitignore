@@ -5,3 +5,8 @@ compose/.env
 # Claude Code local settings (logs and machine-local overrides only)
 .claude/logs/
 .claude/settings.local.json
+
+# Python bytecode caches. The merge gate runs the python suites in-tree, so these appear
+# on every run; two branches that both ran the gate then conflict on binary .pyc files.
+__pycache__/
+*.py[cod]
