@@ -1519,6 +1519,13 @@ resource relayApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'RELAY_DISPLAY_NAME', value: 'site-relay' }
             { name: 'RELAY_LISTEN_PORT', value: string(relayPort) }
             { name: 'RELAY_IDENTITY_DIR', value: '/var/lib/cloudgrange-relay/identity' }
+            // AB#9171 (E9): the SQLite agent registry and job queue go on the replica's own
+            // storage, NOT on the Azure Files share above. SQLite on SMB fails outright —
+            // "SQLite Error 5: 'database is locked'" the moment the registry and the queue
+            // both open agents.db — and the relay never starts. The share still holds
+            // relay.key, which is what has to survive a revision roll so the relay stays ONE
+            // relay instead of re-enrolling and orphaning its site after every update.
+            { name: 'RELAY_STATE_DIR', value: '/var/lib/cloudgrange-relay/state' }
             { name: 'CLOUDGRANGE_VERSION', value: _relayImageTagEff }
           ]
           volumeMounts: [
@@ -1560,6 +1567,30 @@ resource relayApp 'Microsoft.App/containerApps@2024-03-01' = {
 
 var containerAppsContributorRoleId = '358470bc-b998-42bd-ab17-a7e34c199c0f'
 var contributorRoleId              = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+var keyVaultSecretsOfficerRoleId   = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+
+// AB#9171 (E9) — the deploying identity must be able to READ the bootstrap secrets it wrote.
+//
+// Creating the vault takes Contributor; reading a secret out of it takes a data-plane role,
+// and the vault uses RBAC authorization. Without this, a redeploy cannot find the secrets it
+// stored on the first install, generates fresh ones, and the template overwrites them —
+// silently rotating the master key out from under a database that was encrypted with the old
+// one. That is exactly what happened on a real second deployment: the API came up with
+// "CG-SECRETS-ERROR-0006: the master key does not match the active key version recorded in
+// the database" and the built-in secret store failed closed.
+//
+// The generate-once guarantee is the whole point of provisioning the platform's own secrets,
+// so the right fix is to give the installer the access its own design assumes, scoped to this
+// one vault. The installer also refuses to continue on any read error other than "not found",
+// so a missing grant can never again be mistaken for a first install.
+resource deployerKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(byoKvId)) {
+  scope: newKv
+  name: guid(newKv.id, deployer().objectId, keyVaultSecretsOfficerRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficerRoleId)
+    principalId: deployer().objectId
+  }
+}
 
 resource apiAppUpdateRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: apiApp

@@ -167,9 +167,27 @@ KEY_VAULT_NAME="kvcg${KV_HASH}${INSTANCE}"
 # Guarded by VAULT_EXISTS: asking Key Vault for a secret in a vault that does not exist yet
 # resolves <vault>.vault.azure.net, which on a first install is a DNS miss the SDK retries
 # for a long time — once per secret. On a first install there is nothing to read anyway.
+#
+# A read that FAILS is not the same as a secret that is absent, and conflating the two is
+# dangerous: the vault uses RBAC, and an identity that can create the vault cannot
+# necessarily read from it. Swallowing a 403 here made a redeploy look like a first install,
+# generate a new master key and overwrite the old one — after which the API refused to open
+# the built-in secret store at all ("the master key does not match the active key version
+# recorded in the database"). So: absent is fine, anything else stops the install.
 kv_get() {
   [[ "${VAULT_EXISTS:-0}" == "1" ]] || return 0
-  az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$1" --query value -o tsv 2>/dev/null || true
+  local out rc
+  out="$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$1" --query value -o tsv 2>&1)"; rc=$?
+  if [[ $rc -eq 0 ]]; then printf '%s' "$out"; return 0; fi
+  case "$out" in
+    *SecretNotFound*|*"was not found in this key vault"*) return 0 ;;
+  esac
+  echo "Error: could not read the existing secret '$1' from Key Vault $KEY_VAULT_NAME." >&2
+  echo "  $out" >&2
+  echo "  Refusing to continue: generating a replacement would rotate a live credential and" >&2
+  echo "  break the running platform. The deployment grants the deploying identity Key Vault" >&2
+  echo "  Secrets Officer on this vault; if that grant is missing, restore it and re-run." >&2
+  exit 1
 }
 gen_password() {                       # 24 chars, complexity-safe for PostgreSQL
   printf '%sAa1!' "$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 20)"
