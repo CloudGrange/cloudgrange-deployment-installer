@@ -141,6 +141,17 @@ for comp in $COMPONENTS; do
 done
 log "Dockerfile cache-mount contract: OK"
 
+# This script is what actually publishes the `:<version>` tags. New-PlatformRelease.sh only runs
+# the version-free check on its own --push path and skips it with --already-pushed ("this step
+# publishes nothing") — which is true only because the push happened HERE. So the check belongs
+# here too, before a single tag is overwritten.
+if [ "$PUSH" = 1 ]; then
+    bash "$HERE/Test-ReleaseVersionFree.sh" --check "$VERSION" || {
+        echo "pick a free version: $(bash "$HERE/Test-ReleaseVersionFree.sh" --next "${VERSION%.*}")" >&2
+        exit 1
+    }
+fi
+
 if [ "$CLEAN" = 1 ]; then
     # THE point of this script. `docker buildx build --no-cache` alone leaves the NuGet cache
     # mounts exactly as they were, so a "clean" build was never clean.
