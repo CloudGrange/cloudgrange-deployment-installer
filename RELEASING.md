@@ -22,3 +22,46 @@ Every image a release publishes must prove which source commit it came from. `sc
 - After the push it reads each published image back by digest (`crane config`) and refuses the release unless the stamped revision equals the `--source-sha` given and the stamped version equals the version the image was built as. The proved revision is recorded in `manifest.json` under `components.<name>.revision`.
 - The retag paths are covered, because they are the ones that burned us. `--push --source-tag <older tag>` asserts the pulled image **before** it is retagged, so a stale image never reaches the registry under the new tag. `--already-pushed` publishes images it did not build, so the same assertion runs on the published bytes; an image hand-retagged from an older digest also fails the version check (it was built as the older version) and the operator is told to rebuild or use `--push --source-tag`.
 - The gate is covered by `test/appliance/test_release_provenance.py`, which runs the real shell functions against a stubbed registry and fails if any `docker build` call site in `scripts/release/` or `images/` stops stamping, or if `New-PlatformRelease.sh` stops asserting.
+
+## Building the platform images (AB#9171)
+
+`scripts/release/Build-PlatformImages.sh` is the **one supported way** to build the first-party
+images for a release. It replaces the ad-hoc `build-images.sh` that release runs used to carry
+around and that lived in no repository.
+
+```bash
+scripts/release/Build-PlatformImages.sh --version 2609.0.0-preview.28 \
+    --api-source   <cloudgrange-platform-api checkout at the release commit> \
+    --relay-source <cloudgrange-runtime-relay checkout at the release commit> \
+    --portal-source <cloudgrange-portal checkout> --cli-dir <New-CliRelease.sh --out DIR> \
+    --clean --push
+```
+
+It prints the `--source-sha <component>=<sha>` arguments `New-PlatformRelease.sh` requires.
+
+### `--clean` is not `--no-cache`
+
+`docker buildx build --no-cache` skips the **layer** cache and leaves BuildKit **cache mounts**
+exactly as they were. Only `docker builder prune --filter type=exec.cachemount` clears those, and
+`--clean` runs it. Without that step, "I rebuilt from scratch and it still fails" is not true.
+
+This is not theoretical: the `preview.28` build failed with
+`NETSDK1064: Package Microsoft.AspNetCore.OpenApi ... was not found` at `dotnet publish` and
+survived every "clean" retry. Two causes, both now closed —
+
+1. api and relay mounted the **same** cache id `cg-nuget` with the default `sharing=shared`, and
+   the release builds every component in parallel;
+2. a cache mount is reclaimable, so BuildKit's GC can drop it **between** the restore layer and the
+   publish layer, after which `dotnet publish --no-restore` cannot recover.
+
+The Dockerfiles now use per-component ids with `sharing=locked` and publish with an implicit
+locked restore rather than `--no-restore`. `Build-PlatformImages.sh` **refuses to build** a source
+tree that has regressed on any of those three points, before anything is built, and
+`test/appliance/test_build_platform_images.py` plants each regression to prove the gate catches it.
+
+### Build the release commit, not a branch
+
+`New-PlatformRelease.sh` compares every published image's `org.opencontainers.image.revision`
+against the `--source-sha` you give, and the retag path is checked against the source's **current**
+HEAD. Merge everything first, then build each component from its repository's merged HEAD. Building
+from a feature-branch commit and merging afterwards fails provenance.
