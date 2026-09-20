@@ -25,7 +25,9 @@
 #   foundation/<version>/cloudgrange-foundation-<version>.zip(.sha256)
 #   channels/foundation-<channel>.json   {"schema":"cg-foundation-channel-v1","updatedAt":...,
 #       "releases":[{version, bundleUrl, sha256, k3sVersion, sizeBytes, supportedPlatformVersions,
-#                    requiresReboot, notes}]}  — every other entry is kept; this version's is replaced.
+#                    requiresReboot, notes, apt{packages,securityUpdates}}]}  — every other entry is
+#       kept; this version's is replaced. `apt` is the advisory copy of the manifest's apt intent, so a
+#       managed foundation can bucket its upgradable packages without downloading the bundle (AB#9171).
 #
 # Environment for --publish (never committed; the same R2 credentials as Publish-Release.sh):
 #   CF_ACCOUNT_ID   Cloudflare account that owns the bucket
@@ -179,9 +181,15 @@ releases = channel.get("releases") if isinstance(channel, dict) else None
 if not isinstance(releases, list):
     sys.exit("[foundation-publish] ERROR: the live channel has no releases list; refusing to overwrite it")
 m = json.load(open(manifest_path))
+apt = m.get("apt") if isinstance(m.get("apt"), dict) else {}
 entry = {"version": m["version"], "bundleUrl": url, "sha256": sha, "k3sVersion": (m.get("k3s") or {}).get("version"),
          "sizeBytes": int(size), "supportedPlatformVersions": m.get("supportedPlatformVersions"),
-         "requiresReboot": bool(m.get("requiresReboot")), "notes": m.get("notes")}
+         "requiresReboot": bool(m.get("requiresReboot")), "notes": m.get("notes"),
+         # AB#9171: the apt intent, copied from the release manifest so a managed foundation can tell an
+         # administrator WHICH upgradable OS packages this release installs before they press Apply
+         # (foundation-check buckets them into included / pending / unmanaged). ADVISORY ONLY: an apply
+         # obeys the manifest inside the verified bundle, never this copy.
+         "apt": {"packages": apt.get("packages") or {}, "securityUpdates": bool(apt.get("securityUpdates"))}}
 key = lambda r: tuple(int(n) for n in re.findall(r"\d+", str(r.get("version"))))
 releases = [r for r in releases if not (isinstance(r, dict) and r.get("version") == entry["version"])] + [entry]
 releases.sort(key=key)

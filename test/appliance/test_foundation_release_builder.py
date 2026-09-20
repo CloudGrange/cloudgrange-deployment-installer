@@ -330,6 +330,38 @@ class FoundationReleaseBuilderTests(unittest.TestCase):
                             "--channel-url", channel_url, expect_ok=False, env_extra=tls)
         self.assertIn("already published", proc.stderr)
 
+    def test_published_apt_intent_reaches_the_card_as_buckets(self):
+        # AB#9171, end to end through the REAL builder, publisher and updater: a release that pins curl
+        # and takes security updates must make the host classify curl and openssl as "included" and
+        # leave nginx as "pending". Before this, foundation-check could only publish a total, and an
+        # admin saw a number no button would ever clear.
+        self.build(*["--apt-pin", "curl=8.5.0-2ubuntu10.7"], key=False)
+        channel = os.path.join(self.www, "channels", "foundation-preview.json")
+        channel_url = self.server.base + "/channels/foundation-preview.json"
+        os.makedirs(os.path.dirname(channel))
+        self.write(channel, json.dumps({"releases": []}))
+        out = os.path.join(self.tmp, "channel.out.json")
+        self.publish("--bundle", os.path.join(self.out, BUNDLE), "--pubkey", self.pub,
+                     "--channel-url", channel_url, "--channel-out", out,
+                     env_extra={"CURL_CA_BUNDLE": self.server.ca})
+        entry = json.loads(self.read(out))["releases"][0]
+        self.assertEqual(entry["apt"], {"packages": {"curl": "8.5.0-2ubuntu10.7"}, "securityUpdates": True},
+                         "the channel must carry the release's apt intent so a host can bucket without the bundle")
+
+        self.write(channel, self.read(out))
+        self.write(os.path.join(self.fake, "upgradable"),
+                   "openssl/noble-updates,noble-security 3.0.13-0ubuntu3.6 amd64 [upgradable from: 3.0.13-0ubuntu3.5]\n"
+                   "curl/noble-updates 8.5.0-2ubuntu10.7 amd64 [upgradable from: 8.5.0-2ubuntu10.6]\n"
+                   "nginx/noble-updates 1.24.0-2ubuntu7.3 amd64 [upgradable from: 1.24.0-2ubuntu7.1]\n")
+        self.request({"action": "foundation-check"})
+        status = self.run_updater(**dict(self.no_key(), CLOUDGRANGE_FOUNDATION_CHANNEL_URL=channel_url))
+        self.assertEqual(status["availableVersion"], VERSION)
+        doc = json.loads(self.read(os.path.join(self.shared, "status", "foundation-packages.json")))
+        self.assertEqual({p["name"]: p["bucket"] for p in doc["packages"]},
+                         {"openssl": "included", "curl": "included", "nginx": "pending"})
+        self.assertIn("2 included in Foundation %s" % VERSION, status["message"])
+        self.assertIn("1 awaiting a future Foundation release", status["message"])
+
     def test_publish_refuses_a_bad_signature_and_needs_credentials_to_upload(self):
         self.build()
         other_key, other_pub = os.path.join(self.keys, "o.key"), os.path.join(self.keys, "o.pub")
