@@ -4,6 +4,53 @@
 
 Nothing proved which source commit a released image came from. A stale label cost five rebuilds,
 and the "retag an unchanged image" path once published a relay built BEFORE the fix it was supposed
+## 2026-09-20 — release provenance, and the Container Apps release path (AB#9171, e9b)
+
+**Merged from this session:** #112 `d397ffa` (release-artifact provenance), #113 `c4f941c` (the ACA
+installer asset can actually be built, and its app names are valid in every region).
+
+**Provenance is now load-bearing, not decorative.** Every image the release publishes is stamped
+with `org.opencontainers.image.revision` and `.version` by `scripts/release/image-provenance.sh`,
+and `New-PlatformRelease.sh` reads the published bytes back **by digest** and refuses the release
+on a mismatch. `--source-sha <component>=<40-hex>` is REQUIRED for api, portal, relay and
+platform-updater on `--push` and `--already-pushed`. The retag path is checked against the CURRENT
+source HEAD, which is exactly what catches a "nothing changed, retag it" that quietly ships an
+image predating the fix it is supposed to carry. `manifest.json` now records each component's
+proved revision.
+
+First real use: `2609.0.0-preview.27` published with all four revisions proved and recorded.
+
+**Two defects that made Container Apps undeliverable, both found by running it, not reading it:**
+- `Publish-GitHubRelease.sh` ran `New-AcaInstallerZip.sh` as a bare command while the file was
+  committed mode 100644, so the step died with `Permission denied` and aborted the whole publish.
+  That is why **no release had ever carried `Install-CloudGrange-Aca.zip`** even though the docs
+  told operators to download it. Fixed on both sides (exec bit AND `bash` prefix).
+- `resources.bicep` clamped Container App names to Azure's 32-character limit with a bare
+  `substring`, so whether the name ended in a hyphen depended on the region code's length:
+  `eastus`/`eus` clamps to `…-prod-eus-0` and is accepted, `westus3`/`wus3` clamps to
+  `…-test-wus3-` and Azure refuses the entire deployment with `ContainerAppInvalidName` — after
+  ~15 minutes, with the PostgreSQL server and Key Vault already built. `az deployment sub what-if`
+  cannot catch it; the provider validates the name only on create. `trimTrailingHyphens` now runs
+  after the clamp.
+
+**Known gap in the shipped preview.27.** The release was cut BEFORE #113, so the ACA installer in
+`2609.0.0-preview.27` still fails in four-character region codes such as `westus3`. Three-letter
+codes are unaffected. The next release carries the fix; until then that is the answer to anyone
+who hits `ContainerAppInvalidName`.
+
+**Gates added, each proven red against the real defect:**
+`test/appliance/test_release_provenance.py` (20 cases) and
+`test/appliance/test_script_invocation_modes.py` and
+`test/appliance/test_aca_container_app_names.py`.
+
+One trap worth naming: the first version of the invocation-mode gate used `[^"]*` inside
+`$(dirname "$0")`, which cannot cross the nested quotes, so it matched nothing and passed against
+the live defect. A gate you have not watched fail is not a gate.
+
+**Environment:** `sudo -E scripts/test-all.sh` needs root and a git checkout it can read — a git
+worktree created on the Windows side is unreadable from inside WSL (`fatal: not a git repository`),
+so run the gate from a WSL-native clone. `scripts/test-all.sh`: `test-all: PASS`, Pester 351/0/0.
+
 to carry (preview.10) because the check compared the wrong base.
 
 - `scripts/release/image-provenance.sh` (new) is the single stamp-and-check helper:
