@@ -167,9 +167,12 @@ build_dotnet() {  # <component> <source dir> <image repo>
     cg_provenance_labels "$src" "$VERSION" || return 1
     echo "$comp $CG_PROVENANCE_REVISION" >> "$LOG_DIR/revisions.txt"
     [ -z "$TOKEN_FILE" ] || secret=(--secret "id=nuget_token,src=$TOKEN_FILE")
-    docker buildx build "${NOCACHE[@]}" "${secret[@]}" \
+    # The provenance labels stay on the SAME line as `docker buildx build`: that is the contract
+    # test_release_provenance.py enforces over every build call site in this repo, and it is what
+    # makes "is every released image stamped?" answerable by reading, not by trusting.
+    docker buildx build "${CG_PROVENANCE_LABELS[@]}" "${NOCACHE[@]}" "${secret[@]}" \
         --build-arg "GIT_SHA=$CG_PROVENANCE_REVISION" --build-arg "VERSION=$VERSION" \
-        "${CG_PROVENANCE_LABELS[@]}" -t "$image" "${OUTFLAG[@]}" "$src"
+        -t "$image" "${OUTFLAG[@]}" "$src"
     cg_assert_image_provenance "$image" "$CG_PROVENANCE_REVISION" "$VERSION" "$PROV_MODE"
 }
 
