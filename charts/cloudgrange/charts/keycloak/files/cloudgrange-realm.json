@@ -11,10 +11,22 @@
   "bruteForceProtected": true,
   "roles": {
     "realm": [
-      { "name": "PlatformAdmin", "description": "Full platform administrator access" },
-      { "name": "OrgAdmin",      "description": "Organization administrator access" },
-      { "name": "OrgViewer",     "description": "Organization read-only access" },
-      { "name": "Auditor",       "description": "Audit log read access" }
+      {
+        "name": "PlatformAdmin",
+        "description": "Full platform administrator access"
+      },
+      {
+        "name": "OrgAdmin",
+        "description": "Organization administrator access"
+      },
+      {
+        "name": "OrgViewer",
+        "description": "Organization read-only access"
+      },
+      {
+        "name": "Auditor",
+        "description": "Audit log read access"
+      }
     ]
   },
   "clients": [
@@ -86,8 +98,17 @@
         "access.token.lifespan": "3600"
       },
       "protocol": "openid-connect",
-      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "basic", "email"],
-      "optionalClientScopes": ["offline_access"],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ],
       "protocolMappers": [
         {
           "name": "realm_roles",
@@ -126,6 +147,21 @@
         "post.logout.redirect.uris": "https://${CLOUDGRANGE_HOSTNAME}/*"
       },
       "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-cloudgrange-api",
+      "enabled": true,
+      "serviceAccountClientId": "cloudgrange-api",
+      "clientRoles": {
+        "realm-management": [
+          "manage-users",
+          "view-users",
+          "query-users",
+          "view-realm"
+        ]
+      }
     }
   ]
 }

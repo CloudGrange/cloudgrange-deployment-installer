@@ -261,7 +261,13 @@ jq -n \
       relayEnrollmentToken:     {value: $rt},
       realmAdminPassword:       {value: $rap},
       enableDefenderForCloud:   {value: $gov},
-      enablePolicyAssignments:  {value: $gov}
+      enablePolicyAssignments:  {value: $gov},
+      # The PgBouncer sidecar puts the API on localhost with SSL disabled and then makes
+      # PgBouncer responsible for the TLS hop to Azure Database for PostgreSQL, which
+      # enforces TLS. That hop has never been exercised on this path, and a pooler is not
+      # what a single-replica deployment needs. The API connects to the flexible server
+      # directly with SSL Mode=Require instead.
+      enablePgBouncer:          {value: false}
     }
   }' > "$PARAMS_FILE"
 

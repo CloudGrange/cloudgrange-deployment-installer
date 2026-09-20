@@ -1011,6 +1011,10 @@ resource relayIdentityStorage 'Microsoft.App/managedEnvironments/storages@2024-0
 var keycloakInternalFqdn = '${keycloakAppNameEffective}.internal.${caeDomain}'
 var apiInternalFqdn      = '${apiAppNameEffective}.internal.${caeDomain}'
 var portalPublicUrl      = empty(portalCustomDomain) ? 'https://${portalAppNameEffective}.${caeDomain}' : 'https://${portalCustomDomain}'
+// Computed rather than read back from apiApp.properties: the API app's own template needs
+// this value, and a resource cannot reference itself. An external Container App's FQDN is
+// always <app name>.<environment default domain>.
+var apiPublicUrl         = empty(apiCustomDomain) ? 'https://${apiAppNameEffective}.${caeDomain}' : 'https://${apiCustomDomain}'
 // Browsers and the CLI reach Keycloak through the portal origin, so that is the issuer the
 // realm must mint tokens for, and the authority the API must validate against.
 var keycloakPublicAuthority = '${portalPublicUrl}/realms/cloudgrange'
@@ -1187,7 +1191,16 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               // built-in relay finish enrolling instead of retrying 401 forever.
               { name: 'RELAY_ENROLLMENT_TOKEN',          secretRef: 'relay-enrollment-token' }
               { name: 'CLOUDGRANGE_PORTAL_URL',          value: portalPublicUrl }
-              { name: 'CLOUDGRANGE_API_INTERNAL_URL',    value: 'https://${apiInternalFqdn}' }
+              // Modules call the platform here. Same reasoning as RELAY_PAAS_URL: the
+              // external FQDN has a publicly trusted certificate, the internal one does not.
+              { name: 'CLOUDGRANGE_API_INTERNAL_URL',    value: apiPublicUrl }
+              // AB#9171 (E9) — the backchannel address for Keycloak's admin REST API and the
+              // client-credentials token request. It is deliberately NOT the authority:
+              // Keycloak__Authority must stay the PUBLIC issuer (the portal origin), because
+              // that is what Keycloak mints tokens for and what browsers and the CLI present.
+              // Admin calls cannot use it, because /admin is never published through the
+              // portal — only /realms/cloudgrange and the theme path are.
+              { name: 'Keycloak__InternalUrl',           value: 'http://${keycloakInternalFqdn}' }
             ], oidcPreseed ? oidcApiEnv : keycloakApiEnv)
             // AB#1667 — health probes (HIGH security/reliability finding)
             // Probe endpoints defined in design/observability/health-check-contract.md
@@ -1376,6 +1389,12 @@ resource keycloakApp 'Microsoft.App/containerApps@2024-03-01' = {
         external: false
         targetPort: 8080
         transport: 'auto'
+        // Container Apps ingress redirects plain HTTP to HTTPS unless this is set, and both
+        // callers here speak plain HTTP to Keycloak on purpose: the portal's nginx proxy and
+        // the API's backchannel admin calls. This is traffic inside one Container Apps
+        // environment that never leaves it, which is the same position the Helm chart takes
+        // when the API talks to the Keycloak Service over http inside the cluster.
+        allowInsecure: true
         traffic: [ { weight: 100, latestRevision: true } ]
       }
       registries: registries
@@ -1482,7 +1501,11 @@ resource relayApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: relayImage
           resources: { cpu: json(relayAppCpu), memory: relayAppMemory }
           env: [
-            { name: 'RELAY_PAAS_URL', value: 'https://${apiInternalFqdn}' }
+            // The API's EXTERNAL FQDN, not the internal one. The relay is a .NET client that
+            // validates the server certificate, and the environment's certificate does not
+            // cover the second-level *.internal.<domain> name. nginx (the portal) can ignore
+            // that; a .NET HttpClient cannot.
+            { name: 'RELAY_PAAS_URL', value: apiPublicUrl }
             { name: 'RELAY_ENROLLMENT_TOKEN', secretRef: 'relay-enrollment-token' }
             { name: 'RELAY_DISPLAY_NAME', value: 'site-relay' }
             { name: 'RELAY_LISTEN_PORT', value: string(relayPort) }
