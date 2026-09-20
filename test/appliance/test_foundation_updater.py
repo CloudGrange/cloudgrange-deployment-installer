@@ -122,6 +122,115 @@ class VersionRangeTests(unittest.TestCase):
             ok("1.30.0", "between 1.30 and 1.31")
 
 
+class PackageBucketTests(unittest.TestCase):
+    """AB#9171 — classify_packages is the whole fix, so it is tested directly: no apt, no network.
+
+    The bug: the Foundation card counted every upgradable Ubuntu package, but a Foundation release only
+    installs the set that release names. An admin saw a number (for example "9 non-security") that no
+    button could ever clear. Every package must land in exactly one bucket, with a reason.
+    """
+
+    def setUp(self):
+        self.m = load_module()
+
+    @staticmethod
+    def pkg(name, version, security=False, installed="1.0"):
+        return {"name": name, "version": version, "installedVersion": installed, "security": security}
+
+    def classify(self, packages, release, installed_version="F2609.1.0", unmanaged=()):
+        return self.m.classify_packages(packages, release, installed_version, unmanaged)
+
+    @staticmethod
+    def release(version="F2609.2.0", pins=None, security=False):
+        return {"version": version, "apt": {"packages": pins or {}, "securityUpdates": security}}
+
+    def test_every_package_lands_in_exactly_one_known_bucket(self):
+        packages = [self.pkg("openssl", "3.1", security=True), self.pkg("curl", "8.6"),
+                    self.pkg("nginx", "1.24"), self.pkg("acme-agent", "2.0")]
+        entries, counts = self.classify(packages, self.release(pins={"curl": "8.6"}, security=True),
+                                        unmanaged=("acme-*",))
+        self.assertEqual([e["name"] for e in entries], [p["name"] for p in packages])
+        for entry in entries:
+            self.assertIn(entry["bucket"], self.m.BUCKETS)
+            self.assertTrue(entry["reason"].strip(), "every bucket must carry a reason an admin can read")
+        self.assertEqual(counts["total"], 4)
+        self.assertEqual(counts["included"] + counts["pending"] + counts["unmanaged"], counts["total"])
+
+    def test_pinned_at_the_candidate_version_is_included(self):
+        entries, counts = self.classify([self.pkg("curl", "8.6")], self.release(pins={"curl": "8.6"}))
+        self.assertEqual(entries[0]["bucket"], "included")
+        self.assertEqual(entries[0]["releaseVersion"], "8.6")
+        self.assertIn("Foundation F2609.2.0 installs curl 8.6", entries[0]["reason"])
+        self.assertEqual(counts["included"], 1)
+
+    def test_pinned_below_the_candidate_is_pending_and_says_both_versions(self):
+        # The release installs 8.5, the host offers 8.6: after the apply the package is STILL upgradable,
+        # so "included" would be a lie. It is pending, and the reason names both versions.
+        entries, _ = self.classify([self.pkg("curl", "8.6")], self.release(pins={"curl": "8.5"}))
+        self.assertEqual(entries[0]["bucket"], "pending")
+        self.assertIn("pins curl 8.5", entries[0]["reason"])
+        self.assertIn("8.6", entries[0]["reason"])
+        self.assertIn("future Foundation release", entries[0]["reason"])
+
+    def test_security_updates_flag_includes_every_security_package_only(self):
+        entries, counts = self.classify([self.pkg("openssl", "3.1", security=True), self.pkg("nginx", "1.24")],
+                                        self.release(security=True))
+        self.assertEqual([e["bucket"] for e in entries], ["included", "pending"])
+        self.assertEqual((counts["security"], counts["includedSecurity"]), (1, 1))
+
+    def test_security_package_is_pending_when_the_release_does_not_take_security_updates(self):
+        entries, _ = self.classify([self.pkg("openssl", "3.1", security=True)], self.release(security=False))
+        self.assertEqual(entries[0]["bucket"], "pending")
+
+    def test_no_release_published_puts_everything_in_pending_and_says_so(self):
+        entries, counts = self.classify([self.pkg("curl", "8.6")], None)
+        self.assertEqual(entries[0]["bucket"], "pending")
+        self.assertIn("No Foundation release has been published", entries[0]["reason"])
+        self.assertEqual(counts["pending"], 1)
+
+    def test_the_newest_release_already_installed_covers_nothing(self):
+        # There is no Apply button in this state, so calling anything "included" would be a dead end.
+        entries, _ = self.classify([self.pkg("curl", "8.6")],
+                                   self.release(version="F2609.1.0", pins={"curl": "8.6"}, security=True),
+                                   installed_version="F2609.1.0")
+        self.assertEqual(entries[0]["bucket"], "pending")
+        self.assertIn("already installed", entries[0]["reason"])
+
+    def test_unmanaged_globs_win_over_everything_else(self):
+        entries, counts = self.classify([self.pkg("acme-agent", "2.0", security=True)],
+                                        self.release(pins={"acme-agent": "2.0"}, security=True),
+                                        unmanaged=("acme-*",))
+        self.assertEqual(entries[0]["bucket"], "unmanaged")
+        self.assertIn("not managed by CloudGrange", entries[0]["reason"])
+        self.assertEqual(counts["unmanaged"], 1)
+
+    def test_malformed_channel_apt_metadata_is_dropped_not_trusted(self):
+        bad = {"version": "F2609.2.0",
+               "apt": {"packages": {"Curl; rm -rf /": "8.6", "curl": "8.6"}, "securityUpdates": True}}
+        pins, security = self.m.release_apt(bad)
+        self.assertEqual(pins, {"curl": "8.6"})
+        self.assertTrue(security)
+        self.assertEqual(self.m.release_apt({"version": "x", "apt": "nonsense"}), ({}, False))
+        self.assertEqual(self.m.release_apt(None), ({}, False))
+
+    def test_summary_never_shows_a_bare_count(self):
+        _entries, counts = self.classify([self.pkg("openssl", "3.1", security=True), self.pkg("nginx", "1.24")],
+                                         self.release(security=True))
+        summary = self.m.packages_summary(counts, "F2609.2.0")
+        self.assertIn("1 included in Foundation F2609.2.0", summary)
+        self.assertIn("1 awaiting a future Foundation release", summary)
+        self.assertIn("0 not managed by CloudGrange", summary)
+        self.assertEqual(self.m.packages_summary({"total": 0}, "F2609.2.0"), "No OS package updates are available.")
+
+    def test_unmanaged_patterns_are_read_from_the_host_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "foundation-unmanaged.conf")
+            self.assertEqual(self.m.read_unmanaged_patterns(path), ())
+            with open(path, "w") as f:
+                f.write("# operator's own agents\nacme-*\n\n  splunkforwarder  \n")
+            self.assertEqual(self.m.read_unmanaged_patterns(path), ("acme-*", "splunkforwarder"))
+
+
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -339,16 +448,57 @@ class FoundationUpdaterTests(unittest.TestCase):
         self.assertEqual(self.job(rid)["state"], "idle")
         self.assertEqual(status["osUpdatesAvailable"], 3)
         self.assertIsInstance(status["osUpdatesAvailable"], int)
-        self.assertIn("2 of them security", status["message"])
+        # AB#9171: the message is bucketed, never a bare count. No release here names any apt package,
+        # so all three are "awaiting a future Foundation release" and the card can say why.
+        self.assertIn("3 OS package update(s) available", status["message"])
+        self.assertIn("0 included in Foundation F2609.10.0", status["message"])
+        self.assertIn("3 awaiting a future Foundation release", status["message"])
+        self.assertIn("2 security in total", status["message"])
         self.assertTrue(status["rebootRequired"])
         self.assertEqual((status["availableVersion"], status["targetK3sVersion"]), ("F2609.10.0", NEXT_MINOR_K3S))
         self.assertIn("apt-get update", self.calls())
         self.assertNotIn("apt-get install", self.calls(), "a check never installs anything")
-        # Plan §5: the Foundation card lists the exact packages before an admin confirms.
+        # Plan §5: the Foundation card lists the exact packages before an admin confirms. AB#9171: with
+        # a bucket and a plain-words reason for each, and counts that add up.
         with open(os.path.join(self.shared, "status", "foundation-packages.json")) as f:
-            listed = json.load(f)["packages"]
-        self.assertIn({"name": "openssl", "version": "3.0.13-0ubuntu3.6", "security": True}, listed)
+            doc = json.load(f)
+        listed = doc["packages"]
+        self.assertEqual(doc["schema"], "cg-foundation-packages-v1")
+        self.assertEqual(doc["foundationVersion"], "F2609.10.0")
         self.assertEqual(len(listed), 3)
+        openssl = next(p for p in listed if p["name"] == "openssl")
+        self.assertEqual(openssl["version"], "3.0.13-0ubuntu3.6")
+        self.assertEqual(openssl["installedVersion"], "3.0.13-0ubuntu3.5")
+        self.assertTrue(openssl["security"])
+        self.assertEqual(openssl["bucket"], "pending")
+        self.assertIn("future Foundation release", openssl["reason"])
+        self.assertEqual(doc["counts"], {"included": 0, "pending": 3, "unmanaged": 0, "total": 3,
+                                         "security": 2, "includedSecurity": 0})
+        self.assertEqual(sum(doc["counts"][b] for b in ("included", "pending", "unmanaged")), len(listed))
+        self.assertEqual(doc["summary"], status["message"].split(";")[0].strip())
+
+    def test_check_buckets_packages_the_available_release_installs(self):
+        # AB#9171 (the bug): the card counted every upgradable package, but a Foundation release only
+        # installs the set it names. Here F2609.3.0 takes all security updates and pins curl, so only
+        # "nginx" is left for a future release — and the card can say exactly that.
+        self.write(os.path.join(self.fake, "upgradable"),
+                   "openssl/noble-updates,noble-security 3.0.13-0ubuntu3.6 amd64 [upgradable from: 3.0.13-0ubuntu3.5]\n"
+                   "curl/noble-updates 8.5.0-2ubuntu10.7 amd64 [upgradable from: 8.5.0-2ubuntu10.6]\n"
+                   "nginx/noble-updates 1.24.0-2ubuntu7.3 amd64 [upgradable from: 1.24.0-2ubuntu7.1]\n")
+        self.write(os.path.join(self.www, "channel.json"), json.dumps({"releases": [
+            {"version": "F2609.3.0", "k3sVersion": OLD_K3S, "bundleUrl": "https://example.invalid/a.zip",
+             "sha256": "a" * 64,
+             "apt": {"packages": {"curl": "8.5.0-2ubuntu10.7"}, "securityUpdates": True}}]}))
+        self.request({"action": "foundation-check"})
+        status = self.run_updater(CLOUDGRANGE_FOUNDATION_CHANNEL_URL=self.server.base + "/channel.json")
+        with open(os.path.join(self.shared, "status", "foundation-packages.json")) as f:
+            doc = json.load(f)
+        buckets = {p["name"]: p["bucket"] for p in doc["packages"]}
+        self.assertEqual(buckets, {"openssl": "included", "curl": "included", "nginx": "pending"})
+        self.assertEqual(doc["counts"]["included"], 2)
+        self.assertEqual(doc["counts"]["pending"], 1)
+        self.assertIn("2 included in Foundation F2609.3.0", status["message"])
+        self.assertIn("1 awaiting a future Foundation release", status["message"])
 
     def test_check_reports_that_the_offered_release_restarts_the_host(self):
         # AB#9171 (live): a release with requiresReboot, on a host with no reboot pending and no kernel
@@ -407,6 +557,27 @@ class FoundationUpdaterTests(unittest.TestCase):
         self.assertTrue(install.endswith(" openssl"), install)
         self.assertNotIn("curl", install)
         self.assertEqual(self.running_k3s(), OLD_K3S)
+
+    def test_apply_leaves_unmanaged_packages_alone_even_when_the_release_would_take_them(self):
+        # AB#9171: the card puts these in the "not managed by CloudGrange" bucket and tells the admin no
+        # Foundation release changes them. The apply has to honour that or the card is lying — so both a
+        # security sweep and an explicit manifest pin must skip an excluded package.
+        self.write(os.path.join(self.host, "etc/cloudgrange/foundation-unmanaged.conf"),
+                   "# the operator's own agents\nacme-*\nsplunkforwarder\n")
+        self.write(os.path.join(self.fake, "upgradable"),
+                   "openssl/noble-updates,noble-security 3.0.13-0ubuntu3.6 amd64 [upgradable from: 3.0.13-0ubuntu3.5]\n"
+                   "acme-agent/noble-updates,noble-security 2.0 amd64 [upgradable from: 1.9]\n"
+                   "splunkforwarder/noble-updates 9.2.1 amd64 [upgradable from: 9.2.0]\n")
+        rid = self.apply(self.release(k3s=None, security=True, packages={"splunkforwarder": "9.2.1"}))
+        self.run_updater()
+        job = self.job(rid)
+        self.assertEqual(job["state"], "succeeded", job["message"])
+        install = next(l for l in self.calls().splitlines() if l.startswith("apt-get install"))
+        self.assertIn("openssl", install)
+        self.assertNotIn("acme-agent", install, "a security sweep must not touch an unmanaged package")
+        self.assertNotIn("splunkforwarder", install, "not even an explicit manifest pin overrides the operator")
+        self.assertIn("not managed by CloudGrange", job["message"])
+        self.assertIn("acme-agent", job["message"])
 
     def test_base64_cosign_style_signature_is_accepted(self):
         rid = self.apply(self.release(b64=True))

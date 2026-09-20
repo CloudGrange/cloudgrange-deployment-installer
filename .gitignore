@@ -5,3 +5,7 @@ compose/.env
 # Claude Code local settings (logs and machine-local overrides only)
 .claude/logs/
 .claude/settings.local.json
+
+# Python bytecode caches: test runs (some as root) were committing these by accident.
+__pycache__/
+*.py[cod]
