@@ -390,6 +390,18 @@ func cafName(typeAbbrValue string, workloadValue string, envValue string, region
 func cafNameWithRole(typeAbbrValue string, workloadValue string, roleValue string, envValue string, regionValue string, instanceValue string) string =>
   '${typeAbbrValue}-${workloadValue}-${roleValue}-${envValue}-${regionValue}-${instanceValue}'
 
+// AB#9171 (E9) — a Container App name must END in an alphanumeric character. Clamping a CAF name
+// to the 32-char limit can cut it on a hyphen, and whether it does depends on how long the region
+// code is, so the identical template deploys in one region and is refused in another. Drop up to
+// two trailing hyphens after a clamp. A name that already fits is returned unchanged, so this
+// never renames an app in an existing deployment.
+func trimTrailingHyphens(value string) string =>
+  endsWith(value, '-')
+    ? (endsWith(substring(value, 0, length(value) - 1), '-')
+        ? substring(value, 0, length(value) - 2)
+        : substring(value, 0, length(value) - 1))
+    : value
+
 // Length-constrained pattern for Key Vault (24 chars max, alphanumeric+hyphen).
 // Drop hyphens and append the 6-char hash for global uniqueness.
 func cafNameLengthConstrained(typeAbbrValue string, workloadValue string, envValue string, regionValue string, instanceValue string, hashValue string) string =>
@@ -407,8 +419,17 @@ var apiAppNameEffective = empty(apiAppName) ? cafNameWithRole(typeAbbr.container
 // AB#1669 — ACA name limit is 32 chars. 'portal' role makes the name 33 chars for common
 // workload='cloudgrange' deployments. Clamp to 32 by substring. API uses 'api' (3 chars) and
 // fits in 30; portal uses 'portal' (6 chars) and would be 33 — trim to 32.
+// AB#9171 (E9) — clamping to 32 is not enough on its own: a Container App name must also END in
+// an alphanumeric. Whether the 32nd character happens to be a hyphen depends on the region code's
+// length, so the same template deploys in one region and is refused in another. With
+// workload='cloudgrange' the portal name is 34 in eastus (regionCode 'eus') and clamps to
+// '…-prod-eus-0', which Azure accepts, but 35 in westus3 ('wus3') and clamps to '…-test-wus3-',
+// which fails the whole deployment with ContainerAppInvalidName after everything else is built.
+// _trimTrailingHyphens drops up to two trailing hyphens after the clamp. Names that already fit
+// are untouched, so this does not rename anything in an existing deployment.
 var _portalAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'portal', environment, regionCode, instance)
-var portalAppNameEffective = empty(portalAppName) ? (length(_portalAppNameRaw) > 32 ? substring(_portalAppNameRaw, 0, 32) : _portalAppNameRaw) : portalAppName
+var _portalAppName32 = length(_portalAppNameRaw) > 32 ? substring(_portalAppNameRaw, 0, 32) : _portalAppNameRaw
+var portalAppNameEffective = empty(portalAppName) ? trimTrailingHyphens(_portalAppName32) : portalAppName
 
 // AB#9171 (E9) — same 32-char Container App clamp for the two new apps. 'keycloak' (8) and
 // 'relay' (5) both overflow for workload='cloudgrange', so both go through the same trim the
@@ -416,9 +437,11 @@ var portalAppNameEffective = empty(portalAppName) ? (length(_portalAppNameRaw) >
 // provider only validates it on create (ContainerAppInvalidName), which is why this is clamped
 // here rather than left to be discovered on the real deploy.
 var _keycloakAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'kc', environment, regionCode, instance)
-var keycloakAppNameEffective = empty(keycloakAppName) ? (length(_keycloakAppNameRaw) > 32 ? substring(_keycloakAppNameRaw, 0, 32) : _keycloakAppNameRaw) : keycloakAppName
+var _keycloakAppName32 = length(_keycloakAppNameRaw) > 32 ? substring(_keycloakAppNameRaw, 0, 32) : _keycloakAppNameRaw
+var keycloakAppNameEffective = empty(keycloakAppName) ? trimTrailingHyphens(_keycloakAppName32) : keycloakAppName
 var _relayAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'relay', environment, regionCode, instance)
-var relayAppNameEffective = empty(relayAppName) ? (length(_relayAppNameRaw) > 32 ? substring(_relayAppNameRaw, 0, 32) : _relayAppNameRaw) : relayAppName
+var _relayAppName32 = length(_relayAppNameRaw) > 32 ? substring(_relayAppNameRaw, 0, 32) : _relayAppNameRaw
+var relayAppNameEffective = empty(relayAppName) ? trimTrailingHyphens(_relayAppName32) : relayAppName
 // Storage account names are 3-24 chars, lowercase alphanumeric only, and globally unique.
 var _storageNameRaw = toLower('st${workloadShort}${environment}${regionCode}${instance}${rgHash}')
 var storageAccountNameEffective = empty(storageAccountName) ? (length(_storageNameRaw) > 24 ? substring(_storageNameRaw, 0, 24) : _storageNameRaw) : storageAccountName
