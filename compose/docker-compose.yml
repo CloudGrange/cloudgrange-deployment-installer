@@ -80,6 +80,18 @@ services:
       - Keycloak__ClientId=${CLOUDGRANGE_KEYCLOAK_CLIENT_ID:-cloudgrange-api}
       - Keycloak__ClientSecret=${KEYCLOAK_API_CLIENT_SECRET}
       - Keycloak__RequireHttpsMetadata=false
+      # AB#9171: the browser-facing origin the realm's redirect URIs, web origins and root URL must
+      # name. Keycloak's `start --import-realm` imports the realm ONCE, so those values stay frozen
+      # at the hostname of the first `docker compose up` — change CLOUDGRANGE_HOSTNAME afterwards
+      # and every sign-in fails with "Invalid parameter: redirect_uri" behind an opaque portal 500,
+      # because the re-import is skipped. The API reconciles the realm's clients against this value
+      # on every start. Deliberately NOT CLOUDGRANGE_PORTAL_URL above: that is the in-network
+      # address, which no browser can reach.
+      - Keycloak__PublicOrigin=https://${CLOUDGRANGE_HOSTNAME:-localhost}
+      # Fallback credential, for a realm whose cloudgrange-api service account was imported before
+      # it was granted realm-management manage-clients. Normally unused.
+      - Keycloak__AdminUsername=${KEYCLOAK_ADMIN_USER}
+      - Keycloak__AdminPassword=${KEYCLOAK_ADMIN_PASSWORD}
       # AB#8129: in-app updates (Platform administration -> Updates).
       - CLOUDGRANGE_IMAGE_TAG=${CLOUDGRANGE_VERSION:-latest}
       - CLOUDGRANGE_UPDATES_DIR=/var/lib/cloudgrange/updates
