@@ -558,6 +558,27 @@ class FoundationUpdaterTests(unittest.TestCase):
         self.assertNotIn("curl", install)
         self.assertEqual(self.running_k3s(), OLD_K3S)
 
+    def test_apply_leaves_unmanaged_packages_alone_even_when_the_release_would_take_them(self):
+        # AB#9171: the card puts these in the "not managed by CloudGrange" bucket and tells the admin no
+        # Foundation release changes them. The apply has to honour that or the card is lying — so both a
+        # security sweep and an explicit manifest pin must skip an excluded package.
+        self.write(os.path.join(self.host, "etc/cloudgrange/foundation-unmanaged.conf"),
+                   "# the operator's own agents\nacme-*\nsplunkforwarder\n")
+        self.write(os.path.join(self.fake, "upgradable"),
+                   "openssl/noble-updates,noble-security 3.0.13-0ubuntu3.6 amd64 [upgradable from: 3.0.13-0ubuntu3.5]\n"
+                   "acme-agent/noble-updates,noble-security 2.0 amd64 [upgradable from: 1.9]\n"
+                   "splunkforwarder/noble-updates 9.2.1 amd64 [upgradable from: 9.2.0]\n")
+        rid = self.apply(self.release(k3s=None, security=True, packages={"splunkforwarder": "9.2.1"}))
+        self.run_updater()
+        job = self.job(rid)
+        self.assertEqual(job["state"], "succeeded", job["message"])
+        install = next(l for l in self.calls().splitlines() if l.startswith("apt-get install"))
+        self.assertIn("openssl", install)
+        self.assertNotIn("acme-agent", install, "a security sweep must not touch an unmanaged package")
+        self.assertNotIn("splunkforwarder", install, "not even an explicit manifest pin overrides the operator")
+        self.assertIn("not managed by CloudGrange", job["message"])
+        self.assertIn("acme-agent", job["message"])
+
     def test_base64_cosign_style_signature_is_accepted(self):
         rid = self.apply(self.release(b64=True))
         self.run_updater()

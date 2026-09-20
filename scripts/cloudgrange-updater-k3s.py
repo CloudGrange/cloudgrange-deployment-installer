@@ -285,6 +285,11 @@ def read_unmanaged_patterns(path=UNMANAGED_FILE):
     return tuple(line.strip() for line in lines if line.strip() and not line.strip().startswith("#"))
 
 
+def matches_any(name, patterns):
+    """True when the package name matches one of the operator's unmanaged globs."""
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+
+
 def classify_packages(packages, release, installed_version=None, unmanaged_patterns=()):
     """Put every upgradable package in exactly one bucket. Pure: no apt, no network, no files.
 
@@ -301,7 +306,7 @@ def classify_packages(packages, release, installed_version=None, unmanaged_patte
         name = str(package.get("name") or "")
         candidate = package.get("version")
         security = bool(package.get("security"))
-        if any(fnmatch.fnmatchcase(name, pattern) for pattern in unmanaged_patterns):
+        if matches_any(name, unmanaged_patterns):
             bucket = "unmanaged"
             reason = ("%s is not managed by CloudGrange on this foundation (it matches %s). No Foundation "
                       "release changes it; update it the way you update the rest of this host."
@@ -658,12 +663,14 @@ class FoundationUpdater:
         # the card never shows a count no button can clear. Done here, on the host, because only the host
         # knows what apt offers; the API and the portal only display it.
         entries, counts = classify_packages(packages, latest, self.installed_version(),
-                                            read_unmanaged_patterns(os.path.join(
-                                                self.host_root, UNMANAGED_FILE.lstrip("/"))))
+                                            self.unmanaged_patterns())
         facts["packages"] = entries
         facts["packageCounts"] = counts
-        facts["packageFoundationVersion"] = (latest or {}).get("version")
-        notes.insert(0, packages_summary(counts, (latest or {}).get("version")))
+        # Only name a release the admin could actually apply. The newest release already being installed
+        # would otherwise read "0 included in Foundation <installed>" against a button that is not there.
+        offered = (latest or {}).get("version")
+        facts["packageFoundationVersion"] = offered if offered != self.installed_version() else None
+        notes.insert(0, packages_summary(counts, facts["packageFoundationVersion"]))
         if latest:
             facts["availableVersion"] = latest["version"]
             # AB#9171: whether APPLYING this release restarts the host (the release says so, or a kernel-class
@@ -876,13 +883,31 @@ class FoundationUpdater:
                               % (manifest["version"], platform_range, platform_version))
 
     def planned_packages(self, manifest):
+        """What this apply will install, and what it will skip because the operator excluded it.
+
+        AB#9171: the card tells the admin that packages in the "not managed by CloudGrange" bucket are
+        never changed by a Foundation release. An apply has to honour that, or the promise is a lie —
+        so the exclusions are applied HERE too, not only in the display path. They are applied to the
+        manifest's pins as well: if the operator says a package is theirs, a release does not take it.
+        """
         apt = manifest.get("apt") or {}
-        pins = dict(apt.get("packages") or {})
+        excluded = self.unmanaged_patterns()
+        skipped = [name for name in (apt.get("packages") or {}) if matches_any(name, excluded)]
+        pins = {name: ver for name, ver in (apt.get("packages") or {}).items() if name not in skipped}
         security = []
         if apt.get("securityUpdates"):
             self.apt_refresh()
-            security = [(name, ver) for name, ver, sec in self.apt_upgradable() if sec and name not in pins]
-        return pins, security
+            for name, ver, sec in self.apt_upgradable():
+                if not sec or name in pins:
+                    continue
+                if matches_any(name, excluded):
+                    skipped.append(name)
+                else:
+                    security.append((name, ver))
+        return pins, security, sorted(set(skipped))
+
+    def unmanaged_patterns(self):
+        return read_unmanaged_patterns(os.path.join(self.host_root, UNMANAGED_FILE.lstrip("/")))
 
     def reboot_needed(self, manifest, pins, security):
         if manifest.get("requiresReboot") or self.reboot_required():
@@ -1001,7 +1026,7 @@ class FoundationUpdater:
             self.facts()["targetK3sVersion"] = (k3s or {}).get("version")
             self.compatibility_gate(req, manifest)
 
-            pins, security = self.planned_packages(manifest)
+            pins, security, excluded = self.planned_packages(manifest)
             needs_reboot = self.reboot_needed(manifest, pins, security)
             if needs_reboot and req.get("confirmReboot") is not True:
                 raise UpdateError("Foundation %s needs the host to reboot; nothing was changed. Confirm the reboot "
@@ -1070,6 +1095,11 @@ class FoundationUpdater:
             self.write_installed_version(manifest["version"])
             self.facts()["availableVersion"] = self.facts().get("availableVersion") or manifest["version"]
             message = "Foundation %s applied: %s" % (manifest["version"], ", ".join(applied) or "nothing to change")
+            if excluded:
+                # AB#9171: the card puts these in the "not managed by CloudGrange" bucket and promises no
+                # release changes them. Say plainly that the apply kept that promise.
+                message += ("; %d package(s) left alone as not managed by CloudGrange (%s): %s"
+                            % (len(excluded), UNMANAGED_FILE, ", ".join(excluded[:10])))
             if (needs_reboot or self.reboot_required()) and req.get("confirmReboot") is True:
                 job["reboot"] = True
                 message += "; the host reboots in %d seconds as confirmed" % self.reboot_delay
