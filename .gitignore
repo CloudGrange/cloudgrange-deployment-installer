@@ -6,7 +6,8 @@ compose/.env
 .claude/logs/
 .claude/settings.local.json
 
-# Python bytecode caches. The merge gate runs the python suites in-tree, so these appear
-# on every run; two branches that both ran the gate then conflict on binary .pyc files.
+# Python bytecode caches: the merge gate runs the python suites in-tree (some as root), so
+# these appear on every run and were being committed by accident; two branches that both ran
+# the gate then conflict on binary .pyc files.
 __pycache__/
 *.py[cod]
