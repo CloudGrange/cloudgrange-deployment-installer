@@ -5,7 +5,8 @@
 # AB#9171 — the chart must install and upgrade with Helm 3 AND Helm 4, with chart defaults, on a
 # cluster CloudGrange did not build (BYO). A real `helm install --wait` with Helm v4.2.1 hung until
 # its timeout: Helm 4 waits for hook resources to become Current, and a hook PVC on a
-# WaitForFirstConsumer StorageClass never does. This gate installs and then upgrades (--reuse-values)
+# WaitForFirstConsumer StorageClass never does. This gate installs and then upgrades (--reset-then-reuse-values,
+# the flag the in-cluster updater uses)
 # the chart on a throwaway kind cluster under each Helm binary it is given, and fails unless every
 # run reaches STATUS: deployed with all pods Ready.
 #
@@ -27,7 +28,7 @@ for H in "${BINS[@]}"; do
     kubectl create namespace cloudgrange >/dev/null
     for step in install upgrade; do
         args=(install cloudgrange "$CHART" -n cloudgrange --set global.hostname=cg.matrix.local)
-        [ $step = upgrade ] && args=(upgrade cloudgrange "$CHART" -n cloudgrange --reuse-values)
+        [ $step = upgrade ] && args=(upgrade cloudgrange "$CHART" -n cloudgrange --reset-then-reuse-values)
         start=$(date +%s)
         if timeout 1200 "$H" "${args[@]}" --wait --timeout 15m > "$W/$n-$step.log" 2>&1 \
            && grep -q "STATUS: deployed" "$W/$n-$step.log" \

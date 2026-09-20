@@ -149,7 +149,7 @@ foundation:
 # AB#9171 (plan §3/§4, E1) — the in-cluster Platform updater. A Platform update (this chart's
 # version, its images, the schema) runs as a Kubernetes Job the API creates on an admin's request,
 # so it works the same on every delivery path: K3s, BYO Kubernetes and AKS. The Job verifies the
-# release manifest (HTTPS + the channel's SHA-256 + @sha256 image digests), backs up the database, runs `helm upgrade --reuse-values` to the pinned
+# release manifest (HTTPS + the channel's SHA-256 + @sha256 image digests), backs up the database, runs `helm upgrade --reset-then-reuse-values` to the pinned
 # versions, runs the health gate, and on failure runs `helm rollback` and restores the database.
 # Image source: images/platform-updater/. The chart renders only its ServiceAccount, RBAC, backup
 # volume and status ConfigMap; the API creates the Job (images/platform-updater/job.example.yaml).

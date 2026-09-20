@@ -1,14 +1,29 @@
 {{- /* AB#9179: replaces the install-time OpenSSL self-signed cert generation
 (New-SelfSignedCert.ps1 / Install-CloudGrange-Linux.sh) with cert-manager. Default issuer
 is self-signed, matching today's behavior exactly — customers upgrade to ACME/Let's
-Encrypt or their own CA by pointing Values.certManager.issuer at a different ClusterIssuer,
+Encrypt or their own CA by pointing Values.certManager.issuerRef at a different issuer,
 without any chart changes. */ -}}
 {{- /* AB#9171: and only when the cluster serves cert-manager.io/v1 — otherwise the install fails outright. */ -}}
 {{- if and .Values.certManager.installOperator (.Capabilities.APIVersions.Has "cert-manager.io/v1") }}
 {{- $issuer := .Values.certManager.issuerRef | default dict }}
 {{- if not $issuer.name }}
+{{- /* AB#9171 (BYO in-app updates): the default self-signed issuer is a NAMESPACED Issuer, not a
+ClusterIssuer. It is used by exactly one Certificate in this namespace, so it never needed cluster
+scope — and cluster scope broke in-app updates. The in-cluster Platform updater is namespace-scoped
+by design (§4); it cannot create a cluster-scoped object, and it cannot grant itself the right to,
+because granting RBAC requires holding what you grant. A release that had no ClusterIssuer yet (for
+example: installed with installOperator=true before cert-manager was in the cluster, so the
+Capabilities guard above skipped it) therefore failed EVERY in-app update with
+
+    clusterissuers.cert-manager.io is forbidden: User "system:serviceaccount:<ns>:<release>-platform-updater"
+    cannot create resource "clusterissuers" ... at the cluster scope
+
+and auto-rolled back. Reproduced on kind v1.34 and fixed here by staying in the namespace.
+A release that already has the cluster-scoped <release>-selfsigned ClusterIssuer replaces it with
+this Issuer on the next upgrade: the updater's ClusterRole grants delete on that exact name
+(templates/platform-updater.yaml), so that migration stays inside the rights it already has. */}}
 apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
+kind: Issuer
 metadata:
   name: {{ .Release.Name }}-selfsigned
 spec:
@@ -23,12 +38,14 @@ spec:
   secretName: {{ .Release.Name }}-tls
   issuerRef:
     {{- if $issuer.name }}
-    # AB#9171: the customer's own issuer (certManager.issuerRef).
+    # AB#9171: the customer's own issuer (certManager.issuerRef). kind defaults to ClusterIssuer
+    # because that is what a cluster-wide ACME or corporate-CA issuer usually is; set
+    # certManager.issuerRef.kind=Issuer for one in this namespace.
     name: {{ $issuer.name | quote }}
     kind: {{ $issuer.kind | default "ClusterIssuer" | quote }}
     {{- else }}
     name: {{ .Release.Name }}-selfsigned
-    kind: ClusterIssuer
+    kind: Issuer
     {{- end }}
   {{- /* AB#9171: an IP-address hostname (Install-CloudGrange.ps1's default: the VM's IP) must be an
   IP SAN. As a DNS SAN, TLS clients that check the name properly (the cg CLI, curl, browsers) reject
