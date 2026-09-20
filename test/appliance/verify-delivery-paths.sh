@@ -90,7 +90,8 @@ registry_check "VHDX / Windows / Linux (online)"  off -f charts/cloudgrange/valu
 registry_check "VHDX / Windows / Linux (offline)" on  -f charts/cloudgrange/values-single-node.yaml --set airgap.registry.enabled=true
 registry_check "AKS"                              off -f charts/cloudgrange/values-azure.yaml --set global.aks.keyVaultName=kv --set global.aks.tenantId=t --set global.aks.managedIdentityClientId=c
 
-# AB#9171 regression: an in-app Platform update runs the INSTALLED updater, which upgrades with --reuse-values, so
+# AB#9171 regression: an in-app Platform update runs the INSTALLED updater. Updaters up to and including
+# 2609.0.0-preview.26 upgrade with --reuse-values (newer ones use --reset-then-reuse-values), so
 # Helm renders the new chart with the OLD release's values and none of this chart's new top-level defaults. On a
 # release from before E7 there is no airgap key at all; the chart must still render (with the registry off). A
 # values file with `airgap: null` removes the key the same way. Live failure this guards: AKS and BYO .16 -> .19
