@@ -84,9 +84,18 @@ param postgresAdminUser string = 'cloudgrange'
 param postgresAdminPassword string
 
 // ---- SKU + sizing (ADR-048 parameter surface) ----
-param postgresSkuName string = 'Standard_B1ms'
+// AB#9171 (E9): General Purpose, not Burstable. This is a correctness constraint, not a
+// sizing preference. Before every in-app Platform update the API takes an ON-DEMAND backup of
+// this server, and refuses the update if it cannot — and Azure does not support on-demand
+// backup on the Burstable compute tier at all
+// (learn.microsoft.com/azure/postgresql/backup-restore/concepts-backup-restore#on-demand-backups).
+// A Burstable server therefore produces a delivery path whose in-app updates can never run.
+// Standard_D2ds_v4 is the smallest General Purpose SKU. Burstable remains selectable for a
+// deployment that knowingly gives up in-app updates.
+// Note also Azure's limit of seven on-demand backups per server: an admin deletes older ones.
+param postgresSkuName string = 'Standard_D2ds_v4'
 @allowed([ 'Burstable', 'GeneralPurpose', 'MemoryOptimized' ])
-param postgresSkuTier string = 'Burstable'
+param postgresSkuTier string = 'GeneralPurpose'
 @minValue(32)
 param postgresStorageGB int = 32
 param postgresVersion string = '16'
@@ -128,8 +137,12 @@ param logAnalyticsDailyCapGB int = 1
 
 param apiAppCpu string = '0.5'
 param apiAppMemory string = '1Gi'
+// AB#9171 (E9): the default is 1, not 0. Scale-to-zero is wrong for this product in every
+// environment, not just production: the API hosts the SignalR hub the portal's Platform
+// Health card stays connected to, and the built-in relay holds a long-lived connection to it.
+// A scaled-to-zero API drops both, and the first request of the day waits behind a cold start.
 @minValue(0)
-param apiAppMinReplicas int = 0
+param apiAppMinReplicas int = 1
 @minValue(1)
 param apiAppMaxReplicas int = 3
 param apiAppTargetPort int = 8080
@@ -148,10 +161,15 @@ param apiAppRevisionsMode string = 'Single'
 param portalAppCpu string = '0.25'
 param portalAppMemory string = '0.5Gi'
 @minValue(0)
-param portalAppMinReplicas int = 0
+param portalAppMinReplicas int = 1
 @minValue(1)
 param portalAppMaxReplicas int = 2
-param portalAppTargetPort int = 80
+// AB#9171 (E9): 8080, not 80. The portal image runs nginx as a NON-ROOT user, which cannot
+// bind a privileged port, so its server block listens on 8080 (portal docker/nginx.conf).
+// The template still said 80, so every readiness probe failed, the revision was marked
+// Unhealthy and the portal answered nothing at all. Found by deploying for real — a what-if
+// pass cannot see inside the image.
+param portalAppTargetPort int = 8080
 
 @description('Portal ACA scale-out threshold: concurrent HTTP requests per replica.')
 param portalAppScaleThreshold int = 50
@@ -226,6 +244,106 @@ param portalCustomDomain string = ''
 @description('Optional custom domain for the API. Empty = use default *.azurecontainerapps.io HTTPS.')
 param apiCustomDomain string = ''
 
+// =============================================================================
+// AB#9171 (E9) — Azure Container Apps as a REAL CloudGrange delivery path.
+//
+// Until now this template deployed two apps (API + portal) and pre-seeded Entra as the
+// only identity provider. The product that actually ships on every other path (K3s
+// appliance, Windows script, Linux script, BYO Kubernetes, AKS, Azure VM) is the Helm
+// chart's seven-component stack, whose identity tier is Keycloak with the `cloudgrange`
+// realm, and whose built-in relay is what makes cluster registration and job dispatch
+// work at all. An ACA deployment without those is not the same product, so first-run
+// setup, SSO, `cg auth login` and cluster registration could never have worked here.
+//
+// The three additions below close that: a Keycloak Container App (internal ingress; the
+// portal proxies /realms/cloudgrange and the Keycloak theme assets to it, exactly as
+// the chart's Traefik Ingress does, so auth lives on ONE origin on every path), a relay
+// Container App, and Azure Files persistence for the two directories that must survive a
+// revision roll (the API's data-protection keys and the relay's enrolment identity).
+//
+// Foundation updates deliberately do NOT apply here: Azure owns the host and the
+// Kubernetes-equivalent layer, so CLOUDGRANGE_FOUNDATION_MANAGED is false and the portal
+// renders no Foundation card (pmo/decisions-2026-09-18/update-architecture.md).
+// =============================================================================
+
+@description('Keycloak container image. Must match the tag the Helm chart pins (charts/cloudgrange/charts/keycloak/values.yaml) so the realm import and theme paths line up.')
+param keycloakImage string = 'quay.io/keycloak/keycloak:26.6.4'
+
+@description('Realm definition imported into Keycloak on first start. Defaults to the same file the Helm chart ships, so ACA and Kubernetes get an identical realm.')
+param keycloakRealmJson string = loadTextContent('../charts/cloudgrange/charts/keycloak/files/cloudgrange-realm.json')
+
+@description('Keycloak container app CPU (cores).')
+param keycloakAppCpu string = '0.5'
+
+@description('Keycloak container app memory.')
+param keycloakAppMemory string = '1Gi'
+
+@description('Optional override for the relay image tag. Empty = use imageTag.')
+param relayImageTag string = ''
+
+@description('Relay container app CPU (cores).')
+param relayAppCpu string = '0.25'
+
+@description('Relay container app memory.')
+param relayAppMemory string = '0.5Gi'
+
+@description('Port the built-in relay listens on for agent connections.')
+param relayPort int = 8443
+
+@description('Override the relay container app name. Empty = CAF pattern.')
+param relayAppName string = ''
+
+@description('Additional tags for the relay container app.')
+param relayAppTags object = {}
+
+@description('Override the Keycloak container app name. Empty = CAF pattern.')
+param keycloakAppName string = ''
+
+@description('Additional tags for the Keycloak container app.')
+param keycloakAppTags object = {}
+
+@description('Override the storage account name backing the Azure Files shares. Empty = derived, globally unique.')
+param storageAccountName string = ''
+
+@description('Platform release this deployment installs. Reported by the API and compared against the update channel. Empty = the effective image tag.')
+param platformVersion string = ''
+
+@description('Update channel the in-app Platform updater reads. Must be https; the manifest is trusted by its SHA-256 (there is no signing key — see pmo/decisions-2026-09-18).')
+param updateChannelUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json'
+
+@description('Static module catalog index the portal lists modules from.')
+param moduleCatalogUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/modules/catalog.json'
+
+@description('ARM api-version used for the pre-update on-demand PostgreSQL backup. The backups sub-resource rejects a write on older versions with 405; this is the version the Azure CLI itself uses.')
+param postgresBackupApiVersion string = '2026-01-01-preview'
+
+// -----------------------------------------------------------------------------
+// Bootstrap secrets. The platform provisions these — an operator never types one.
+// scripts/Install-CloudGrange-Aca.sh generates each on first install, stores it in
+// Key Vault and reads it back on every later run, so a redeploy is idempotent and
+// does not rotate a password out from under a running database or realm.
+// -----------------------------------------------------------------------------
+
+@secure()
+@description('Keycloak bootstrap admin username. Generated by the installer; never operator-entered.')
+param keycloakAdminUser string
+
+@secure()
+@description('Keycloak bootstrap admin password. Generated by the installer; never operator-entered.')
+param keycloakAdminPassword string
+
+@secure()
+@description('Client secret for the cloudgrange-api confidential client in the realm. Generated by the installer.')
+param keycloakApiClientSecret string
+
+@secure()
+@description('Bootstrap enrolment token shared by the API and the built-in relay. Generated by the installer.')
+param relayEnrollmentToken string
+
+@secure()
+@description('First-run password for the realm-admin account the setup wizard provisions. Generated by the installer.')
+param realmAdminPassword string
+
 param bringYourOwn object = {
   logAnalyticsWorkspaceId: ''
   applicationInsightsId: ''
@@ -292,6 +410,19 @@ var apiAppNameEffective = empty(apiAppName) ? cafNameWithRole(typeAbbr.container
 var _portalAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'portal', environment, regionCode, instance)
 var portalAppNameEffective = empty(portalAppName) ? (length(_portalAppNameRaw) > 32 ? substring(_portalAppNameRaw, 0, 32) : _portalAppNameRaw) : portalAppName
 
+// AB#9171 (E9) — same 32-char Container App clamp for the two new apps. 'keycloak' (8) and
+// 'relay' (5) both overflow for workload='cloudgrange', so both go through the same trim the
+// portal already needed. A what-if pass does NOT catch an over-length Container App name: the
+// provider only validates it on create (ContainerAppInvalidName), which is why this is clamped
+// here rather than left to be discovered on the real deploy.
+var _keycloakAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'kc', environment, regionCode, instance)
+var keycloakAppNameEffective = empty(keycloakAppName) ? (length(_keycloakAppNameRaw) > 32 ? substring(_keycloakAppNameRaw, 0, 32) : _keycloakAppNameRaw) : keycloakAppName
+var _relayAppNameRaw = cafNameWithRole(typeAbbr.containerApp, workload, 'relay', environment, regionCode, instance)
+var relayAppNameEffective = empty(relayAppName) ? (length(_relayAppNameRaw) > 32 ? substring(_relayAppNameRaw, 0, 32) : _relayAppNameRaw) : relayAppName
+// Storage account names are 3-24 chars, lowercase alphanumeric only, and globally unique.
+var _storageNameRaw = toLower('st${workloadShort}${environment}${regionCode}${instance}${rgHash}')
+var storageAccountNameEffective = empty(storageAccountName) ? (length(_storageNameRaw) > 24 ? substring(_storageNameRaw, 0, 24) : _storageNameRaw) : storageAccountName
+
 // Tag composition helper — every resource gets commonTags + autoTags + own.
 // Length-constrained types also get a DisplayName tag with the readable CAF form.
 var allTagsBase = union(commonTags, autoTags)
@@ -306,6 +437,10 @@ var _apiImageTagEff    = empty(apiImageTag)    ? imageTag : apiImageTag
 var _portalImageTagEff = empty(portalImageTag) ? imageTag : portalImageTag
 var apiImage    = 'ghcr.io/cloudgrange/cloudgrange-api:${_apiImageTagEff}'
 var portalImage = 'ghcr.io/cloudgrange/cloudgrange-portal:${_portalImageTagEff}'
+// AB#9171 (E9)
+var _relayImageTagEff = empty(relayImageTag) ? imageTag : relayImageTag
+var relayImage = 'ghcr.io/cloudgrange/cloudgrange-relay:${_relayImageTagEff}'
+var platformVersionEffective = empty(platformVersion) ? imageTag : platformVersion
 var pgFqdn = '${postgresServerNameEffective}.postgres.database.azure.com'
 var oidcPreseed = !empty(entraClientId)
 // AB#2379 — use entraAuthorityBase parameter instead of hardcoded public cloud URL.
@@ -320,6 +455,19 @@ var oidcApiEnv = oidcPreseed ? [
   { name: 'Keycloak__RequireHttpsMetadata', value: 'true' }
 ] : []
 
+// AB#9171 (E9) — the DEFAULT identity provider on this path is the platform's own Keycloak,
+// the same as on every other delivery path. Entra pre-seed (oidcApiEnv above) remains an
+// opt-in override for operators who supply entraClientId. The authority is the PUBLIC one,
+// through the portal origin, because that is the issuer Keycloak mints tokens for once
+// KC_HOSTNAME points at the portal — validating against the internal address would reject
+// every token the browser and the CLI present.
+var keycloakApiEnv = [
+  { name: 'Keycloak__Authority', value: keycloakPublicAuthority }
+  { name: 'Keycloak__ClientId', value: 'cloudgrange-api' }
+  { name: 'Keycloak__ClientSecret', secretRef: 'kc-api-client-secret' }
+  { name: 'Keycloak__RequireHttpsMetadata', value: 'true' }
+]
+
 // AB#1600 — PgBouncer host: when enabled, API connects to localhost (sidecar), else PG FQDN directly.
 var dbHost = enablePgBouncer ? 'localhost' : pgFqdn
 
@@ -329,6 +477,15 @@ var pgPasswordSecretName = 'cs-${environment}-core-db-password'
 
 // H1 security remediation — KV secret name for the AES-256 master key.
 var masterKeySecretName = 'cloudgrange-master-key'
+
+// AB#9171 (E9) — the platform's own bootstrap secrets. Same rule as the master key: written to
+// Key Vault at deploy time and referenced by the Container Apps via keyVaultUrl, never as a
+// plaintext env var, and never typed by an operator.
+var keycloakAdminUserSecretName     = 'cloudgrange-keycloak-admin-user'
+var keycloakAdminPasswordSecretName = 'cloudgrange-keycloak-admin-password'
+var keycloakApiClientSecretName     = 'cloudgrange-keycloak-api-client-secret'
+var relayEnrollmentTokenSecretName  = 'cloudgrange-relay-enrollment-token'
+var realmAdminPasswordSecretName    = 'cloudgrange-realm-admin-password'
 
 // AB#2374 — KV secret name for the Entra/AAD OIDC client secret.
 // Stored in KV at deploy time; ACA references via keyVaultUrl — never as plaintext env var.
@@ -580,6 +737,41 @@ resource masterKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (em
   }
 }
 
+// AB#9171 (E9) — the platform's own bootstrap secrets, written to Key Vault at deploy time and
+// consumed by the Container Apps through keyVaultUrl references. On Kubernetes the equivalent
+// values are generated in-cluster by templates/secrets-bootstrap-job.yaml and never overwritten
+// by an upgrade; here scripts/Install-CloudGrange-Aca.sh plays that role, reading each value back
+// out of this vault on a redeploy so the same guarantee holds.
+resource keycloakAdminUserSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: keycloakAdminUserSecretName
+  properties: { value: keycloakAdminUser, attributes: { enabled: true } }
+}
+
+resource keycloakAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: keycloakAdminPasswordSecretName
+  properties: { value: keycloakAdminPassword, attributes: { enabled: true } }
+}
+
+resource keycloakApiClientSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: keycloakApiClientSecretName
+  properties: { value: keycloakApiClientSecret, attributes: { enabled: true } }
+}
+
+resource relayEnrollmentTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: relayEnrollmentTokenSecretName
+  properties: { value: relayEnrollmentToken, attributes: { enabled: true } }
+}
+
+resource realmAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (empty(byoKvId)) {
+  parent: newKv
+  name: realmAdminPasswordSecretName
+  properties: { value: realmAdminPassword, attributes: { enabled: true } }
+}
+
 // AB#2374 — Write the Entra/AAD OIDC client secret to Key Vault at deploy time.
 // Only written when OIDC pre-seed is active (entraClientId non-empty).
 // ACA references this secret via keyVaultUrl — never as a plaintext env-var value.
@@ -636,6 +828,11 @@ var masterKeySecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${mas
 var entraClientSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${entraClientSecretName}'
 // AB#2375 — KV secret URI for the App Insights connection string ACA secret reference
 var appInsightsSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${appInsightsSecretName}'
+// AB#9171 (E9)
+var keycloakAdminUserSecretUri     = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${keycloakAdminUserSecretName}'
+var keycloakAdminPasswordSecretUri = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${keycloakAdminPasswordSecretName}'
+var keycloakApiClientSecretUri     = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${keycloakApiClientSecretName}'
+var relayEnrollmentTokenSecretUri  = 'https://${kvNameEffective}${kvDnsSuffix}/secrets/${relayEnrollmentTokenSecretName}'
 
 // =============================================================================
 // PostgreSQL Flexible Server (always created — workload-specific)
@@ -742,6 +939,105 @@ var registries = imagesArePrivate ? [
 ] : []
 
 // =============================================================================
+// AB#9171 (E9) — Azure Files persistence for the two directories that MUST survive a
+// revision roll.
+//
+// Container Apps replicas are ephemeral, and an in-app Platform update is a new revision.
+// Two directories cannot be ephemeral:
+//   - the API's /etc/cloudgrange holds the ASP.NET Core data-protection key ring. On a
+//     fresh key ring every existing auth cookie and every encrypted-at-rest value written
+//     with the old key becomes unreadable, so an update would silently sign everybody out
+//     and break previously stored secrets. The Helm chart gives this a PVC for the same
+//     reason (charts/api, api-secrets).
+//   - the relay's /var/lib/cloudgrange-relay/identity holds its enrolment identity. Lose
+//     it and the built-in relay re-enrols as a brand-new relay after every update, leaving
+//     an orphan behind and detaching the site it was bound to.
+//
+// A BYO Container Apps Environment is not supported for the platform path, because these
+// storage definitions are children of the environment.
+// =============================================================================
+
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (empty(byoCaeId)) {
+  name: storageAccountNameEffective
+  location: location
+  tags: allTagsBase
+  sku: { name: 'Standard_LRS' }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    allowBlobPublicAccess: false
+    // Azure Files SMB from a Container Apps environment authenticates with the account key.
+    allowSharedKeyAccess: true
+  }
+}
+
+resource fileServices 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = if (empty(byoCaeId)) {
+  parent: storage
+  name: 'default'
+}
+
+resource apiSecretsShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = if (empty(byoCaeId)) {
+  parent: fileServices
+  name: 'api-secrets'
+  properties: { shareQuota: 5 }
+}
+
+resource relayIdentityShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = if (empty(byoCaeId)) {
+  parent: fileServices
+  name: 'relay-identity'
+  properties: { shareQuota: 5 }
+}
+
+resource apiSecretsStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = if (empty(byoCaeId)) {
+  parent: newCae
+  name: 'api-secrets'
+  properties: {
+    azureFile: {
+      accountName: storage.name
+      accountKey: storage.listKeys().keys[0].value
+      shareName: 'api-secrets'
+      accessMode: 'ReadWrite'
+    }
+  }
+  dependsOn: [ apiSecretsShare ]
+}
+
+resource relayIdentityStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = if (empty(byoCaeId)) {
+  parent: newCae
+  name: 'relay-identity'
+  properties: {
+    azureFile: {
+      accountName: storage.name
+      accountKey: storage.listKeys().keys[0].value
+      shareName: 'relay-identity'
+      accessMode: 'ReadWrite'
+    }
+  }
+  dependsOn: [ relayIdentityShare ]
+}
+
+// -----------------------------------------------------------------------------
+// AB#9171 (E9) — deterministic internal FQDNs.
+//
+// Every app in a Container Apps environment resolves as
+// <app>.internal.<environment default domain>, so the whole mesh of URLs (API -> Keycloak,
+// portal -> API, portal -> Keycloak, relay -> API) can be computed here in one pass instead
+// of needing a second deployment to learn the FQDNs. Public traffic has exactly one origin,
+// the portal, which proxies /api, /hubs, /realms/cloudgrange and /resources/<version>.
+// -----------------------------------------------------------------------------
+var keycloakInternalFqdn = '${keycloakAppNameEffective}.internal.${caeDomain}'
+var apiInternalFqdn      = '${apiAppNameEffective}.internal.${caeDomain}'
+var portalPublicUrl      = empty(portalCustomDomain) ? 'https://${portalAppNameEffective}.${caeDomain}' : 'https://${portalCustomDomain}'
+// Computed rather than read back from apiApp.properties: the API app's own template needs
+// this value, and a resource cannot reference itself. An external Container App's FQDN is
+// always <app name>.<environment default domain>.
+var apiPublicUrl         = empty(apiCustomDomain) ? 'https://${apiAppNameEffective}.${caeDomain}' : 'https://${apiCustomDomain}'
+// Browsers and the CLI reach Keycloak through the portal origin, so that is the issuer the
+// realm must mint tokens for, and the authority the API must validate against.
+var keycloakPublicAuthority = '${portalPublicUrl}/realms/cloudgrange'
+
+// =============================================================================
 // API Container App (external ingress on 8080)
 // AB#1599 — HTTP scaling rule (HIGH performance finding)
 // AB#1600 — KV secret reference for PG password; PgBouncer sidecar
@@ -828,6 +1124,17 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             keyVaultUrl: appInsightsSecretUri
             identity: miId
           }
+          // AB#9171 (E9) — the API's own client secret in the realm, and the relay bootstrap token.
+          {
+            name: 'kc-api-client-secret'
+            keyVaultUrl: keycloakApiClientSecretUri
+            identity: miId
+          }
+          {
+            name: 'relay-enrollment-token'
+            keyVaultUrl: relayEnrollmentTokenSecretUri
+            identity: miId
+          }
         ],
         // AB#2374 — Entra client secret stored in KV; referenced via keyVaultUrl (not inline value).
         oidcPreseed ? [ { name: 'entra-client-secret', keyVaultUrl: entraClientSecretUri, identity: miId } ] : [],
@@ -876,7 +1183,52 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'CLOUDGRANGE_ACA_RESOURCE_GROUP',  value: resourceGroup().name }
               { name: 'CLOUDGRANGE_ACA_APP_NAME',        value: apiAppNameEffective }
               { name: 'CLOUDGRANGE_AZURE_REGION',        value: location }
-            ], oidcApiEnv)
+              // ---- AB#9171 (E9) -------------------------------------------------------
+              // The runtime selector. CLOUDGRANGE_DEPLOYMENT_MODE above stays for
+              // compatibility; CLOUDGRANGE_RUNTIME is the name the update architecture uses
+              // and is what selects the Container Apps update executor.
+              { name: 'CLOUDGRANGE_RUNTIME',             value: 'aca' }
+              // Azure owns the host and the orchestration layer here, so there is no
+              // CloudGrange Foundation to update and the portal renders no Foundation card.
+              { name: 'CLOUDGRANGE_FOUNDATION_MANAGED',  value: 'false' }
+              { name: 'CLOUDGRANGE_PLATFORM_VERSION',    value: platformVersionEffective }
+              { name: 'CLOUDGRANGE_IMAGE_TAG',           value: _apiImageTagEff }
+              { name: 'CLOUDGRANGE_VERSION',             value: _apiImageTagEff }
+              { name: 'CLOUDGRANGE_PORTAL_VERSION',      value: _portalImageTagEff }
+              { name: 'CLOUDGRANGE_SOLUTION_VERSION',    value: platformVersionEffective }
+              { name: 'CLOUDGRANGE_UPDATE_CHANNEL_URL',  value: updateChannelUrl }
+              { name: 'CLOUDGRANGE_MODULE_CATALOG_URL',  value: moduleCatalogUrl }
+              { name: 'CLOUDGRANGE_PLATFORM_UPDATER_ENABLED', value: 'true' }
+              // The other two Container Apps the updater retags, and the flexible server it
+              // takes an on-demand backup of before it does.
+              { name: 'CLOUDGRANGE_ACA_PORTAL_APP_NAME', value: portalAppNameEffective }
+              { name: 'CLOUDGRANGE_ACA_RELAY_APP_NAME',  value: relayAppNameEffective }
+              { name: 'CLOUDGRANGE_ACA_POSTGRES_SERVER', value: postgresServerNameEffective }
+              // AB#9171 (E9): the api-version the on-demand backup PUT is issued at. The
+              // executor defaults to 2023-12-01-preview, and Azure answers that with
+              // "405 MethodNotAllowed: The HTTP method 'PUT' is not supported on the resource
+              // .../flexibleServers/<name>/backups/<backup>" — the backups sub-resource only
+              // accepts a write on a newer api-version. Found on a live update, which was
+              // correctly refused rather than proceeding without a backup. This is the version
+              // `az postgres flexible-server backup create` itself uses; verified against this
+              // subscription, where the same PUT returns 202 and the backup appears.
+              { name: 'CLOUDGRANGE_ACA_POSTGRES_API_VERSION', value: postgresBackupApiVersion }
+              // Same bootstrap token the relay app holds: the API seeds the matching
+              // enrolment row when first-run setup completes, which is what lets the
+              // built-in relay finish enrolling instead of retrying 401 forever.
+              { name: 'RELAY_ENROLLMENT_TOKEN',          secretRef: 'relay-enrollment-token' }
+              { name: 'CLOUDGRANGE_PORTAL_URL',          value: portalPublicUrl }
+              // Modules call the platform here. Same reasoning as RELAY_PAAS_URL: the
+              // external FQDN has a publicly trusted certificate, the internal one does not.
+              { name: 'CLOUDGRANGE_API_INTERNAL_URL',    value: apiPublicUrl }
+              // AB#9171 (E9) — the backchannel address for Keycloak's admin REST API and the
+              // client-credentials token request. It is deliberately NOT the authority:
+              // Keycloak__Authority must stay the PUBLIC issuer (the portal origin), because
+              // that is what Keycloak mints tokens for and what browsers and the CLI present.
+              // Admin calls cannot use it, because /admin is never published through the
+              // portal — only /realms/cloudgrange and the theme path are.
+              { name: 'Keycloak__InternalUrl',           value: 'http://${keycloakInternalFqdn}' }
+            ], oidcPreseed ? oidcApiEnv : keycloakApiEnv)
             // AB#1667 — health probes (HIGH security/reliability finding)
             // Probe endpoints defined in design/observability/health-check-contract.md
             probes: [
@@ -900,11 +1252,19 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
                 failureThreshold: 3
               }
             ]
+            // AB#9171 (E9) — the data-protection key ring must outlive a revision.
+            volumeMounts: [
+              { volumeName: 'api-secrets', mountPath: '/etc/cloudgrange' }
+            ]
           }
         ],
         // AB#1600 — optionally add PgBouncer sidecar for connection pooling
         enablePgBouncer ? [ pgBouncerContainer ] : []
       )
+      // AB#9171 (E9)
+      volumes: [
+        { name: 'api-secrets', storageType: 'AzureFile', storageName: 'api-secrets' }
+      ]
       // AB#1599 — HTTP scaling rule: scale at concurrentRequests per replica (HIGH performance finding)
       scale: {
         minReplicas: apiAppMinReplicas
@@ -924,7 +1284,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
   // AB#2374/2375 — also depend on the Entra client secret + App Insights secret writes to KV
   // so the KV references resolve before ACA revision activation.
-  dependsOn: [ pgPasswordSecret, masterKeySecret, appInsightsSecret, kvRoleAssignNew ]
+  dependsOn: [ pgPasswordSecret, masterKeySecret, appInsightsSecret, kvRoleAssignNew, keycloakApiClientSecretResource, relayEnrollmentTokenSecret, apiSecretsStorage ]
 }
 
 // =============================================================================
@@ -966,7 +1326,23 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             // Browser-facing API base — EMPTY = relative paths via portal nginx proxy (same-origin).
             { name: 'CLOUDGRANGE_API_URL', value: '' }
-            { name: 'CLOUDGRANGE_AUTH_URL', value: entraAuthority }
+            { name: 'CLOUDGRANGE_AUTH_URL', value: oidcPreseed ? entraAuthority : keycloakPublicAuthority }
+            // AB#9171 (E9) — the portal is the single public origin, so it proxies Keycloak the
+            // same way the chart's Traefik Ingress does on Kubernetes.
+            //
+            // CLOUDGRANGE_KEYCLOAK_REALM_PROXY is what turns the /realms/cloudgrange block on,
+            // and it is deliberately a separate switch from the upstream: the Kubernetes paths
+            // already set CLOUDGRANGE_KEYCLOAK_UPSTREAM for Keycloak's theme assets, so keying
+            // the realm proxy off the upstream would make the portal claim /realms/cloudgrange
+            // on every K3s and AKS install and fight the chart's Ingress for it. Left unset
+            // everywhere but here.
+            //
+            // /admin is never proxied. The portal's own regex block already routes every
+            // Keycloak theme-resources version, so nothing here pins one — pinning would break
+            // the moment the Keycloak image changes.
+            { name: 'CLOUDGRANGE_KEYCLOAK_UPSTREAM', value: oidcPreseed ? '' : 'https://${keycloakInternalFqdn}' }
+            { name: 'CLOUDGRANGE_KEYCLOAK_HOST', value: oidcPreseed ? '' : keycloakInternalFqdn }
+            { name: 'CLOUDGRANGE_KEYCLOAK_REALM_PROXY', value: oidcPreseed ? 'false' : 'true' }
             { name: 'CLOUDGRANGE_API_UPSTREAM', value: 'https://${apiApp.properties.configuration.ingress.fqdn}' }
             { name: 'CLOUDGRANGE_API_HOST', value: apiApp.properties.configuration.ingress.fqdn }
             { name: 'CLOUDGRANGE_FWD_PROTO', value: 'https' }
@@ -1013,6 +1389,276 @@ resource portalApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // =============================================================================
+// AB#9171 (E9) — Keycloak Container App (internal ingress)
+//
+// The identity tier the rest of the product assumes. It is NOT publicly exposed: the portal
+// proxies /realms/cloudgrange and the Keycloak theme assets to it, which is exactly what
+// the chart's Traefik Ingress does on every Kubernetes path. KC_HOSTNAME is therefore the
+// portal's public URL and KC_PROXY_HEADERS=xforwarded makes Keycloak trust the proxy's
+// X-Forwarded-* headers, so issuer and redirect URLs come out as the browser sees them.
+//
+// The realm is imported from the SAME file the Helm chart ships, projected as a file through
+// an ACA secret volume (secret volumes take a per-secret `path`, which is how it can land with
+// its .json extension — ACA secret NAMES cannot contain a dot). Keycloak substitutes
+// ${CLOUDGRANGE_HOSTNAME} and ${KEYCLOAK_API_CLIENT_SECRET} from the environment during import.
+// `start --import-realm` is a no-op when the realm already exists, so a redeploy is safe.
+//
+// Keycloak shares the platform database, as it does in the chart (KC_DB_URL points at the same
+// database as the API), so there is no second server to provision or back up.
+// =============================================================================
+
+resource keycloakApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: keycloakAppNameEffective
+  location: location
+  tags: union(allTagsBase, keycloakAppTags)
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${miId}': {} }
+  }
+  properties: {
+    managedEnvironmentId: caeId
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        // Internal only — the portal is the single public origin for authentication.
+        external: false
+        targetPort: 8080
+        transport: 'auto'
+        // Container Apps ingress redirects plain HTTP to HTTPS unless this is set, and both
+        // callers here speak plain HTTP to Keycloak on purpose: the portal's nginx proxy and
+        // the API's backchannel admin calls. This is traffic inside one Container Apps
+        // environment that never leaves it, which is the same position the Helm chart takes
+        // when the API talks to the Keycloak Service over http inside the cluster.
+        allowInsecure: true
+        traffic: [ { weight: 100, latestRevision: true } ]
+      }
+      registries: registries
+      secrets: concat(
+        [
+          { name: 'pg-password', keyVaultUrl: pgPasswordSecretUri, identity: miId }
+          { name: 'kc-admin-user', keyVaultUrl: keycloakAdminUserSecretUri, identity: miId }
+          { name: 'kc-admin-password', keyVaultUrl: keycloakAdminPasswordSecretUri, identity: miId }
+          { name: 'kc-api-client-secret', keyVaultUrl: keycloakApiClientSecretUri, identity: miId }
+          // The realm definition is not a credential, but it is the only way to project a file
+          // into an ACA container without building a bespoke image.
+          { name: 'realm-json', value: keycloakRealmJson }
+        ],
+        imagesArePrivate ? [ { name: 'ghcr-token', value: ghcrToken } ] : []
+      )
+    }
+    template: {
+      containers: [
+        {
+          name: 'keycloak'
+          image: keycloakImage
+          args: [ 'start', '--import-realm' ]
+          resources: { cpu: json(keycloakAppCpu), memory: keycloakAppMemory }
+          env: [
+            { name: 'KC_DB', value: 'postgres' }
+            { name: 'KC_DB_URL', value: 'jdbc:postgresql://${pgFqdn}:5432/${postgresDatabaseName}?sslmode=require' }
+            { name: 'KC_DB_USERNAME', value: postgresAdminUser }
+            { name: 'KC_DB_PASSWORD', secretRef: 'pg-password' }
+            { name: 'KC_HOSTNAME', value: portalPublicUrl }
+            { name: 'KC_HOSTNAME_BACKCHANNEL_DYNAMIC', value: 'true' }
+            { name: 'KC_PROXY_HEADERS', value: 'xforwarded' }
+            { name: 'KC_HTTP_PORT', value: '8080' }
+            { name: 'KC_HTTP_ENABLED', value: 'true' }
+            { name: 'KC_HEALTH_ENABLED', value: 'true' }
+            { name: 'KC_BOOTSTRAP_ADMIN_USERNAME', secretRef: 'kc-admin-user' }
+            { name: 'KC_BOOTSTRAP_ADMIN_PASSWORD', secretRef: 'kc-admin-password' }
+            { name: 'KEYCLOAK_API_CLIENT_SECRET', secretRef: 'kc-api-client-secret' }
+            { name: 'CLOUDGRANGE_HOSTNAME', value: replace(portalPublicUrl, 'https://', '') }
+          ]
+          volumeMounts: [
+            { volumeName: 'realm-import', mountPath: '/opt/keycloak/data/import' }
+          ]
+          probes: [
+            {
+              type: 'Readiness'
+              // Keycloak serves health on the management port (9000), not the HTTP port.
+              httpGet: { path: '/health/ready', port: 9000, scheme: 'HTTP' }
+              initialDelaySeconds: 30
+              periodSeconds: 15
+              failureThreshold: 20
+            }
+          ]
+        }
+      ]
+      volumes: [
+        {
+          name: 'realm-import'
+          storageType: 'Secret'
+          secrets: [ { secretRef: 'realm-json', path: 'cloudgrange-realm.json' } ]
+        }
+      ]
+      // Keycloak is not horizontally scaled here: one replica, always on. Scale-to-zero would
+      // make the first sign-in of the day wait for a JVM cold start behind an auth redirect.
+      scale: { minReplicas: 1, maxReplicas: 1 }
+    }
+  }
+  dependsOn: [ pgPasswordSecret, keycloakAdminUserSecret, keycloakAdminPasswordSecret, keycloakApiClientSecretResource, kvRoleAssignNew, pgDb, pgFwAzure ]
+}
+
+// =============================================================================
+// AB#9171 (E9) — built-in relay Container App (internal ingress)
+//
+// The on-prem stack's built-in site relay, which is what makes cluster registration and job
+// dispatch work. It enrols itself against the API with the shared bootstrap token and then
+// keeps a persistent identity on Azure Files. Internal ingress: managed agents connect to it
+// from inside the environment; exposing it publicly is a separate decision (relay 8443 TLS is
+// still open on every path).
+// =============================================================================
+
+resource relayApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: relayAppNameEffective
+  location: location
+  tags: union(allTagsBase, relayAppTags)
+  properties: {
+    managedEnvironmentId: caeId
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: false
+        targetPort: relayPort
+        transport: 'auto'
+        traffic: [ { weight: 100, latestRevision: true } ]
+      }
+      registries: registries
+      secrets: concat(
+        [ { name: 'relay-enrollment-token', keyVaultUrl: relayEnrollmentTokenSecretUri, identity: miId } ],
+        imagesArePrivate ? [ { name: 'ghcr-token', value: ghcrToken } ] : []
+      )
+    }
+    template: {
+      containers: [
+        {
+          name: 'cloudgrange-relay'
+          image: relayImage
+          resources: { cpu: json(relayAppCpu), memory: relayAppMemory }
+          env: [
+            // The API's EXTERNAL FQDN, not the internal one. The relay is a .NET client that
+            // validates the server certificate, and the environment's certificate does not
+            // cover the second-level *.internal.<domain> name. nginx (the portal) can ignore
+            // that; a .NET HttpClient cannot.
+            { name: 'RELAY_PAAS_URL', value: apiPublicUrl }
+            { name: 'RELAY_ENROLLMENT_TOKEN', secretRef: 'relay-enrollment-token' }
+            { name: 'RELAY_DISPLAY_NAME', value: 'site-relay' }
+            { name: 'RELAY_LISTEN_PORT', value: string(relayPort) }
+            { name: 'RELAY_IDENTITY_DIR', value: '/var/lib/cloudgrange-relay/identity' }
+            // AB#9171 (E9): the SQLite agent registry and job queue go on the replica's own
+            // storage, NOT on the Azure Files share above. SQLite on SMB fails outright —
+            // "SQLite Error 5: 'database is locked'" the moment the registry and the queue
+            // both open agents.db — and the relay never starts. The share still holds
+            // relay.key, which is what has to survive a revision roll so the relay stays ONE
+            // relay instead of re-enrolling and orphaning its site after every update.
+            { name: 'RELAY_STATE_DIR', value: '/var/lib/cloudgrange-relay/state' }
+            { name: 'CLOUDGRANGE_VERSION', value: _relayImageTagEff }
+          ]
+          volumeMounts: [
+            { volumeName: 'relay-identity', mountPath: '/var/lib/cloudgrange-relay/identity' }
+          ]
+        }
+      ]
+      volumes: [
+        { name: 'relay-identity', storageType: 'AzureFile', storageName: 'relay-identity' }
+      ]
+      // One relay, always on: it holds a single enrolled identity and a live connection to the API.
+      scale: { minReplicas: 1, maxReplicas: 1 }
+    }
+  }
+  // The managed identity must be able to read the enrolment token from Key Vault; the identity
+  // block is omitted because the relay itself needs no ARM access — the secret reference does.
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${miId}': {} }
+  }
+  dependsOn: [ relayEnrollmentTokenSecret, kvRoleAssignNew, relayIdentityStorage, apiApp ]
+}
+
+// =============================================================================
+// AB#9171 (E9) — role assignments for in-app Platform updates.
+//
+// The in-app updater on this path is the API's ContainerAppsExecutor: it retags each
+// CloudGrange container and lets ACA roll a new revision, and it takes an on-demand
+// PostgreSQL backup first. Both need ARM rights, and the whole point of E9 is that the
+// platform provisions them rather than an operator granting them by hand.
+//
+// Scope is deliberately per-resource, not the resource group: the identity can change the
+// three Container Apps it is allowed to update and nothing else. "Container Apps Contributor"
+// is the narrowest built-in role that can PATCH a containerApp. For the database there is no
+// built-in role that grants only the on-demand backup operation
+// (Microsoft.DBforPostgreSQL/flexibleServers/backups/write), so Contributor is used, scoped to
+// the single flexible server.
+// =============================================================================
+
+var containerAppsContributorRoleId = '358470bc-b998-42bd-ab17-a7e34c199c0f'
+var contributorRoleId              = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+var keyVaultSecretsOfficerRoleId   = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+
+// AB#9171 (E9) — the deploying identity must be able to READ the bootstrap secrets it wrote.
+//
+// Creating the vault takes Contributor; reading a secret out of it takes a data-plane role,
+// and the vault uses RBAC authorization. Without this, a redeploy cannot find the secrets it
+// stored on the first install, generates fresh ones, and the template overwrites them —
+// silently rotating the master key out from under a database that was encrypted with the old
+// one. That is exactly what happened on a real second deployment: the API came up with
+// "CG-SECRETS-ERROR-0006: the master key does not match the active key version recorded in
+// the database" and the built-in secret store failed closed.
+//
+// The generate-once guarantee is the whole point of provisioning the platform's own secrets,
+// so the right fix is to give the installer the access its own design assumes, scoped to this
+// one vault. The installer also refuses to continue on any read error other than "not found",
+// so a missing grant can never again be mistaken for a first install.
+resource deployerKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (empty(byoKvId)) {
+  scope: newKv
+  name: guid(newKv.id, deployer().objectId, keyVaultSecretsOfficerRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficerRoleId)
+    principalId: deployer().objectId
+  }
+}
+
+resource apiAppUpdateRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: apiApp
+  name: guid(apiApp.id, miId, containerAppsContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', containerAppsContributorRoleId)
+    principalId: miPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource portalAppUpdateRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: portalApp
+  name: guid(portalApp.id, miId, containerAppsContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', containerAppsContributorRoleId)
+    principalId: miPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource relayAppUpdateRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: relayApp
+  name: guid(relayApp.id, miId, containerAppsContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', containerAppsContributorRoleId)
+    principalId: miPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource pgBackupRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: pg
+  name: guid(pg.id, miId, contributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', contributorRoleId)
+    principalId: miPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// =============================================================================
 // AB#1668 — Azure Monitor metric alert rules module
 // =============================================================================
 
@@ -1039,6 +1685,11 @@ output portalUrl string = 'https://${portalApp.properties.configuration.ingress.
 output apiUrl string = 'https://${apiApp.properties.configuration.ingress.fqdn}'
 output apiAppName string = apiApp.name
 output portalAppName string = portalApp.name
+// AB#9171 (E9)
+output keycloakAppName string = keycloakApp.name
+output relayAppName string = relayApp.name
+output platformVersion string = platformVersionEffective
+output updateChannelUrl string = updateChannelUrl
 output postgresServer string = pgFqdn
 output keyVaultName string = empty(byoKvId) ? newKv.name : existingKv.name
 

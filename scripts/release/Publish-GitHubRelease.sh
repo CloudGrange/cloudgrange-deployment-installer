@@ -70,6 +70,12 @@ with_sha() { # <file> <asset-name>: the asset plus a .sha256 that names it, chec
 }
 with_sha "$BUNDLE_DIR/Install-CloudGrange-K3s-Bundled.zip" Install-CloudGrange-K3s-Bundled.zip
 [ -z "$WINDOWS_DIR" ] || with_sha "$WINDOWS_DIR/Install-CloudGrange-Windows.zip" Install-CloudGrange-Windows.zip
+# AB#9171 (E9): the Azure Container Apps installer. Built here rather than taken from a
+# caller-supplied directory because it is only the wrapper plus the Bicep — a few tens of
+# kilobytes with no build step. An install page must never name an asset that no release step
+# produces: the Linux guide once did, and the owner hit a 404 following his own documentation.
+"$(dirname "$0")/New-AcaInstallerZip.sh" --out "$WORK/aca" >&2
+with_sha "$WORK/aca/Install-CloudGrange-Aca.zip" Install-CloudGrange-Aca.zip
 if [ -n "$PLATFORM_DIR" ]; then
     python3 - "$PLATFORM_DIR/manifest.json" "$VERSION" "$PLATFORM_DIR/cloudgrange-$VERSION.tgz" <<'PY' || exit 2
 import hashlib, json, sys
@@ -87,6 +93,7 @@ Install guide: https://cloudgrange.dev/docs/getting-started/
 
 - Linux server: Install-CloudGrange-K3s-Bundled.zip (includes K3s, Helm and every container image, so it also installs offline)
 - Windows + Hyper-V: Install-CloudGrange-Windows.zip
+- Azure Container Apps: Install-CloudGrange-Aca.zip (the wrapper and the Bicep it deploys; Azure pulls the images)
 - Helm on your own Kubernetes: cloudgrange-chart.tgz
 
 Every download has a .sha256; verify it before you install. Installed platforms update in the portal under Platform > Updates."

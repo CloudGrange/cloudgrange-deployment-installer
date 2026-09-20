@@ -1,13 +1,23 @@
 // Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// AB#9188: Azure Container Apps is the SECONDARY Azure path, kept working (see
-// AB#9176's image-org fix) but not actively developed further — AKS running the same
-// Helm chart as on-prem (charts/cloudgrange, values-azure.yaml, AB#9187) is the primary
-// Azure profile, per cloudgrange-internal/pmo/plans/2026-09-15-platform-restructure-helm-k8s.md.
-// ACA cannot run Helm charts or raw Kubernetes manifests at all (its own deployment
-// schema), so "the same solution everywhere" is only actually true on AKS. New Azure
-// feature work belongs in the AKS overlay, not here.
+// AB#9171 (E9): Azure Container Apps is a SUPPORTED CloudGrange delivery path, deployed by
+// this template and driven by scripts/Install-CloudGrange-Aca.sh.
+//
+// It remains true that ACA cannot run Helm charts or raw Kubernetes manifests — it has its
+// own deployment schema — so this template, not charts/cloudgrange, is the platform
+// definition here. What is NOT true any more is the note this comment used to carry, that
+// the path was "kept working but not actively developed": that stance is what left the
+// template deploying two containers with Entra as the only identity provider, which is not
+// the product. Everything above the deployment format is now the same on this path as on
+// every other one: the same API and portal, the same Keycloak realm, the same built-in
+// relay, the same modules and CLI, and the same in-app Platform updates.
+//
+// What genuinely differs, and is documented as differing: there is no CloudGrange Foundation
+// (Azure owns the host and the runtime, so the portal shows no Foundation card), and offline
+// Platform bundles do not apply (ACA pulls from a registry).
+//
+// Anything added here must be added to the chart as well, or the paths diverge again.
 //
 // CloudGrange PaaS (Model B) entry point — subscription-scoped.
 // Follows ADR-048 (Azure resource naming and tagging standard):
@@ -94,12 +104,21 @@ param postgresAdminUser string = 'cloudgrange'
 @secure()
 param postgresAdminPassword string
 
+// AB#9171 (E9): General Purpose, not Burstable. This is a correctness constraint, not a
+// sizing preference. Before every in-app Platform update the API takes an ON-DEMAND backup of
+// this server, and refuses the update if it cannot — and Azure does not support on-demand
+// backup on the Burstable compute tier at all
+// (learn.microsoft.com/azure/postgresql/backup-restore/concepts-backup-restore#on-demand-backups).
+// A Burstable server therefore produces a delivery path whose in-app updates can never run.
+// Standard_D2ds_v4 is the smallest General Purpose SKU. Burstable remains selectable for a
+// deployment that knowingly gives up in-app updates.
+// Note also Azure's limit of seven on-demand backups per server: an admin deletes older ones.
 @description('PostgreSQL Flexible Server SKU name.')
-param postgresSkuName string = 'Standard_B1ms'
+param postgresSkuName string = 'Standard_D2ds_v4'
 
 @description('PostgreSQL Flexible Server SKU tier.')
 @allowed([ 'Burstable', 'GeneralPurpose', 'MemoryOptimized' ])
-param postgresSkuTier string = 'Burstable'
+param postgresSkuTier string = 'GeneralPurpose'
 
 @description('PostgreSQL storage size in GB.')
 @minValue(32)
@@ -162,7 +181,7 @@ param apiAppMemory string = '1Gi'
 // Recommended per-environment: dev=0, test=0, stage=1, prod=1
 @description('API container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod.')
 @minValue(0)
-param apiAppMinReplicas int = 0
+param apiAppMinReplicas int = 1
 
 @description('API container app maximum replica count.')
 @minValue(1)
@@ -190,14 +209,19 @@ param portalAppMemory string = '0.5Gi'
 // AB#1599 — default changed to 0 for scale-to-zero in dev
 @description('Portal container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod.')
 @minValue(0)
-param portalAppMinReplicas int = 0
+param portalAppMinReplicas int = 1
 
 @description('Portal container app maximum replica count.')
 @minValue(1)
 param portalAppMaxReplicas int = 2
 
+// AB#9171 (E9): 8080, not 80. The portal image runs nginx as a NON-ROOT user, which cannot
+// bind a privileged port, so its server block listens on 8080 (portal docker/nginx.conf).
+// The template still said 80, so every readiness probe failed, the revision was marked
+// Unhealthy and the portal answered nothing at all. Found by deploying for real — a what-if
+// pass cannot see inside the image.
 @description('Portal container app external ingress target port.')
-param portalAppTargetPort int = 80
+param portalAppTargetPort int = 8080
 
 @description('Portal ACA HTTP scale-out threshold (concurrent requests per replica).')
 param portalAppScaleThreshold int = 50
@@ -234,6 +258,52 @@ param ghcrToken string = ''
 @secure()
 @description('256-bit AES master key (base64-encoded). Must be supplied at deploy time via environment variable CLOUDGRANGE_MASTER_KEY or azd env set. Written to Key Vault; ACA reads it via KV secret reference.')
 param masterKey string
+
+// =============================================================================
+// AB#9171 (E9) — Azure Container Apps as a real delivery path.
+// See the block comment in resources.bicep for why Keycloak and the relay are here.
+// Every secret below is GENERATED by scripts/Install-CloudGrange-Aca.sh and read back from
+// Key Vault on a redeploy. An operator never types one: "the platform provisions, not the user".
+// =============================================================================
+
+@secure()
+@description('Keycloak bootstrap admin username. Generated by the installer.')
+param keycloakAdminUser string
+
+@secure()
+@description('Keycloak bootstrap admin password. Generated by the installer.')
+param keycloakAdminPassword string
+
+@secure()
+@description('Client secret for the cloudgrange-api client in the realm. Generated by the installer.')
+param keycloakApiClientSecret string
+
+@secure()
+@description('Bootstrap enrolment token shared by the API and the built-in relay. Generated by the installer.')
+param relayEnrollmentToken string
+
+@secure()
+@description('First-run password for the realm-admin account. Generated by the installer.')
+param realmAdminPassword string
+
+@description('Keycloak container image. Must match the tag the Helm chart pins.')
+param keycloakImage string = 'quay.io/keycloak/keycloak:26.6.4'
+
+
+@description('Optional override for the relay image tag. Empty = use imageTag.')
+param relayImageTag string = ''
+
+@description('Platform release this deployment installs. Empty = the effective image tag.')
+param platformVersion string = ''
+
+@description('Update channel the in-app Platform updater reads. Must be https.')
+param updateChannelUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json'
+
+@description('Static module catalog index the portal lists modules from.')
+param moduleCatalogUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/modules/catalog.json'
+
+@description('ARM api-version used for the pre-update on-demand PostgreSQL backup. The backups sub-resource rejects a write on older versions with 405; this is the version the Azure CLI itself uses.')
+param postgresBackupApiVersion string = '2026-01-01-preview'
 
 // AB#1600
 @description('Enable PgBouncer connection pooling sidecar on the API container app.')
@@ -512,6 +582,18 @@ module resources 'resources.bicep' = {
     portalCustomDomain: portalCustomDomain
     apiCustomDomain: apiCustomDomain
     bringYourOwn: bringYourOwn
+    // AB#9171 (E9)
+    keycloakAdminUser: keycloakAdminUser
+    keycloakAdminPassword: keycloakAdminPassword
+    keycloakApiClientSecret: keycloakApiClientSecret
+    relayEnrollmentToken: relayEnrollmentToken
+    realmAdminPassword: realmAdminPassword
+    keycloakImage: keycloakImage
+    relayImageTag: relayImageTag
+    platformVersion: platformVersion
+    updateChannelUrl: updateChannelUrl
+    moduleCatalogUrl: moduleCatalogUrl
+    postgresBackupApiVersion: postgresBackupApiVersion
   }
 }
 
@@ -594,6 +676,11 @@ output AZURE_MONITOR_DCR_IMMUTABLE_ID string = resources.outputs.azureMonitorDcr
 // AB#1605 — used by the postprovision hook to restart the API ACA for migration
 output API_APP_NAME string = resources.outputs.apiAppName
 output PORTAL_APP_NAME string = resources.outputs.portalAppName
+// AB#9171 (E9)
+output KEYCLOAK_APP_NAME string = resources.outputs.keycloakAppName
+output RELAY_APP_NAME string = resources.outputs.relayAppName
+output PLATFORM_VERSION string = resources.outputs.platformVersion
+output UPDATE_CHANNEL_URL string = resources.outputs.updateChannelUrl
 output POSTGRES_SERVER string = resources.outputs.postgresServer
 output KEY_VAULT_NAME string = resources.outputs.keyVaultName
 output RESOURCE_GROUP_NAME string = rgNameEffective
