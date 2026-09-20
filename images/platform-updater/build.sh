@@ -19,4 +19,11 @@ for key in PLATFORM_UPDATER_BASE_IMAGE HELM_VERSION HELM_LINUX_AMD64_SHA256 KUBE
     [ -n "$val" ] || { echo "$key missing from $PINS" >&2; exit 1; }
     args+=(--build-arg "$key=$val")
 done
-exec docker build "${args[@]}" -t "ghcr.io/cloudgrange/cloudgrange-platform-updater:$TAG" "$@" "$HERE"
+# AB#9171 — stamp the source commit of THIS repo (the updater image is built from it) into the
+# image, so a release can prove which source it came from (scripts/release/image-provenance.sh).
+. "$HERE/../../scripts/release/image-provenance.sh"
+cg_provenance_labels "$HERE/../.." "$TAG" || exit 1
+IMAGE="ghcr.io/cloudgrange/cloudgrange-platform-updater:$TAG"
+docker build "${args[@]}" "${CG_PROVENANCE_LABELS[@]}" -t "$IMAGE" "$@" "$HERE"
+cg_assert_image_provenance "$IMAGE" "$CG_PROVENANCE_REVISION" "$TAG" local
+

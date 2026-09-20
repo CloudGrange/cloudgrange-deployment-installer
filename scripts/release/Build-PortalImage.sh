@@ -43,8 +43,16 @@ PY
 IMAGE="$REGISTRY/cloudgrange-portal:$TAG"
 out=(--load)
 [ "$PUSH" = 0 ] || out=(--push)
-echo "[portal-image] building $IMAGE with the CLI from $CLI_DIR"
-docker buildx build --build-context "cli=$CLI_DIR" -t "$IMAGE" "${out[@]}" "$SRC"
+# AB#9171 — stamp the source commit of the PORTAL checkout into the image, so the release can prove
+# later which source this image came from (scripts/release/image-provenance.sh).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/image-provenance.sh"
+cg_provenance_labels "$SRC" "$TAG" || exit 1
+echo "[portal-image] building $IMAGE with the CLI from $CLI_DIR (source revision $CG_PROVENANCE_REVISION)"
+docker buildx build --build-context "cli=$CLI_DIR" "${CG_PROVENANCE_LABELS[@]}" -t "$IMAGE" "${out[@]}" "$SRC"
+# Read back what was actually produced: with --push buildx does not --load, so the registry is the
+# only truthful source (a leftover local image of the same tag would otherwise answer instead).
+[ "$PUSH" = 0 ] && prov_mode=local || prov_mode=remote
+cg_assert_image_provenance "$IMAGE" "$CG_PROVENANCE_REVISION" "$TAG" "$prov_mode" || exit 1
 
 # Prove the image serves the CLI for this version (with --push this pulls what was pushed).
 got=$(docker run --rm --entrypoint cat "$IMAGE" /usr/share/nginx/html/downloads/cli/manifest.json \
