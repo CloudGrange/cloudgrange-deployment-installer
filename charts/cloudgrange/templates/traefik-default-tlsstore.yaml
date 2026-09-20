@@ -12,7 +12,7 @@ rolled itself back. Hook objects are only created when the hook runs, and the ki
 (ServiceAccount, Role, RoleBinding, Job) are ones every updater may manage, so this reaches existing
 installs through the in-app updater.
 
-Rendered for a wrapper-owned cluster (foundation.managed, which --reuse-values carries from the
+Rendered for a wrapper-owned cluster (foundation.managed, which the updater's values flag carries from the
 install) or when asked explicitly, and only when the Traefik CRD exists; BYO clusters are untouched. */ -}}
 {{- $wanted := or .Values.global.ingress.traefikDefaultCertificate .Values.foundation.managed }}
 {{- if and $wanted (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/TLSStore") }}

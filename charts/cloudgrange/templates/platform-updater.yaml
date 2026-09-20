@@ -15,7 +15,8 @@ DEVIATION FROM §4, kept as narrow as possible: this chart also renders three ob
 in the namespace, and Helm needs to read (and on change, update) every object in a release, so a
 namespace Role alone would fail every upgrade and every rollback:
   - ClusterRole and ClusterRoleBinding <release>-promtail (observability subchart);
-  - ClusterIssuer <release>-selfsigned (templates/certmanager.yaml, when certManager.installOperator).
+  - ClusterIssuer <release>-selfsigned, on releases installed before AB#9171 made the self-signed
+    issuer a namespaced Issuer (templates/certmanager.yaml). New releases have no ClusterIssuer.
 The ClusterRole <release>-platform-updater covers exactly those objects BY NAME (resourceNames) and
 nothing else: read-only for the RBAC objects (see below), get/update/patch/delete for the issuer. When MetalLB or Velero config is enabled, a Role in metallb-system / velero covers
 this release's objects there.
@@ -98,9 +99,28 @@ subjects:
   - kind: ServiceAccount
     name: {{ $name }}
     namespace: {{ .Release.Namespace }}
-{{- $issuer := .Values.certManager.issuerRef | default dict }}
-{{- $ownsClusterObjects := or (and .Values.certManager.installOperator (not $issuer.name)) .Values.observability.promtail.enabled }}
+{{- /* AB#9171 (BYO in-app updates): promtail is now the ONLY thing that gives this release
+cluster-scoped objects — templates/certmanager.yaml renders a namespaced Issuer, not a ClusterIssuer.
+This condition used to include `certManager.installOperator and no issuerRef`, and that is what broke
+in-app updates for bring-your-own Kubernetes: preview.12 defaulted installOperator to FALSE, so those
+releases have no ClusterRole and no cluster rights at all, while the current chart defaults it to
+TRUE — so `helm upgrade --reset-then-reuse-values` picked up the new default and tried to CREATE a
+ClusterRole, a ClusterRoleBinding and a ClusterIssuer. The updater cannot even GET a ClusterRole,
+so Helm failed before applying anything and the update rolled back (reproduced on kind v1.34).
+Narrowing the condition is safe for releases that DO have these objects today: when a resource stops
+being rendered Helm deletes it, and a deletion it is not allowed to perform is a warning, not a
+failed upgrade (verified on kind v1.34 as the updater ServiceAccount) — the ClusterRole and
+ClusterRoleBinding are simply left behind, granting nothing that was not already granted. The legacy
+<release>-selfsigned ClusterIssuer IS deleted, because this ClusterRole allows exactly that. */}}
+{{- $ownsClusterObjects := .Values.observability.promtail.enabled }}
 {{- if $ownsClusterObjects }}
+{{- /* AB#9171 (BYO in-app updates): NOTHING BELOW, DOWN TO THE END OF THE ClusterRoleBinding, MAY
+CHANGE BETWEEN CHART VERSIONS — not even a YAML comment, which is why these notes are Helm comments
+that render nothing. The updater holds only `get` on clusterroles/clusterrolebindings, so a chart
+that alters this ClusterRole needs a patch it cannot make; rendering it byte-identical produces an
+empty patch and no API write at all. The clusterissuers rule is likewise kept: it is what lets a
+release installed before this fix DELETE its legacy <release>-selfsigned ClusterIssuer when the
+chart moves it to the namespaced Issuer of the same name. */}}
 ---
 # See the DEVIATION note at the top: only the release's own cluster-scoped objects, by name.
 # Rendered only when this release HAS cluster-scoped objects (the self-signed ClusterIssuer or
@@ -120,6 +140,10 @@ rules:
     # one of these fails its upgrade (and rolls back) and must be applied by a cluster admin.
     resourceNames: [{{ printf "%s-promtail" .Release.Name | quote }}, {{ $name | quote }}]
     verbs: ["get"]
+{{- /* The legacy cluster-scoped self-signed issuer. `create` is deliberately absent and cannot be
+  added safely: RBAC ignores resourceNames for `create`, so granting it would let the updater make
+  arbitrary cluster-wide issuers. `delete` is what a release installed before AB#9171's fix needs
+  to retire this object in favour of the namespaced Issuer of the same name. */}}
   - apiGroups: ["cert-manager.io"]
     resources: ["clusterissuers"]
     resourceNames: [{{ printf "%s-selfsigned" .Release.Name | quote }}]

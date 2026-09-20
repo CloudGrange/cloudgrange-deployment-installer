@@ -22,7 +22,9 @@
 #       4. download the chart, check its SHA-256 against the manifest, and refuse if the running
 #          cluster is outside the chart's kubeVersion;
 #       5. pg_dump the database to the backup volume;
-#       6. helm upgrade --reuse-values with the pinned tag and digests;
+#       4c. permission pre-check: refuse (changing nothing) when the new chart needs cluster-scoped
+#          rights the namespace-scoped updater does not have, naming the one-time admin command;
+#       6. helm upgrade --reset-then-reuse-values with the pinned tag and digests;
 #       7. health gate: rollout status of every Deployment/StatefulSet/DaemonSet in the release,
 #          then the API's readiness endpoint;
 #       8. on any failure after step 5: stop the API, restore the database, helm rollback.
@@ -288,6 +290,173 @@ health_gate() {
     done
     log "health gate: $RELEASE-api /health/ready did not answer"
     return 1
+}
+
+# ---- Permission pre-check (AB#9171) ------------------------------------------------------------
+# The updater is NAMESPACE-SCOPED by design (plan §4): inside $NS it is effectively namespace-admin,
+# outside it it holds nothing but `get`/`delete` on a handful of this release's own objects by name.
+# So a new chart version that adds, changes or removes a CLUSTER-SCOPED object cannot be applied
+# in-app, and — because granting RBAC requires already holding what you grant — the updater can
+# never fix that itself. It happened for real (reproduced on kind v1.34): a release installed with
+# certManager.installOperator=true before cert-manager was in the cluster had no ClusterIssuer, the
+# next chart rendered one, and `helm upgrade` died with
+#     clusterissuers.cert-manager.io is forbidden: User
+#     "system:serviceaccount:<ns>:<release>-platform-updater" cannot create resource
+#     "clusterissuers" in API group "cert-manager.io" at the cluster scope
+# AFTER the database backup and mid-apply, so the update auto-rolled back and the administrator was
+# shown a raw RBAC error with no remedy. (templates/certmanager.yaml no longer renders a
+# ClusterIssuer at all, which removes that particular case; this gate is for the class.)
+#
+# The gate runs BEFORE the backup and before anything is touched, renders the NEW chart against the
+# live release with the SAME flags the real upgrade uses, and asks the API server — as this
+# ServiceAccount — whether every cluster-scoped (or other-namespace) object it would create, change
+# or delete is allowed. When it is not, the update is refused with the exact one-time `helm upgrade`
+# a cluster administrator must run. A check that cannot be performed (no api-resources, no render)
+# warns and lets the update proceed: it must never block an update that would have worked.
+#
+# The values flag both the pre-check and the real upgrade use. NOT --reuse-values: that keeps the
+# OLD chart's values verbatim and so drops every default the new chart adds, which is what broke the
+# 2609.0.0-preview.18/.19 in-app updates (a nil-pointer on .Values.airgap). --reset-then-reuse-values
+# (Helm >= 3.14; release/pins.conf pins v3.22.0) resets to the NEW chart's defaults and then
+# re-applies only the values the administrator actually supplied.
+HELM_VALUES_FLAG=--reset-then-reuse-values
+
+# Prints "Kind|resource" for every cluster-scoped API resource the cluster serves. NAMESPACED is the
+# only column whose value is always literally "false" here, so KIND is the field after it and the
+# resource name is field 1 — stable whether or not a row has SHORTNAMES or CATEGORIES.
+cluster_scoped_kinds() {
+    kubectl api-resources --namespaced=false --no-headers -o wide 2>/dev/null \
+        | awk '{ for (i = 1; i <= NF; i++) if ($i == "false") { print $(i + 1) "|" $1; break } }'
+}
+
+# Splits a rendered multi-document manifest (stdin) into one file per object under <dir>, named
+# "<Kind>__<namespace-or-_>__<name>", and prints "Kind|name|namespace" for each. The file contents
+# are what Helm would send, so two identical files mean Helm's three-way merge has nothing to patch
+# and the API is never written to — the difference between "rendered" and "actually changed".
+split_manifest() { # <dir>
+    mkdir -p "$1"
+    awk -v out="$1" '
+        function flush(  key, f) {
+            if (kind != "" && name != "") {
+                f = out "/" kind "__" (ns == "" ? "_" : ns) "__" name
+                printf "%s", body > f
+                close(f)
+                print kind "|" name "|" ns
+            }
+            kind = ""; name = ""; ns = ""; body = ""; inmeta = 0
+        }
+        /^---/ { flush(); next }
+        # Comments and blank lines are not part of what Helm sends, so they must not count as a
+        # change: a chart whose only edit inside an object is a YAML comment produces an empty
+        # patch and no API write, and demanding `update` rights for it would refuse updates that
+        # succeed (the managed profiles, whose ClusterRole carries a long explanatory comment).
+        { if ($0 !~ /^[ \t]*#/ && $0 !~ /^[ \t]*$/) body = body $0 "\n" }
+        /^kind: / { kind = $2; gsub(/["\047]/, "", kind) }
+        /^metadata:/ { inmeta = 1; next }
+        inmeta && /^  name: / { name = $2; gsub(/["\047]/, "", name) }
+        inmeta && /^  namespace: / { ns = $2; gsub(/["\047]/, "", ns) }
+        /^[^ #]/ { if ($0 !~ /^metadata:/) inmeta = 0 }
+        END { flush() }
+    '
+}
+
+# check_cluster_rights <chart> <helm --set args...>
+# Prints a refusal reason and returns 1 when a right is missing; returns 0 otherwise.
+check_cluster_rights() {
+    local chart=$1; shift
+    local new="$WORK/precheck-new.yaml" old="$WORK/precheck-old.yaml"
+    local kinds="$WORK/precheck-kinds" ndir="$WORK/precheck-new.d" odir="$WORK/precheck-old.d"
+    local nkeys="$WORK/precheck-new.keys" okeys="$WORK/precheck-old.keys"
+    cluster_scoped_kinds > "$kinds"
+    if [ ! -s "$kinds" ]; then
+        log "WARNING: could not list the cluster-scoped API resources; skipping the permission pre-check"
+        return 0
+    fi
+    # --dry-run=server renders exactly as the real upgrade will (live Capabilities and `lookup`) and
+    # writes nothing. -o json puts the rendered release manifest in .manifest.
+    helm upgrade "$RELEASE" "$chart" -n "$NS" "$HELM_VALUES_FLAG" "$@" --dry-run=server -o json \
+        2>"$WORK/precheck.err" | jq -r '.manifest // empty' > "$new" || : > "$new"
+    if [ ! -s "$new" ]; then
+        # Helm reads every object of the new manifest before it applies any, so a cluster-scoped
+        # object the updater may not even GET fails the render itself. That is the same refusal,
+        # so it gets the same remedy rather than the raw RBAC error.
+        if grep -qi 'is forbidden' "$WORK/precheck.err"; then
+            local denied
+            denied=$(sed -n 's/.*cannot \([a-z]*\) resource "\([^"]*\)".*/\1 \2/p' "$WORK/precheck.err" | head -1)
+            refusal "${denied:-$(grep -o 'is forbidden.*' "$WORK/precheck.err" | head -1 | cut -c1-200)}"
+            return 1
+        fi
+        echo "Platform $TO_VERSION cannot be rendered against this release: $(grep -v '^[[:space:]]*$' "$WORK/precheck.err" | tail -2 | tr '\n' ' ')"
+        return 1
+    fi
+    split_manifest "$ndir" < "$new" | sort -u > "$nkeys"
+    helm get manifest "$RELEASE" -n "$NS" 2>/dev/null | split_manifest "$odir" | sort -u > "$okeys" || : > "$okeys"
+
+    local -a missing=()
+    local kind name ns res file
+    # Objects the new chart renders: created when absent, updated when their content changes.
+    while IFS='|' read -r kind name ns; do
+        [ -n "$kind" ] && [ -n "$name" ] || continue
+        res=$(awk -F'|' -v k="$kind" '$1 == k { print $2; exit }' "$kinds")
+        if [ -n "$res" ]; then
+            if ! kubectl get "$res" "$name" >/dev/null 2>&1; then
+                # RBAC ignores resourceNames for `create`, so this asks for the resource, not the name.
+                kubectl auth can-i create "$res" >/dev/null 2>&1 \
+                    || missing+=("create $kind/$name (cluster-scoped)")
+            else
+                file="$kind"__"${ns:-_}"__"$name"
+                # Identical rendering = an empty patch = no write, so no `update` right is needed.
+                cmp -s "$ndir/$file" "$odir/$file" 2>/dev/null && continue
+                kubectl auth can-i update "$res/$name" >/dev/null 2>&1 \
+                    || missing+=("update $kind/$name (cluster-scoped)")
+            fi
+        elif [ -n "$ns" ] && [ "$ns" != "$NS" ]; then
+            # A namespaced object the chart puts in ANOTHER namespace (metallb-system, velero).
+            res=$(printf '%ss' "$kind" | tr 'A-Z' 'a-z')
+            if kubectl get "$res" "$name" -n "$ns" >/dev/null 2>&1; then
+                file="$kind"__"$ns"__"$name"
+                cmp -s "$ndir/$file" "$odir/$file" 2>/dev/null && continue
+                kubectl auth can-i update "$res" -n "$ns" >/dev/null 2>&1 \
+                    || missing+=("update $kind/$name in namespace $ns")
+            else
+                kubectl auth can-i create "$res" -n "$ns" >/dev/null 2>&1 \
+                    || missing+=("create $kind/$name in namespace $ns")
+            fi
+        fi
+    done < "$nkeys"
+
+    # Cluster-scoped objects the old release has and the new chart drops. Helm deletes these, but a
+    # deletion it is not allowed to perform is a WARNING, not a failed upgrade (verified on kind
+    # v1.34 as this ServiceAccount) — the object is simply left behind. So this is reported, never
+    # a refusal: refusing here would block updates that demonstrably succeed.
+    while IFS='|' read -r kind name ns; do
+        [ -n "$kind" ] && [ -n "$name" ] || continue
+        res=$(awk -F'|' -v k="$kind" '$1 == k { print $2; exit }' "$kinds")
+        [ -n "$res" ] || continue
+        grep -qxF "$kind|$name|$ns" "$nkeys" && continue
+        kubectl get "$res" "$name" >/dev/null 2>&1 || continue
+        kubectl auth can-i delete "$res/$name" >/dev/null 2>&1 \
+            || log "NOTE: Platform $TO_VERSION no longer includes $kind/$name and this updater may not delete a cluster-scoped object, so it will be left behind. It grants nothing new; a cluster administrator can remove it."
+    done < "$okeys"
+
+    [ ${#missing[@]} -eq 0 ] && return 0
+    local what; what=$(printf '%s; ' "${missing[@]}"); what=${what%; }
+    refusal "$what"
+    return 1
+}
+
+# The one message an administrator sees when an update needs rights the updater does not have. It
+# names the remedy, because a bare RBAC error tells nobody what to run.
+refusal() { # <what is missing>
+    cat <<EOF
+Platform $TO_VERSION changes cluster-scoped objects the in-cluster updater is not allowed to change: $1. The updater's rights deliberately stop at namespace $NS and it cannot grant itself more, so this one update has to be applied once by a cluster administrator, from a machine whose kubeconfig is cluster-admin:
+
+  helm upgrade $RELEASE ${PRECHECK_CHART_REF:-<chart>} -n $NS --reset-then-reuse-values --set global.image.tag=$TO_VERSION --wait --timeout $HEALTH_TIMEOUT
+
+Use --reset-then-reuse-values, NEVER --reuse-values: --reuse-values keeps the old chart's values verbatim, drops every default the new chart adds, and the upgrade then fails on values the new templates expect. After that one command, in-app updates from Platform -> Updates work again.
+
+Nothing on this cluster has been changed and no database backup was taken.
+EOF
 }
 
 # ---- Trust: HTTPS + digest pinning (owner decision 2026-09-18) ---------------------------------
@@ -751,6 +920,20 @@ cmd_apply() {
     in_range "$kube" "$kube_range" \
         || fail "this cluster runs Kubernetes $kube; Platform $version supports $kube_range. Update the Foundation (Kubernetes) first."
 
+    # 4c. permission pre-check (AB#9171). Last gate before anything is touched: the updater is
+    # namespace-scoped, so a chart that changes a cluster-scoped object has to be applied once by a
+    # cluster administrator. Refusing here — rather than failing mid-apply and rolling back — costs
+    # nothing and gives the administrator the exact command instead of a raw RBAC error.
+    set_status running "checking permissions for $version"
+    # What a cluster admin would pass to `helm upgrade`: the chart the release manifest pins. Offline,
+    # that same file is the one inside the uploaded bundle.
+    if [ -n "$bundle" ]; then
+        PRECHECK_CHART_REF="./cloudgrange-$version.tgz   # from the uploaded Platform bundle"
+    else
+        PRECHECK_CHART_REF=${chart_url:-oci://ghcr.io/cloudgrange/charts/cloudgrange --version $version}
+    fi
+    reason=$(check_cluster_rights "$chart" "${sets[@]}") || fail "$reason"
+
     # 4b. offline bundle (E7): its images, checked against the pins, then pushed. Pushing only
     # adds images to the registry and changes nothing that runs, so it happens before the backup.
     if [ -n "$bundle" ]; then
@@ -781,7 +964,7 @@ cmd_apply() {
 
     # 6-7. upgrade + health gate; 8. undo on any failure.
     set_status running "upgrading $FROM_VERSION to $version"
-    if helm upgrade "$RELEASE" "$chart" -n "$NS" --reuse-values "${sets[@]}" \
+    if helm upgrade "$RELEASE" "$chart" -n "$NS" "$HELM_VALUES_FLAG" "${sets[@]}" \
             --wait --timeout "$HEALTH_TIMEOUT" >&2 \
         && { set_status running "health gate"; health_gate; }; then
         jq '.applied = true' "$bdir/backup.json" > "$bdir/backup.json.tmp" && mv "$bdir/backup.json.tmp" "$bdir/backup.json"
