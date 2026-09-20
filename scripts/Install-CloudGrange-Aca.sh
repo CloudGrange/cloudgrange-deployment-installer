@@ -284,7 +284,12 @@ if [[ "$WHATIF" == "true" ]]; then
   exit 0
 fi
 
-PORTAL_URL="$(az deployment sub show --name "$DEPLOY_NAME" --query 'properties.outputs.PORTAL_URL.value' -o tsv)"
+# ARM lower-cases all but the last segment of an output name, so the SCREAMING_SNAKE output
+# PORTAL_URL comes back as "portaL_URL". A direct --query for the declared name silently
+# returns nothing, which is how a successful install printed an empty portal address. Match
+# the key case-insensitively instead of guessing ARM's mangling.
+PORTAL_URL="$(az deployment sub show --name "$DEPLOY_NAME" --query 'properties.outputs' -o json \
+  | jq -r 'to_entries[] | select(.key | ascii_downcase == "portal_url") | .value.value' | head -1)"
 
 cat <<EOF
 
