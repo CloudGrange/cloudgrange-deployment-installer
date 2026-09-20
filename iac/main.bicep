@@ -1,13 +1,23 @@
 // Copyright 2026 CloudGrange Contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// AB#9188: Azure Container Apps is the SECONDARY Azure path, kept working (see
-// AB#9176's image-org fix) but not actively developed further — AKS running the same
-// Helm chart as on-prem (charts/cloudgrange, values-azure.yaml, AB#9187) is the primary
-// Azure profile, per cloudgrange-internal/pmo/plans/2026-09-15-platform-restructure-helm-k8s.md.
-// ACA cannot run Helm charts or raw Kubernetes manifests at all (its own deployment
-// schema), so "the same solution everywhere" is only actually true on AKS. New Azure
-// feature work belongs in the AKS overlay, not here.
+// AB#9171 (E9): Azure Container Apps is a SUPPORTED CloudGrange delivery path, deployed by
+// this template and driven by scripts/Install-CloudGrange-Aca.sh.
+//
+// It remains true that ACA cannot run Helm charts or raw Kubernetes manifests — it has its
+// own deployment schema — so this template, not charts/cloudgrange, is the platform
+// definition here. What is NOT true any more is the note this comment used to carry, that
+// the path was "kept working but not actively developed": that stance is what left the
+// template deploying two containers with Entra as the only identity provider, which is not
+// the product. Everything above the deployment format is now the same on this path as on
+// every other one: the same API and portal, the same Keycloak realm, the same built-in
+// relay, the same modules and CLI, and the same in-app Platform updates.
+//
+// What genuinely differs, and is documented as differing: there is no CloudGrange Foundation
+// (Azure owns the host and the runtime, so the portal shows no Foundation card), and offline
+// Platform bundles do not apply (ACA pulls from a registry).
+//
+// Anything added here must be added to the chart as well, or the paths diverge again.
 //
 // CloudGrange PaaS (Model B) entry point — subscription-scoped.
 // Follows ADR-048 (Azure resource naming and tagging standard):
@@ -275,10 +285,10 @@ param relayImageTag string = ''
 param platformVersion string = ''
 
 @description('Update channel the in-app Platform updater reads. Must be https.')
-param updateChannelUrl string = 'https://downloads.cloudgrange.com/channels/preview.json'
+param updateChannelUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json'
 
 @description('Static module catalog index the portal lists modules from.')
-param moduleCatalogUrl string = 'https://downloads.cloudgrange.com/modules/catalog.json'
+param moduleCatalogUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/modules/catalog.json'
 
 // AB#1600
 @description('Enable PgBouncer connection pooling sidecar on the API container app.')

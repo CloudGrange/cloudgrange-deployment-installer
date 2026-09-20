@@ -60,7 +60,7 @@ CRITICALITY="High"
 OWNER_EMAIL=""
 RESOURCE_GROUP=""
 VERSION=""
-UPDATE_CHANNEL="https://downloads.cloudgrange.com/channels/preview.json"
+UPDATE_CHANNEL="https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json"
 MODULE_CATALOG=""
 GOVERNANCE="true"
 WHATIF="false"
@@ -108,6 +108,27 @@ TEMPLATE="$REPO_ROOT/iac/main.bicep"
 az account show >/dev/null 2>&1 || az login >/dev/null
 SUBSCRIPTION="$(az account show --query id -o tsv)"
 
+# ── Preflight: can this subscription actually create the database here? ──────
+# Azure restricts PostgreSQL flexible-server provisioning per subscription and region, and
+# the failure is both late and opaque: the deployment runs for ten minutes and then returns
+# "ParameterOutOfRange: The value of the 'Version' should be in: []" — an empty list, because
+# the whole region is closed to the subscription, not because the version is wrong. A real
+# deployment failed exactly that way in eastus. Check it in two seconds instead.
+PG_VERSION="${PG_VERSION:-16}"
+pg_skus="$(az postgres flexible-server list-skus -l "$LOCATION" -o json 2>/dev/null || echo '[]')"
+pg_reason="$(jq -r '[.[].reason // empty] | map(select(. != "")) | first // empty' <<<"$pg_skus")"
+if [[ -n "$pg_reason" ]]; then
+  echo "Error: Azure Database for PostgreSQL flexible server cannot be provisioned in '$LOCATION' with this subscription." >&2
+  echo "  Azure says: $pg_reason" >&2
+  echo "  Re-run with --location <region> in a region this subscription can use." >&2
+  exit 1
+fi
+if ! jq -e --arg v "$PG_VERSION" '[.. | .supportedServerVersions? // empty | if type=="array" then (.[] | .name? // .) else . end] | index($v)' <<<"$pg_skus" >/dev/null 2>&1; then
+  echo "Error: PostgreSQL $PG_VERSION is not offered in '$LOCATION'." >&2
+  echo "  Offered: $(jq -r '[.. | .supportedServerVersions? // empty | if type=="array" then (.[] | .name? // .) else . end] | unique | join(", ")' <<<"$pg_skus")" >&2
+  exit 1
+fi
+
 # ── Region code, mirroring the CAF table in main.bicep ───────────────────────
 declare -A REGION_CODES=(
   [eastus]=eus [eastus2]=eus2 [westus]=wus [westus2]=wus2 [westus3]=wus3
@@ -143,7 +164,11 @@ KEY_VAULT_NAME="kvcg${KV_HASH}${INSTANCE}"
 # Read-then-generate, per secret. An operator is never prompted, and a redeploy never
 # rotates a live credential. Values are only ever written to Key Vault by the template
 # (as @secure() parameters), never echoed and never left in a file.
+# Guarded by VAULT_EXISTS: asking Key Vault for a secret in a vault that does not exist yet
+# resolves <vault>.vault.azure.net, which on a first install is a DNS miss the SDK retries
+# for a long time — once per secret. On a first install there is nothing to read anyway.
 kv_get() {
+  [[ "${VAULT_EXISTS:-0}" == "1" ]] || return 0
   az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$1" --query value -o tsv 2>/dev/null || true
 }
 gen_password() {                       # 24 chars, complexity-safe for PostgreSQL
@@ -175,7 +200,14 @@ COMMON_TAGS="$(jq -n \
   '{Environment:$env, Workload:$wl, CostCenter:$cc, Owner:$owner, BusinessUnit:$bu, DataClassification:$dc, Criticality:$cr}')"
 for kv in "${EXTRA_TAGS[@]:-}"; do
   [[ -z "$kv" ]] && continue
-  COMMON_TAGS="$(jq --arg k "${kv%%=*}" --arg v "${kv#*=}" '. + {($k): $v}' <<<"$COMMON_TAGS")"
+  k="${kv%%=*}"; v="${kv#*=}"
+  # Azure tag keys are unique CASE-INSENSITIVELY, and the provider only says so during
+  # preflight — after every parameter has been assembled. `--tag owner=…` alongside the
+  # mandatory `Owner` tag failed a real deployment that way. Replace the existing key
+  # rather than adding a second spelling of it.
+  existing="$(jq -r --arg k "$k" 'keys[] | select(ascii_downcase == ($k | ascii_downcase))' <<<"$COMMON_TAGS" | head -1)"
+  [[ -n "$existing" ]] && COMMON_TAGS="$(jq --arg k "$existing" 'del(.[$k])' <<<"$COMMON_TAGS")"
+  COMMON_TAGS="$(jq --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$COMMON_TAGS")"
 done
 
 DEPLOY_NAME="cloudgrange-aca-$(date -u +%Y%m%d%H%M%S)"

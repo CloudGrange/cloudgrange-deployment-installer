@@ -294,10 +294,10 @@ param storageAccountName string = ''
 param platformVersion string = ''
 
 @description('Update channel the in-app Platform updater reads. Must be https; the manifest is trusted by its SHA-256 (there is no signing key — see pmo/decisions-2026-09-18).')
-param updateChannelUrl string = 'https://downloads.cloudgrange.com/channels/preview.json'
+param updateChannelUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/channels/preview.json'
 
 @description('Static module catalog index the portal lists modules from.')
-param moduleCatalogUrl string = 'https://downloads.cloudgrange.com/modules/catalog.json'
+param moduleCatalogUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/modules/catalog.json'
 
 // -----------------------------------------------------------------------------
 // Bootstrap secrets. The platform provisions these — an operator never types one.
