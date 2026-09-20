@@ -104,12 +104,21 @@ param postgresAdminUser string = 'cloudgrange'
 @secure()
 param postgresAdminPassword string
 
+// AB#9171 (E9): General Purpose, not Burstable. This is a correctness constraint, not a
+// sizing preference. Before every in-app Platform update the API takes an ON-DEMAND backup of
+// this server, and refuses the update if it cannot — and Azure does not support on-demand
+// backup on the Burstable compute tier at all
+// (learn.microsoft.com/azure/postgresql/backup-restore/concepts-backup-restore#on-demand-backups).
+// A Burstable server therefore produces a delivery path whose in-app updates can never run.
+// Standard_D2ds_v4 is the smallest General Purpose SKU. Burstable remains selectable for a
+// deployment that knowingly gives up in-app updates.
+// Note also Azure's limit of seven on-demand backups per server: an admin deletes older ones.
 @description('PostgreSQL Flexible Server SKU name.')
-param postgresSkuName string = 'Standard_B1ms'
+param postgresSkuName string = 'Standard_D2ds_v4'
 
 @description('PostgreSQL Flexible Server SKU tier.')
 @allowed([ 'Burstable', 'GeneralPurpose', 'MemoryOptimized' ])
-param postgresSkuTier string = 'Burstable'
+param postgresSkuTier string = 'GeneralPurpose'
 
 @description('PostgreSQL storage size in GB.')
 @minValue(32)
