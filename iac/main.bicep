@@ -302,6 +302,9 @@ param updateChannelUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2
 @description('Static module catalog index the portal lists modules from.')
 param moduleCatalogUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/modules/catalog.json'
 
+@description('ARM api-version used for the pre-update on-demand PostgreSQL backup. The backups sub-resource rejects a write on older versions with 405; this is the version the Azure CLI itself uses.')
+param postgresBackupApiVersion string = '2026-01-01-preview'
+
 // AB#1600
 @description('Enable PgBouncer connection pooling sidecar on the API container app.')
 param enablePgBouncer bool = true
@@ -590,6 +593,7 @@ module resources 'resources.bicep' = {
     platformVersion: platformVersion
     updateChannelUrl: updateChannelUrl
     moduleCatalogUrl: moduleCatalogUrl
+    postgresBackupApiVersion: postgresBackupApiVersion
   }
 }
 

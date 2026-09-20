@@ -314,6 +314,9 @@ param updateChannelUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2
 @description('Static module catalog index the portal lists modules from.')
 param moduleCatalogUrl string = 'https://pub-ab113af532ff44ef827c176e42118f17.r2.dev/modules/catalog.json'
 
+@description('ARM api-version used for the pre-update on-demand PostgreSQL backup. The backups sub-resource rejects a write on older versions with 405; this is the version the Azure CLI itself uses.')
+param postgresBackupApiVersion string = '2026-01-01-preview'
+
 // -----------------------------------------------------------------------------
 // Bootstrap secrets. The platform provisions these — an operator never types one.
 // scripts/Install-CloudGrange-Aca.sh generates each on first install, stores it in
@@ -1201,6 +1204,15 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'CLOUDGRANGE_ACA_PORTAL_APP_NAME', value: portalAppNameEffective }
               { name: 'CLOUDGRANGE_ACA_RELAY_APP_NAME',  value: relayAppNameEffective }
               { name: 'CLOUDGRANGE_ACA_POSTGRES_SERVER', value: postgresServerNameEffective }
+              // AB#9171 (E9): the api-version the on-demand backup PUT is issued at. The
+              // executor defaults to 2023-12-01-preview, and Azure answers that with
+              // "405 MethodNotAllowed: The HTTP method 'PUT' is not supported on the resource
+              // .../flexibleServers/<name>/backups/<backup>" — the backups sub-resource only
+              // accepts a write on a newer api-version. Found on a live update, which was
+              // correctly refused rather than proceeding without a backup. This is the version
+              // `az postgres flexible-server backup create` itself uses; verified against this
+              // subscription, where the same PUT returns 202 and the backup appears.
+              { name: 'CLOUDGRANGE_ACA_POSTGRES_API_VERSION', value: postgresBackupApiVersion }
               // Same bootstrap token the relay app holds: the API seeds the matching
               // enrolment row when first-run setup completes, which is what lets the
               // built-in relay finish enrolling instead of retrying 401 forever.
