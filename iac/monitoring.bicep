@@ -56,13 +56,20 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   properties: {
     groupShortName: 'csalerts'
     enabled: true
-    emailReceivers: empty(ownerEmail) ? [] : [
+    // AB#9171: the Owner tag is a CAF tag, not a mailbox — operators routinely put a person's
+    // name or a team in it, and Azure then rejects the whole action group with
+    // "EmailAddressIsNotValid", which fails the entire deployment long after every real
+    // resource has been created. main.bicep already guards its budget notification this way;
+    // this one did not, and a real deployment came back Failed with all four Container Apps
+    // healthy. No mailbox simply means no email receiver, which is what an empty Owner tag
+    // already produced.
+    emailReceivers: contains(ownerEmail, '@') ? [
       {
         name: 'owner-email'
         emailAddress: ownerEmail
         useCommonAlertSchema: true
       }
-    ]
+    ] : []
   }
 }
 

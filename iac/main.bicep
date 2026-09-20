@@ -172,7 +172,7 @@ param apiAppMemory string = '1Gi'
 // Recommended per-environment: dev=0, test=0, stage=1, prod=1
 @description('API container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod.')
 @minValue(0)
-param apiAppMinReplicas int = 0
+param apiAppMinReplicas int = 1
 
 @description('API container app maximum replica count.')
 @minValue(1)
@@ -200,14 +200,19 @@ param portalAppMemory string = '0.5Gi'
 // AB#1599 — default changed to 0 for scale-to-zero in dev
 @description('Portal container app minimum replica count. Set to 0 for dev (scale-to-zero), 1 for prod.')
 @minValue(0)
-param portalAppMinReplicas int = 0
+param portalAppMinReplicas int = 1
 
 @description('Portal container app maximum replica count.')
 @minValue(1)
 param portalAppMaxReplicas int = 2
 
+// AB#9171 (E9): 8080, not 80. The portal image runs nginx as a NON-ROOT user, which cannot
+// bind a privileged port, so its server block listens on 8080 (portal docker/nginx.conf).
+// The template still said 80, so every readiness probe failed, the revision was marked
+// Unhealthy and the portal answered nothing at all. Found by deploying for real — a what-if
+// pass cannot see inside the image.
 @description('Portal container app external ingress target port.')
-param portalAppTargetPort int = 80
+param portalAppTargetPort int = 8080
 
 @description('Portal ACA HTTP scale-out threshold (concurrent requests per replica).')
 param portalAppScaleThreshold int = 50

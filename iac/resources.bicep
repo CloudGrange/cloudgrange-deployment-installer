@@ -128,8 +128,12 @@ param logAnalyticsDailyCapGB int = 1
 
 param apiAppCpu string = '0.5'
 param apiAppMemory string = '1Gi'
+// AB#9171 (E9): the default is 1, not 0. Scale-to-zero is wrong for this product in every
+// environment, not just production: the API hosts the SignalR hub the portal's Platform
+// Health card stays connected to, and the built-in relay holds a long-lived connection to it.
+// A scaled-to-zero API drops both, and the first request of the day waits behind a cold start.
 @minValue(0)
-param apiAppMinReplicas int = 0
+param apiAppMinReplicas int = 1
 @minValue(1)
 param apiAppMaxReplicas int = 3
 param apiAppTargetPort int = 8080
@@ -148,10 +152,15 @@ param apiAppRevisionsMode string = 'Single'
 param portalAppCpu string = '0.25'
 param portalAppMemory string = '0.5Gi'
 @minValue(0)
-param portalAppMinReplicas int = 0
+param portalAppMinReplicas int = 1
 @minValue(1)
 param portalAppMaxReplicas int = 2
-param portalAppTargetPort int = 80
+// AB#9171 (E9): 8080, not 80. The portal image runs nginx as a NON-ROOT user, which cannot
+// bind a privileged port, so its server block listens on 8080 (portal docker/nginx.conf).
+// The template still said 80, so every readiness probe failed, the revision was marked
+// Unhealthy and the portal answered nothing at all. Found by deploying for real — a what-if
+// pass cannot see inside the image.
+param portalAppTargetPort int = 8080
 
 @description('Portal ACA scale-out threshold: concurrent HTTP requests per replica.')
 param portalAppScaleThreshold int = 50
