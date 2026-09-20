@@ -48,6 +48,17 @@
 #                             digest from the registry, and write a real (non-dry-run) manifest. The
 #                             version-free check is skipped because this step publishes nothing;
 #                             a missing tag is an error.
+#       [--source-sha C=SHA]  AB#9171 provenance, REQUIRED for every component with --push or
+#                             --already-pushed (repeatable; C is api|portal|relay|platform-updater
+#                             or the full component name, SHA the full 40-hex commit of that
+#                             component's SOURCE repository HEAD). Every image this release
+#                             publishes is read back and refused unless its
+#                             org.opencontainers.image.revision equals the SHA given here and its
+#                             org.opencontainers.image.version equals the version it was built as.
+#                             This is what catches a retag of an image that predates the fix it is
+#                             supposed to carry: the retag path is checked against the CURRENT
+#                             source HEAD, so an unchanged component only passes when its published
+#                             image really was built from the source being released.
 #       [--modules-catalog U] E7: include the module catalog at U (https URL or file,
 #                             cg-module-catalog-v1; the newest version of each module) in images.txt
 #                             and in the offline bundle (scripts/release/Get-ModuleCatalogSnapshot.sh)
@@ -57,6 +68,7 @@ set -euo pipefail
 
 VERSION='' OUT='' CHART_BASE_URL='' SOURCE_TAG='' REGISTRY='ghcr.io/cloudgrange' CHANNEL='preview'
 UPGRADE_FROM='>=2609.0.0-0' COSIGN_KEY='' PUSH=0 OFFLINE_BUNDLE=0 MODULES_CATALOG=''
+declare -A SOURCE_SHA=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) VERSION=$2; shift 2 ;;
@@ -71,6 +83,12 @@ while [ $# -gt 0 ]; do
         --already-pushed) PUSH=2; shift ;;
         --offline-bundle) OFFLINE_BUNDLE=1; shift ;;
         --modules-catalog) MODULES_CATALOG=$2; shift 2 ;;
+        --source-sha)
+            [[ "$2" == *=* ]] || { echo "--source-sha takes <component>=<40-hex commit sha>" >&2; exit 2; }
+            _c=${2%%=*}; _s=${2#*=}
+            [[ "$_c" == cloudgrange-* ]] || _c="cloudgrange-$_c"
+            [[ "$_s" =~ ^[0-9a-f]{40}$ ]] || { echo "--source-sha $_c: '$_s' is not a full 40-hex commit sha" >&2; exit 2; }
+            SOURCE_SHA[$_c]=$_s; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -88,6 +106,35 @@ trap 'rm -rf "$WORK"' EXIT
 log() { echo "[platform-release] $*"; }
 run() { case "$PUSH" in 1) "$@" ;; 2) echo "ALREADY-PUSHED, skipped: $*" ;; *) echo "DRY-RUN: $*" ;; esac; }
 [ "$PUSH" != 2 ] || [ "$SOURCE_TAG" = "$VERSION" ] || { echo "--already-pushed cannot retag: drop --source-tag" >&2; exit 2; }
+
+# component name in the manifest -> image repository
+declare -A IMAGES=(
+    [cloudgrange-api]=cloudgrange-api
+    [cloudgrange-portal]=cloudgrange-portal
+    [cloudgrange-relay]=cloudgrange-relay
+    [cloudgrange-platform-updater]=cloudgrange-platform-updater
+)
+
+# AB#9171 provenance: a release must be able to prove which source commit every image it publishes
+# came from. Refuse, before anything is pulled, tagged or pushed, unless the caller states the
+# source HEAD of every component; each published image is then read back and compared against it.
+# shellcheck source=scripts/release/image-provenance.sh
+. "$REPO_ROOT/scripts/release/image-provenance.sh"
+if [ "$PUSH" != 0 ]; then
+    missing=()
+    for comp in $(printf '%s\n' "${!IMAGES[@]}" | sort); do
+        [ -n "${SOURCE_SHA[$comp]:-}" ] || missing+=("$comp")
+    done
+    [ ${#missing[@]} -eq 0 ] || {
+        echo "provenance: --source-sha <component>=<40-hex commit sha> is required for: ${missing[*]}" >&2
+        echo "  Give the CURRENT source HEAD of each component's repository. Every image this release publishes" >&2
+        echo "  is read back and refused unless it was built from that commit — including a retagged 'unchanged'" >&2
+        echo "  image, which is how a build predating the fix it was supposed to carry reached a release before." >&2
+        exit 2
+    }
+    command -v crane >/dev/null \
+        || { echo "crane is required (release/pins.conf CRANE_VERSION) to read published image labels and digests" >&2; exit 1; }
+fi
 
 # AB#9171: one version number per release, across every image AND the OCI chart. Refuse before
 # anything is pushed rather than overwriting or splitting a number between two builds.
@@ -112,19 +159,24 @@ else
     echo "DRY-RUN: would check that $portal carries the cg CLI for $VERSION"
 fi
 
-# component name in the manifest -> image repository
-declare -A IMAGES=(
-    [cloudgrange-api]=cloudgrange-api
-    [cloudgrange-portal]=cloudgrange-portal
-    [cloudgrange-relay]=cloudgrange-relay
-    [cloudgrange-platform-updater]=cloudgrange-platform-updater
-)
 : > "$WORK/components.tsv"
+# AB#9171 provenance: the version an image is LEGITIMATELY stamped with is the version it was built
+# as — that is $SOURCE_TAG on the retag path (--push --source-tag), and $VERSION everywhere else.
+# With --already-pushed the image must already sit in the registry under :$VERSION, so it must also
+# have been BUILT as $VERSION: a hand-retagged older digest is refused here even if its revision
+# happens to match, and the operator is told to use --push --source-tag instead.
+[ "$PUSH" = 2 ] && want_ver="$VERSION" || want_ver="$SOURCE_TAG"
 for comp in $(printf '%s\n' "${!IMAGES[@]}" | sort); do
     repo="$REGISTRY/${IMAGES[$comp]}"
     src="$repo:$SOURCE_TAG" dst="$repo:$VERSION"
+    want_sha=${SOURCE_SHA[$comp]:-}
     if [ "$SOURCE_TAG" != "$VERSION" ]; then
         run docker pull -q "$src"
+        # Refuse BEFORE the retag: a stale image must never reach the registry under the new tag.
+        if [ "$PUSH" = 1 ]; then
+            cg_assert_image_provenance "$src" "$want_sha" "$want_ver" local || {
+                echo "refusing to retag $src as $dst: it was not built from the source being released" >&2; exit 1; }
+        fi
         run docker tag "$src" "$dst"
     fi
     run docker push -q "$dst"
@@ -140,8 +192,19 @@ for comp in $(printf '%s\n' "${!IMAGES[@]}" | sort); do
     else
         digest="sha256:$(printf '0%.0s' $(seq 64))"
     fi
-    printf '%s\t%s\t%s\n' "$comp" "$dst@$digest" "$digest" >> "$WORK/components.tsv"
-    log "$comp -> $dst@$digest"
+    # AB#9171: read the PUBLISHED bytes back and refuse anything whose stamped source commit or
+    # version is not what this release recorded. This runs on every path that publishes an image,
+    # including --already-pushed and a retag of a previous release's digest.
+    if [ "$PUSH" != 0 ]; then
+        cg_assert_image_provenance "$repo@$digest" "$want_sha" "$want_ver" remote || {
+            echo "refusing the release: $dst ($digest) does not carry the provenance this release claims" >&2
+            exit 1
+        }
+    else
+        echo "DRY-RUN: would verify $dst carries org.opencontainers.image.revision=${want_sha:-<--source-sha>} and org.opencontainers.image.version=$want_ver"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$comp" "$dst@$digest" "$digest" "$want_sha" >> "$WORK/components.tsv"
+    log "$comp -> $dst@$digest${want_sha:+ (source $want_sha)}"
 done
 
 log "chart: stamp $VERSION and package"
@@ -176,7 +239,7 @@ fq_repo() { # <ref> -> fully qualified repository, no tag or digest
 first_party() { local r=$1 c; for c in "${IMAGES[@]}"; do [ "$r" = "$CHART_REGISTRY/$c" ] && return 0; done; return 1; }
 pull_repo() { local r=$1; if [ "$REGISTRY" != "$CHART_REGISTRY" ] && first_party "$r"; then echo "$REGISTRY/${r#"$CHART_REGISTRY/"}"; else echo "$r"; fi; }
 pin_sets=()
-while IFS=$'\t' read -r comp _image digest; do
+while IFS=$'\t' read -r comp _image digest _revision; do
     case "$comp" in
         cloudgrange-platform-updater) pin_sets+=(--set "platformUpdater.image.digest=$digest") ;;
         *) pin_sets+=(--set "${comp#cloudgrange-}.image.digest=$digest") ;;
@@ -217,8 +280,13 @@ import json, sys, time
 out, version, channel, upgrade_from, kube_range, chart_url, chart_sha, push, tsv, images_sha = sys.argv[1:11]
 components = {}
 for line in open(tsv):
-    name, image, digest = line.rstrip("\n").split("\t")
+    name, image, digest, revision = line.rstrip("\n").split("\t")
     components[name] = {"version": version, "image": image, "digest": digest}
+    # AB#9171 provenance: the source commit this component was built from. The published image's
+    # org.opencontainers.image.revision was read back and compared against it before this manifest
+    # was written, so the manifest records a proved value, not a claimed one.
+    if revision:
+        components[name]["revision"] = revision
 manifest = {
     "schema": "cg-release-manifest-v1",
     "platform": version,

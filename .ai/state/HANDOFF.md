@@ -1,5 +1,40 @@
 # HANDOFF — cloudgrange-deployment-installer
 
+## 2026-09-20 — Release-artifact provenance (branch `feat/e9b-provenance`, AB#9171)
+
+Nothing proved which source commit a released image came from. A stale label cost five rebuilds,
+and the "retag an unchanged image" path once published a relay built BEFORE the fix it was supposed
+to carry (preview.10) because the check compared the wrong base.
+
+- `scripts/release/image-provenance.sh` (new) is the single stamp-and-check helper:
+  `cg_provenance_labels <source checkout> <version>` builds the `--label` arguments
+  (`org.opencontainers.image.revision` = full 40-hex HEAD of the SOURCE repo,
+  `.version`, `.source`) and **refuses a dirty tree**;
+  `cg_assert_image_provenance <ref> <revision> <version> [auto|local|remote]` reads the labels back
+  (`docker image inspect` locally, `crane config --platform linux/amd64` from a registry) and hard-fails
+  naming the image, the expected SHA and the found SHA.
+- Stamped call sites (the only two `docker build`s in this repo's release tooling):
+  `scripts/release/Build-PortalImage.sh` (source = the portal checkout) and
+  `images/platform-updater/build.sh` (source = this repo). **api and relay images are built in their
+  own repos** (`cloudgrange-platform-api`, `cloudgrange-runtime-relay`) — the assertion covers them,
+  the stamping has to be added there.
+- `scripts/release/New-PlatformRelease.sh` now takes `--source-sha <component>=<40-hex>`, **required
+  for every component** with `--push`/`--already-pushed` (refused before anything is pulled or pushed),
+  asserts a retag source image BEFORE it is tagged, asserts every published image by digest after the
+  push, and records the proved revision in `manifest.json` as `components.<name>.revision`.
+- Test: `test/appliance/test_release_provenance.py` (20 cases). It runs the real shell functions
+  against a stubbed `crane`/`docker` on PATH and fails if any call site stops stamping or the release
+  stops asserting.
+
+**Already on main, no change needed (the task brief was stale):**
+`Test-ReleaseVersionFree.sh` already checks GHCR packages + the chart package + GitHub Releases +
+**git tags** (`repos/<repo>/git/matching-refs/tags/`) + R2 — added in `110637a`.
+`Install-CloudGrange-Aca.zip` is already built and uploaded by `Publish-GitHubRelease.sh` (lines 73-78)
+— added in `d7e8722`.
+
+**Updated:** 2026-09-20
+
+
 ## 2026-09-18 — Foundation release builder (branch `feat/foundation-release-builder`, AB#9171)
 
 - `scripts/release/New-FoundationRelease.sh` builds `cloudgrange-foundation-<F version>.zip`
