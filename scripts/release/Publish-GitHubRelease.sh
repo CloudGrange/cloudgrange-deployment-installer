@@ -74,7 +74,7 @@ with_sha "$BUNDLE_DIR/Install-CloudGrange-K3s-Bundled.zip" Install-CloudGrange-K
 # caller-supplied directory because it is only the wrapper plus the Bicep — a few tens of
 # kilobytes with no build step. An install page must never name an asset that no release step
 # produces: the Linux guide once did, and the owner hit a 404 following his own documentation.
-"$(dirname "$0")/New-AcaInstallerZip.sh" --out "$WORK/aca" >&2
+bash "$(dirname "$0")/New-AcaInstallerZip.sh" --out "$WORK/aca" >&2
 with_sha "$WORK/aca/Install-CloudGrange-Aca.zip" Install-CloudGrange-Aca.zip
 if [ -n "$PLATFORM_DIR" ]; then
     python3 - "$PLATFORM_DIR/manifest.json" "$VERSION" "$PLATFORM_DIR/cloudgrange-$VERSION.tgz" <<'PY' || exit 2
