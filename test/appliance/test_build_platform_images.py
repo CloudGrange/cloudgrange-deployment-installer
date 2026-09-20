@@ -106,6 +106,18 @@ class BuildPlatformImagesGate(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, "publish --no-restore was not caught")
         self.assertIn("NETSDK1064", r.stderr)
 
+    def test_comments_are_not_read_as_instructions(self):
+        # The real Dockerfiles carry a comment explaining why --no-restore and the shared
+        # cg-nuget id were removed. A gate that greps the raw file flags its own documentation.
+        commented = (
+            "# id=cg-nuget was shared between api and relay; publish used --no-restore.\n"
+            + GOOD_DOCKERFILE
+        )
+        r = run_gate(commented)
+        self.assertEqual(
+            r.returncode, 0, f"the gate flagged its own explanatory comment:\n{r.stderr}"
+        )
+
     def test_ignores_a_dockerfile_with_no_cache_mount(self):
         r = run_gate("FROM scratch\nCOPY . .\n")
         self.assertEqual(r.returncode, 0, r.stderr)

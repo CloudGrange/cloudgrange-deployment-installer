@@ -77,10 +77,11 @@ for c in $COMPONENTS; do
 done
 want() { case " $COMPONENTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
-want api      && { [ -n "$API_SRC" ]   || { echo "--api-source is required to build api" >&2; exit 2; }; }
-want relay    && { [ -n "$RELAY_SRC" ] || { echo "--relay-source is required to build relay" >&2; exit 2; }; }
-want portal   && { [ -n "$PORTAL_SRC" ] && [ -n "$CLI_DIR" ] \
-                    || { echo "--portal-source and --cli-dir are required to build portal" >&2; exit 2; }; }
+if want api && [ -z "$API_SRC" ]; then echo "--api-source is required to build api" >&2; exit 2; fi
+if want relay && [ -z "$RELAY_SRC" ]; then echo "--relay-source is required to build relay" >&2; exit 2; fi
+if want portal && { [ -z "$PORTAL_SRC" ] || [ -z "$CLI_DIR" ]; }; then
+    echo "--portal-source and --cli-dir are required to build portal" >&2; exit 2
+fi
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 
 LOG_DIR=${LOG_DIR:-$(mktemp -d)}
@@ -107,21 +108,23 @@ trap '[ -z "$CLEANUP_TOKEN" ] || rm -f "$CLEANUP_TOKEN"' EXIT
 # A .NET source tree must not reintroduce either cache-mount trap. Checked before anything is
 # built, because a release build is the worst place to discover it.
 assert_dockerfile_cache_contract() {
-    local comp=$1 src=$2 df="$2/Dockerfile" ids
+    local comp=$1 src=$2 df="$2/Dockerfile" ids body
     [ -f "$df" ] || { echo "$comp: no Dockerfile at $df" >&2; return 1; }
-    grep -q 'type=cache' "$df" || return 0   # no cache mount, nothing to get wrong
-    ids=$(grep -o 'id=cg-nuget[A-Za-z0-9_-]*' "$df" | sort -u)
+    # Comment lines explain this very contract, so they must not be read as instructions.
+    body=$(sed 's/^[[:space:]]*#.*$//' "$df")
+    grep -q 'type=cache' <<<"$body" || return 0   # no cache mount, nothing to get wrong
+    ids=$(grep -o 'id=cg-nuget[A-Za-z0-9_-]*' <<<"$body" | sort -u)
     if printf '%s\n' "$ids" | grep -qx 'id=cg-nuget'; then
         echo "$comp ($df): uses the SHARED NuGet cache mount id 'cg-nuget'. Two components building" >&2
         echo "  in parallel then write one mount. Use a per-component id, e.g. id=cg-nuget-$comp." >&2
         return 1
     fi
-    if grep -E 'type=cache,id=cg-nuget' "$df" | grep -qv 'sharing=locked'; then
+    if grep -E 'type=cache,id=cg-nuget' <<<"$body" | grep -qv 'sharing=locked'; then
         echo "$comp ($df): a cg-nuget cache mount is missing sharing=locked, so concurrent builds" >&2
         echo "  can write it at the same time." >&2
         return 1
     fi
-    if grep -q -- '--no-restore' "$df"; then
+    if grep -q -- '--no-restore' <<<"$body"; then
         echo "$comp ($df): 'dotnet publish --no-restore' with a cache mount fails with NETSDK1064" >&2
         echo "  if BuildKit's GC reclaims the mount between the restore layer and the publish" >&2
         echo "  layer. Drop --no-restore and pass -p:RestoreLockedMode=true instead." >&2
